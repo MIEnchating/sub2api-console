@@ -62,10 +62,43 @@ describe("官方峰谷价格", () => {
     const result = remotePriceToNewAPIModelPrice(officialPrice());
     expect(result.billing_mode).toBe("tiered_expr");
     expect(result.billing_expr).toBe(
-      '(weekday("Asia/Shanghai") >= 1 && weekday("Asia/Shanghai") <= 5) && ((hour("Asia/Shanghai") * 60 + minute("Asia/Shanghai") >= 540 && hour("Asia/Shanghai") * 60 + minute("Asia/Shanghai") < 720) || (hour("Asia/Shanghai") * 60 + minute("Asia/Shanghai") >= 840 && hour("Asia/Shanghai") * 60 + minute("Asia/Shanghai") < 1080)) ? tier("高峰", p * 2 + c * 8 + cr * 0.04) : tier("空闲", p * 1 + c * 4 + cr * 0.02)',
+      '(weekday("Asia/Shanghai") >= 1 && weekday("Asia/Shanghai") <= 5) && ((hour("Asia/Shanghai") >= 9 && hour("Asia/Shanghai") < 12) || (hour("Asia/Shanghai") >= 14 && hour("Asia/Shanghai") < 18)) ? tier("高峰", p * 2 + c * 8 + cr * 0.04) : tier("空闲", p * 1 + c * 4 + cr * 0.02)',
     );
     expect(modelPriceColumnValues(result).input).toBe("2 / 1");
     expect(newAPIPriceComparisonStatus(result, [officialPrice()])).toBe("matched");
+  });
+
+  it("非整点时段同步时保留分钟边界并生成可视化时间比较", () => {
+    const price = officialPrice();
+    price.time_pricing!.weekdays_only = false;
+    price.time_pricing!.periods = [{ start_time: "09:30", end_time: "12:15" }];
+
+    const result = remotePriceToNewAPIModelPrice(price);
+
+    expect(result.billing_expr).toBe(
+      '(((hour("Asia/Shanghai") > 9 || (hour("Asia/Shanghai") == 9 && minute("Asia/Shanghai") >= 30)) && (hour("Asia/Shanghai") < 12 || (hour("Asia/Shanghai") == 12 && minute("Asia/Shanghai") < 15)))) ? tier("高峰", p * 2 + c * 8 + cr * 0.04) : tier("空闲", p * 1 + c * 4 + cr * 0.02)',
+    );
+  });
+
+  it("参考价同时携带旧表达式时按官方峰谷时段重新生成", () => {
+    const price = officialPrice();
+    price.billing_expr =
+      '(weekday("Asia/Shanghai") >= 1 && weekday("Asia/Shanghai") <= 5) && (hour("Asia/Shanghai") * 60 + minute("Asia/Shanghai") >= 540) ? tier("高峰", p * 2 + c * 8 + cr * 0.04) : tier("空闲", p * 1 + c * 4 + cr * 0.02)';
+
+    const result = remotePriceToNewAPIModelPrice(price);
+
+    expect(result.billing_expr).toContain('hour("Asia/Shanghai") >= 9');
+    expect(result.billing_expr).not.toContain("* 60");
+  });
+
+  it("已写入的旧峰谷表达式与官方参考价比较时提示不一致", () => {
+    const configured = remotePriceToNewAPIModelPrice(officialPrice());
+    configured.billing_expr = configured.billing_expr?.replace(
+      'hour("Asia/Shanghai") >= 9',
+      'hour("Asia/Shanghai") * 60 + minute("Asia/Shanghai") >= 540',
+    );
+
+    expect(newAPIPriceComparisonStatus(configured, [officialPrice()])).toBe("mismatched");
   });
 
   it("单独改变高峰输出价格后同步原值，不套用统一折扣倍数", () => {
@@ -78,7 +111,7 @@ describe("官方峰谷价格", () => {
 
   it.each([
     ["高峰价格", "c * 8", "c * 1.3"],
-    ["时段边界", "< 720", "< 721"],
+    ["时段边界", "< 12", "< 13"],
     ["工作日范围", "<= 5", "<= 6"],
   ])("读回的%s变化时标记为不一致", (_label, before, after) => {
     const result = remotePriceToNewAPIModelPrice(officialPrice());

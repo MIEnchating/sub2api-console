@@ -41,6 +41,7 @@ export function OnboardingGroupBindingSelect(props: {
   );
   const control = (
     <MultiSelect
+      dictionaryKind="group"
       options={compatibleGroups.flatMap((group) =>
         group.id ? [{ value: group.id, label: group.name }] : [],
       )}
@@ -52,7 +53,7 @@ export function OnboardingGroupBindingSelect(props: {
       unknownValueLabel="所选分组不可用"
       ariaLabel={`${props.upstreamGroupName} 本地分组`}
       disabled={props.disabled}
-      className="min-h-7 min-w-44 rounded-md py-0.5"
+      className="min-w-44 rounded-md"
       maxVisibleChips={2}
       renderOption={(option) => {
         const group = groupsByID.get(option.value);

@@ -14,6 +14,7 @@ import (
 )
 
 type DetectionTask struct {
+	Prompt            string   `json:"prompt,omitempty"`
 	ID                string   `json:"id"`
 	Version           int      `json:"version"`
 	Name              string   `json:"name"`
@@ -64,6 +65,7 @@ func detectionTiming(value DetectionTask) AnimationSchedule {
 	return AnimationSchedule{ScheduleType: value.ScheduleType, IntervalMinutes: value.IntervalMinutes, DailyTimes: value.DailyTimes, Timezone: value.Timezone}
 }
 func cloneDetectionTask(value DetectionTask) DetectionTask {
+	value.Prompt = strings.TrimSpace(value.Prompt)
 	// Missing animation belongs to legacy configurations, which always generated it.
 	enabled := value.Animation == nil || *value.Animation
 	value.Model = strings.TrimSpace(value.Model)
@@ -71,14 +73,29 @@ func cloneDetectionTask(value DetectionTask) DetectionTask {
 		value.Concurrency = defaultDetectionConcurrency
 	}
 	value.Animation = &enabled
+	value.Terminal = false
+	value.TerminalRounds = 0
+	if !enabled && !value.Precheck {
+		value.Automatic = false
+	}
 	value.GroupIDs = slices.Clone(value.GroupIDs)
 	value.DailyTimes = slices.Clone(value.DailyTimes)
 	value.PrecheckQuestions = slices.Clone(value.PrecheckQuestions)
 	return value
 }
 func validateDetectionTask(value DetectionTask) error {
-	if value.Animation != nil && !*value.Animation && !value.Precheck && !value.Terminal {
+	if value.Terminal {
+		return errors.New("终端检测已移除，请选择动画检测或前置检测")
+	}
+	if value.Animation != nil && !*value.Animation && !value.Precheck {
 		return errors.New("请至少选择一项检测内容")
+	}
+	return validateDetectionTaskFields(value)
+}
+
+func validateDetectionTaskFields(value DetectionTask) error {
+	if len([]rune(strings.TrimSpace(value.Prompt))) > maximumAnimationPromptLength || strings.ContainsFunc(value.Prompt, func(r rune) bool { return unicode.IsControl(r) && r != '\n' && r != '\r' && r != '\t' }) {
+		return errors.New("动画提示词不能超过 10000 个字符")
 	}
 	if strings.TrimSpace(value.Name) == "" || len([]rune(value.Name)) > 80 || strings.ContainsFunc(value.Name, unicode.IsControl) {
 		return errors.New("任务名称需为 1～80 个字符，不能包含控制字符")
@@ -101,9 +118,6 @@ func validateDetectionTask(value DetectionTask) error {
 	}
 	if value.Concurrency < 0 || value.Concurrency > maxDetectionConcurrency {
 		return errors.New("同时检测账号数必须在 1 到 16 之间")
-	}
-	if value.Terminal && (value.TerminalRounds < 1 || value.TerminalRounds > 20) {
-		return errors.New("终端检测轮数必须在 1 到 20 之间")
 	}
 	if value.Precheck {
 		if _, err := normalizePrecheckQuestions(precheckMode, value.PrecheckQuestions); err != nil {
@@ -133,7 +147,7 @@ func (s *Service) loadDetectionTasks(ctx context.Context) error {
 			}
 			for _, value := range values {
 				value = cloneDetectionTask(value)
-				if err := validateDetectionTask(value); err != nil {
+				if err := validateDetectionTaskFields(value); err != nil {
 					return err
 				}
 				if value.ID == "" || state.values[value.ID].ID != "" {

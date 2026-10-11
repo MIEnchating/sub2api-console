@@ -1,6 +1,7 @@
 package uptimekuma
 
 import (
+	"bytes"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
@@ -155,6 +156,11 @@ func stableResourceRevision(raw map[string]json.RawMessage) string {
 	return hashValue(fields)
 }
 func notificationObjects(s *socket) (map[int64]map[string]json.RawMessage, error) {
+	return selectedNotificationObjects(s, 0)
+}
+
+// A positive target retains only that resource; every entry is still validated.
+func selectedNotificationObjects(s *socket, target int64) (map[int64]map[string]json.RawMessage, error) {
 	if s.notifications == nil {
 		return nil, protocolError()
 	}
@@ -168,8 +174,16 @@ func notificationObjects(s *socket) (map[int64]map[string]json.RawMessage, error
 		if id <= 0 {
 			return nil, protocolError()
 		}
+		config := []byte(rawString(outer, "config"))
+		if target > 0 && id != target {
+			trimmed := bytes.TrimSpace(config)
+			if len(trimmed) == 0 || trimmed[0] != '{' || !json.Valid(trimmed) {
+				return nil, protocolError()
+			}
+			continue
+		}
 		var fields map[string]json.RawMessage
-		if json.Unmarshal([]byte(rawString(outer, "config")), &fields) != nil || fields == nil {
+		if json.Unmarshal(config, &fields) != nil || fields == nil {
 			return nil, protocolError()
 		}
 		fields["id"] = outer["id"]
@@ -196,8 +210,12 @@ func validateNotificationIDs(s *socket, ids []int64) error {
 	return nil
 }
 func resourceRaw(s *socket, kind string) (map[int64]map[string]json.RawMessage, error) {
+	return selectedResourceRaw(s, kind, 0)
+}
+
+func selectedResourceRaw(s *socket, kind string, target int64) (map[int64]map[string]json.RawMessage, error) {
 	if kind == "notifications" {
-		return notificationObjects(s)
+		return selectedNotificationObjects(s, target)
 	}
 	source := s.maintenances
 	if kind == "status-pages" {
@@ -219,7 +237,9 @@ func resourceRaw(s *socket, kind string) (map[int64]map[string]json.RawMessage, 
 		if kind == "maintenance" && key != strconv.FormatInt(id, 10) {
 			return nil, protocolError()
 		}
-		out[id] = item
+		if target == 0 || id == target {
+			out[id] = item
+		}
 	}
 	return out, nil
 }

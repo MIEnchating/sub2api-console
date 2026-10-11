@@ -20,8 +20,11 @@ const Skill = "account-workbench"
 type privateStore interface {
 	TargetSettings(context.Context) (configstore.TargetSettings, error)
 	WorkbenchDocument(context.Context, string) (json.RawMessage, int64, error)
+	WorkbenchDocumentRevision(context.Context, string) (int64, error)
+	WorkbenchDocumentPublic(context.Context, string) (json.RawMessage, int64, error)
 	SaveWorkbenchDocument(context.Context, string, int64, json.RawMessage) (int64, error)
 	WorkbenchDocuments(context.Context, string, int) ([]configstore.WorkbenchDocumentRecord, error)
+	VisitWorkbenchDocuments(context.Context, string, int, func(configstore.WorkbenchDocumentRecord) (bool, error)) error
 	WorkbenchDocumentPage(context.Context, string, string, int) ([]configstore.WorkbenchDocumentRecord, error)
 	DeleteWorkbenchDocument(context.Context, string, int64) error
 	ActiveSessionOwner(context.Context, string, time.Time) (bool, error)
@@ -32,16 +35,18 @@ type Service struct {
 	groupProtection interface {
 		AccountMutationProtection(context.Context, string) (business.AccountMutationProtection, error)
 	}
-	transport         http.RoundTripper
-	officialTransport http.RoundTripper
-	mailTransport     http.RoundTripper
-	tasks             taskRepository
-	runner            taskrunner.TaskRunner
-	checker           OAuthChecker
-	artifactDirectory string
-	opMu              sync.Mutex
-	activeMu          sync.Mutex
-	active            map[string]*activeRun
+	transport          http.RoundTripper
+	officialTransport  http.RoundTripper
+	mailTransport      http.RoundTripper
+	tasks              taskRepository
+	runner             taskrunner.TaskRunner
+	checker            OAuthChecker
+	artifactDirectory  string
+	opMu               sync.Mutex
+	rememberMu         sync.Mutex
+	activeMu           sync.Mutex
+	active             map[string]*activeRun
+	templateValidation templateValidation
 }
 
 func New(store privateStore) *Service {

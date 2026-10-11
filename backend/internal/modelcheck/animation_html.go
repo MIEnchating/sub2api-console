@@ -17,13 +17,10 @@ var animationCSSURLs = regexp.MustCompile(`(?i)url\s*\(\s*([^)]*)\)`)
 
 func setAnimationArtifact(result *AnimationResult, source string) error {
 	result.Source, result.SourceTruncated = boundedAnimationSource(source)
-	trimmed := strings.TrimSpace(source)
-	if strings.HasPrefix(trimmed, "```") {
-		if first := strings.IndexByte(trimmed, '\n'); first >= 0 && strings.HasSuffix(trimmed, "```") {
-			trimmed = strings.TrimSpace(trimmed[first+1 : len(trimmed)-3])
-		}
+	trimmed, err := extractAnimationDocument(source)
+	if err != nil {
+		return err
 	}
-	var err error
 	if strings.HasPrefix(strings.ToLower(trimmed), "<svg") {
 		result.SVG, err = sanitizeAnimationSVG(trimmed)
 	} else {

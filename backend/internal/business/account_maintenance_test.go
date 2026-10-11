@@ -7,6 +7,7 @@ import (
 )
 
 func TestBoundAccountMaintenanceUsesNormalizedSiteName(t *testing.T) {
+	t.Parallel()
 	store := openReadModelFixture(t)
 	if _, err := store.db.Exec(`UPDATE accounts SET metadata_json='{"platform":"openai"}' WHERE id='41'`); err != nil {
 		t.Fatal(err)
@@ -24,6 +25,7 @@ func TestBoundAccountMaintenanceUsesNormalizedSiteName(t *testing.T) {
 }
 
 func TestBoundAccountMaintenanceRejectsCorruptUpstreamMetadata(t *testing.T) {
+	t.Parallel()
 	store := openReadModelFixture(t)
 	if _, err := store.db.Exec(`UPDATE upstreams SET metadata_json='not-json' WHERE host='api.example'`); err != nil {
 		t.Fatal(err)
@@ -34,6 +36,7 @@ func TestBoundAccountMaintenanceRejectsCorruptUpstreamMetadata(t *testing.T) {
 }
 
 func TestBoundAccountMaintenanceIncludesManualSyncPolicy(t *testing.T) {
+	t.Parallel()
 	store := openReadModelFixture(t)
 	ctx := context.Background()
 	if _, err := store.AssignManualPriority(ctx, "41", 3, "100", 100, false, "operator"); err != nil {
@@ -59,6 +62,7 @@ func TestBoundAccountMaintenanceIncludesManualSyncPolicy(t *testing.T) {
 }
 
 func TestBoundAccountMaintenanceUsesSourceAuthHostRechargeRate(t *testing.T) {
+	t.Parallel()
 	store := openReadModelFixture(t)
 	if _, err := store.db.Exec(`INSERT INTO recharge_rates(host,recharge_rate,updated_at) VALUES('auth.example','10','now');
 		UPDATE bindings SET source_auth_host='auth.example' WHERE local_account_id='41'`); err != nil {
@@ -74,6 +78,7 @@ func TestBoundAccountMaintenanceUsesSourceAuthHostRechargeRate(t *testing.T) {
 }
 
 func TestBoundAccountMaintenanceKeepsLastSuccessfulRawRate(t *testing.T) {
+	t.Parallel()
 	store := openReadModelFixture(t)
 	if _, err := store.db.Exec(`UPDATE bindings SET upstream_rate='1.3' WHERE local_account_id='41'`); err != nil {
 		t.Fatal(err)
@@ -88,6 +93,7 @@ func TestBoundAccountMaintenanceKeepsLastSuccessfulRawRate(t *testing.T) {
 }
 
 func TestBoundAccountMaintenanceFallsBackToFixedGroupCatalogRawRate(t *testing.T) {
+	t.Parallel()
 	store := openReadModelFixture(t)
 	if _, err := store.db.Exec(`UPDATE bindings SET upstream_rate=NULL WHERE local_account_id='41';
 		UPDATE upstream_groups SET raw_rate='0.2' WHERE host='api.example'
@@ -104,6 +110,7 @@ func TestBoundAccountMaintenanceFallsBackToFixedGroupCatalogRawRate(t *testing.T
 }
 
 func TestBoundAccountMaintenanceUsesSourceAuthGroupCatalogBeforePrimaryHost(t *testing.T) {
+	t.Parallel()
 	store := openReadModelFixture(t)
 	if _, err := store.db.Exec(`UPDATE bindings SET upstream_rate=NULL,source_auth_host='auth.example' WHERE local_account_id='41';
 		INSERT INTO recharge_rates(host,recharge_rate,updated_at) VALUES('auth.example','10','now');
@@ -125,6 +132,7 @@ func TestBoundAccountMaintenanceUsesSourceAuthGroupCatalogBeforePrimaryHost(t *t
 }
 
 func TestAccountNamesForMaintenanceIncludesAccountsWithoutBindings(t *testing.T) {
+	t.Parallel()
 	store := openReadModelFixture(t)
 	if _, err := store.db.Exec(`UPDATE accounts SET name='Existing Account-0.15' WHERE id='42'`); err != nil {
 		t.Fatal(err)
@@ -139,6 +147,7 @@ func TestAccountNamesForMaintenanceIncludesAccountsWithoutBindings(t *testing.T)
 }
 
 func TestAccountDefaultsRepairTracksConsoleOnboardingAndClearsLoadFactor(t *testing.T) {
+	t.Parallel()
 	store := openReadModelFixture(t)
 	ctx := context.Background()
 	rows, err := store.BoundAccountsForMaintenance(ctx, []string{"41"})
@@ -183,6 +192,7 @@ func TestAccountDefaultsRepairTracksConsoleOnboardingAndClearsLoadFactor(t *test
 }
 
 func TestMissingBindingIsNotReportedAsExisting(t *testing.T) {
+	t.Parallel()
 	store := openReadModelFixture(t)
 	if err := store.CommitBindingVerification(context.Background(), []BindingVerification{{AccountID: "41", Exists: false}}); err != nil {
 		t.Fatal(err)
@@ -200,6 +210,7 @@ func TestMissingBindingIsNotReportedAsExisting(t *testing.T) {
 }
 
 func TestRepairAccountUpstreamHostsUsesUnambiguousBindingOwnership(t *testing.T) {
+	t.Parallel()
 	store := openReadModelFixture(t)
 	ctx := context.Background()
 	if _, err := store.db.Exec(`UPDATE accounts SET upstream_host='relay.example' WHERE id='41'`); err != nil {
@@ -222,6 +233,7 @@ func TestRepairAccountUpstreamHostsUsesUnambiguousBindingOwnership(t *testing.T)
 }
 
 func TestCleanupMissingBindingsRemovesStaleAccountAndReleasesGroup(t *testing.T) {
+	t.Parallel()
 	store := openReadModelFixture(t)
 	ctx := context.Background()
 	if err := store.CommitBindingVerification(ctx, []BindingVerification{{AccountID: "41", Exists: false}}); err != nil {

@@ -30,6 +30,8 @@ import {
 import { taskPollInterval } from "@/lib/task-state";
 
 import { modelCheckSchema, type ModelCheckForm } from "../lib/model-check-schema";
+import { createQueuedRead } from "../lib/queued-read";
+import { taskEventIsOlder, taskEventSchema } from "../lib/task-event-schema";
 import { ModelCheckConfigurationDialog } from "./model-check-configuration-dialog";
 import { ModelCheckResult } from "./model-check-result";
 import { ModelCheckSelection } from "./model-check-selection";
@@ -107,9 +109,13 @@ export function RegularCheckPanel(props: {
   });
   const selectedAccountIDs = form.watch("account_ids");
   const selectedModels = form.watch("models");
+  const [readModels] = useState(() => createQueuedRead(api.accountModels));
   const rounds = form.watch("rounds");
   const timeoutSeconds = form.watch("timeout_seconds");
-  const accounts = useQuery({ queryKey: ["accounts"], queryFn: api.accounts });
+  const accounts = useQuery({
+    queryKey: ["accounts"],
+    queryFn: ({ signal }) => api.accounts(signal),
+  });
   useEffect(() => {
     if (!accounts.data) return;
     const available = new Set(accounts.data.map((account) => account.id));
@@ -121,13 +127,13 @@ export function RegularCheckPanel(props: {
   }, [accounts.data, form, selectedAccountIDs]);
   const capabilities = useQuery({
     queryKey: ["model-check-capabilities"],
-    queryFn: api.modelCheckCapabilities,
+    queryFn: ({ signal }) => api.modelCheckCapabilities(signal),
     staleTime: Number.POSITIVE_INFINITY,
   });
   const modelQueries = useQueries({
     queries: selectedAccountIDs.map((accountID) => ({
       queryKey: ["model-check-account-models", accountID],
-      queryFn: () => api.accountModels(accountID),
+      queryFn: ({ signal }) => readModels(accountID, signal),
       staleTime: 5 * 60 * 1000,
       retry: false,
     })),
@@ -166,7 +172,7 @@ export function RegularCheckPanel(props: {
 
   const task = useQuery({
     queryKey: ["model-check-task", taskID],
-    queryFn: () => api.task(taskID!),
+    queryFn: ({ signal }) => api.task(taskID!, signal),
     enabled: taskID !== null,
     refetchInterval: (query) => (taskStreamConnected ? false : taskPollInterval(query)),
   });
@@ -176,11 +182,18 @@ export function RegularCheckPanel(props: {
       return;
     }
     const source = new EventSource(api.taskEventsURL(taskID), { withCredentials: true });
-    source.onopen = () => setTaskStreamConnected(true);
+    source.onopen = () => setTaskStreamConnected(false);
     source.onerror = () => setTaskStreamConnected(false);
     source.onmessage = (event) => {
       try {
-        const next = JSON.parse(event.data) as Task;
+        const next = taskEventSchema.parse(JSON.parse(event.data));
+        const current = queryClient.getQueryData<Task>(["model-check-task", taskID]);
+        if (next.id !== taskID || taskEventIsOlder(current, next)) {
+          setTaskStreamConnected(false);
+          return;
+        }
+        // Discard a poll started before this push before updating its cache.
+        void queryClient.cancelQueries({ queryKey: ["model-check-task", taskID], exact: true });
         queryClient.setQueryData(["model-check-task", taskID], next);
         setTaskStreamConnected(true);
         if (["succeeded", "partial", "failed", "cancelled"].includes(next.status)) {
@@ -211,7 +224,7 @@ export function RegularCheckPanel(props: {
     run.isPending || ["queued", "running", "waiting_input"].includes(task.data?.status ?? "");
   const accountCheckStatuses = useQuery({
     queryKey: ["model-check-account-statuses"],
-    queryFn: api.modelCheckAccountStatuses,
+    queryFn: ({ signal }) => api.modelCheckAccountStatuses(signal),
     staleTime: 30_000,
   });
   const checkStatusByAccountID = useMemo(

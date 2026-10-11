@@ -5,7 +5,16 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CirclePlus, Pencil, ServerCog, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
-import { api, type NewAPIModelPrice, type NewAPIPlatform } from "@/api";
+import {
+  api,
+  type NewAPIGroupBinding,
+  type NewAPIGroupBindingUpdate,
+  type NewAPIModelPrice,
+  type NewAPIPlatform,
+  type NewAPIRemoteGroup,
+  type NewAPIRemoteSnapshot,
+  type NewAPIWorkspace,
+} from "@/api";
 import { ConfirmActionDialog } from "@/components/confirm-action-dialog";
 import { ContentRetry } from "@/components/content-retry";
 import { PageHeading } from "@/components/page-heading";
@@ -30,7 +39,7 @@ import {
 } from "./model-prices";
 import { NewAPIPlatformDialog } from "./platform-dialog";
 import { comparePlatformModelPrice, NewAPIPriceComparison } from "./price-comparison";
-import { RawPricingSourceDialog } from "./raw-pricing-source-dialog";
+import { RemotePricingSourceDialog } from "./remote-pricing-source-dialog";
 
 type Props = {
   embedded?: boolean;
@@ -56,13 +65,58 @@ const pageDescriptions: Partial<Record<Props["view"], string>> = {
 };
 
 export function newAPIViewNeedsRemoteSnapshot(view: Props["view"]): boolean {
-  return view === "groups" || view === "prices" || view === "differences";
+  return view === "prices" || view === "differences";
 }
 
 export function newAPIRemoteSnapshotQueryKey(
   platformId: string,
 ): readonly ["newapi-remote-snapshot", string] {
   return ["newapi-remote-snapshot", platformId];
+}
+
+export function mergeSavedNewAPIGroupBindings(
+  workspace: NewAPIWorkspace | undefined,
+  bindings: NewAPIGroupBinding[],
+  updates: NewAPIGroupBindingUpdate[],
+): NewAPIWorkspace | undefined {
+  if (!workspace) return undefined;
+  const ratios = new Map(updates.map((item) => [item.sub2api_group_id, item.sub2api_ratio]));
+  return {
+    ...workspace,
+    bindings,
+    local_groups: workspace.local_groups.map((group) => {
+      const ratio = ratios.get(group.id);
+      return ratio === undefined ? group : { ...group, ratio };
+    }),
+  };
+}
+
+export function mergeSavedNewAPIRemoteGroups(
+  groups: NewAPIRemoteGroup[] | undefined,
+  updates: NewAPIGroupBindingUpdate[],
+): NewAPIRemoteGroup[] | undefined {
+  if (!groups) return undefined;
+  const syncedRatios = new Map(
+    updates
+      .filter((item) => item.sync_ratio)
+      .map((item) => [item.newapi_group_id, item.sub2api_ratio]),
+  );
+  if (syncedRatios.size === 0) return groups;
+  return groups.map((group) => {
+    const ratio = syncedRatios.get(group.id);
+    return ratio === undefined ? group : { ...group, ratio };
+  });
+}
+
+export function mergeSavedNewAPIRemoteSnapshot(
+  snapshot: NewAPIRemoteSnapshot | undefined,
+  updates: NewAPIGroupBindingUpdate[],
+): NewAPIRemoteSnapshot | undefined {
+  if (!snapshot) return undefined;
+  return {
+    ...snapshot,
+    groups: mergeSavedNewAPIRemoteGroups(snapshot.groups, updates) ?? snapshot.groups,
+  };
 }
 
 export function NewAPIHeadingAction(props: {
@@ -176,7 +230,7 @@ export function NewAPIManagementPage(props: Props) {
 
   const workspace = useQuery({
     queryKey: ["newapi-workspace", platformId],
-    queryFn: () => api.newAPIWorkspace(platformId || undefined),
+    queryFn: ({ signal }) => api.newAPIWorkspace(platformId || undefined, signal),
     retry: false,
   });
 
@@ -190,23 +244,24 @@ export function NewAPIManagementPage(props: Props) {
   const needsRemoteSnapshot = newAPIViewNeedsRemoteSnapshot(props.view);
   const remoteSnapshot = useQuery({
     queryKey: newAPIRemoteSnapshotQueryKey(platformId),
-    queryFn: () => api.refreshNewAPIPlatform(platformId),
+    queryFn: ({ signal }) => api.refreshNewAPIPlatform(platformId, signal),
     enabled: Boolean(platformId && needsRemoteSnapshot),
     retry: false,
     staleTime: Number.POSITIVE_INFINITY,
-    gcTime: Number.POSITIVE_INFINITY,
+    gcTime: 5 * 60_000,
   });
   const snapshot = remoteSnapshot.data ?? null;
+  const remoteGroups = useQuery({
+    queryKey: ["newapi-remote-groups", platformId],
+    queryFn: ({ signal }) => api.newAPIRemoteGroups(platformId, signal),
+    enabled: Boolean(platformId && props.view === "groups"),
+    retry: false,
+  });
+  const needsRemoteData = needsRemoteSnapshot || props.view === "groups";
+  const remoteData = props.view === "groups" ? remoteGroups : remoteSnapshot;
   const managementPrices = useQuery({
     ...modelPriceCatalogQueryOptions(platformId),
     enabled: Boolean(platformId && managementPricesOpen),
-  });
-  const rawPricingSource = useQuery({
-    queryKey: ["newapi-remote-model-pricing-source", platformId],
-    queryFn: () => api.remoteModelPricingSource(platformId),
-    enabled: Boolean(platformId && rawPricingSourceOpen),
-    retry: false,
-    staleTime: 60_000,
   });
 
   const refreshPrices = useMutation({
@@ -320,11 +375,25 @@ export function NewAPIManagementPage(props: Props) {
   const saveBindings = useMutation({
     mutationFn: (bindings: Parameters<typeof api.saveNewAPIGroupBindings>[1]) =>
       api.saveNewAPIGroupBindings(platformId, bindings),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["newapi-workspace", platformId] });
-      await queryClient.invalidateQueries({
-        queryKey: newAPIRemoteSnapshotQueryKey(platformId),
-      });
+    onSuccess: (bindings, updates) => {
+      queryClient.setQueryData<NewAPIWorkspace | undefined>(
+        ["newapi-workspace", platformId],
+        (workspace) => mergeSavedNewAPIGroupBindings(workspace, bindings, updates),
+      );
+      queryClient.setQueryData<{ groups: NewAPIRemoteGroup[] } | undefined>(
+        ["newapi-remote-groups", platformId],
+        (groups) =>
+          groups
+            ? {
+                ...groups,
+                groups: mergeSavedNewAPIRemoteGroups(groups.groups, updates) ?? groups.groups,
+              }
+            : undefined,
+      );
+      queryClient.setQueryData<NewAPIRemoteSnapshot | undefined>(
+        newAPIRemoteSnapshotQueryKey(platformId),
+        (snapshot) => mergeSavedNewAPIRemoteSnapshot(snapshot, updates),
+      );
       toast.success("分组绑定已保存");
     },
     onError: (error) => notifyOperationError(error, "分组绑定保存失败"),
@@ -338,13 +407,16 @@ export function NewAPIManagementPage(props: Props) {
         title={pageTitles[props.view]}
         description={pageDescriptions[props.view] ?? ""}
         action={
-          !workspace.data || !selectedPlatform || !needsRemoteSnapshot ? undefined : (
+          !workspace.data || !selectedPlatform || !needsRemoteData ? undefined : (
             <NewAPIHeadingAction
               hasPlatform={selectedPlatform !== null}
-              needsRemoteSnapshot={needsRemoteSnapshot}
-              refreshPending={remoteSnapshot.isFetching}
+              needsRemoteSnapshot={needsRemoteData}
+              refreshPending={
+                remoteData.isFetching || (props.view === "groups" && workspace.isFetching)
+              }
               onRefresh={() => {
-                void remoteSnapshot.refetch();
+                void remoteData.refetch();
+                if (props.view === "groups") void workspace.refetch();
               }}
               onConfigure={() => {
                 setEditingPlatform(null);
@@ -358,8 +430,8 @@ export function NewAPIManagementPage(props: Props) {
       {workspace.error ? (
         <QueryErrorToast error={workspace.error} fallback="New API 管理数据读取失败" />
       ) : null}
-      {remoteSnapshot.error ? (
-        <QueryErrorToast error={remoteSnapshot.error} fallback="New API 数据读取失败" />
+      {remoteData.error ? (
+        <QueryErrorToast error={remoteData.error} fallback="New API 数据读取失败" />
       ) : null}
 
       <div className="flex h-full min-h-0 flex-col gap-3">
@@ -379,16 +451,16 @@ export function NewAPIManagementPage(props: Props) {
                   onCreate={() => setChannelCreateOpen(true)}
                 />
               )}
-              {needsRemoteSnapshot && remoteSnapshot.isFetching && snapshot === null ? (
+              {needsRemoteData && remoteData.isFetching && !remoteData.data ? (
                 <NewAPIRemoteLoading
                   label={`正在加载${pageTitles[props.view]}`}
                   view={props.view}
                 />
               ) : null}
-              {needsRemoteSnapshot && snapshot === null && remoteSnapshot.isError ? (
+              {needsRemoteData && !remoteData.data && remoteData.isError ? (
                 <ContentRetry
-                  pending={remoteSnapshot.isFetching}
-                  onRetry={() => void remoteSnapshot.refetch()}
+                  pending={remoteData.isFetching}
+                  onRetry={() => void remoteData.refetch()}
                 />
               ) : null}
               {props.view === "platform" ? (
@@ -401,9 +473,10 @@ export function NewAPIManagementPage(props: Props) {
                   onDelete={() => setDeleteOpen(true)}
                 />
               ) : null}
-              {props.view === "groups" && snapshot ? (
+              {props.view === "groups" && remoteGroups.data ? (
                 <NewAPIGroupBindings
-                  groups={snapshot?.groups ?? []}
+                  key={platformId}
+                  groups={remoteGroups.data.groups}
                   localGroups={workspace.data?.local_groups ?? []}
                   bindings={workspace.data?.bindings ?? []}
                   pending={saveBindings.isPending}
@@ -505,14 +578,13 @@ export function NewAPIManagementPage(props: Props) {
         onOpenChange={setDeleteOpen}
         onConfirm={() => deletePlatform.mutate()}
       />
-      <RawPricingSourceDialog
-        open={rawPricingSourceOpen}
-        onRetry={() => void rawPricingSource.refetch()}
-        source={rawPricingSource.data}
-        pending={rawPricingSource.isFetching}
-        error={rawPricingSource.error instanceof Error ? rawPricingSource.error.message : ""}
-        onOpenChange={setRawPricingSourceOpen}
-      />
+      {rawPricingSourceOpen && platformId && (
+        <RemotePricingSourceDialog
+          key={platformId}
+          platformId={platformId}
+          onOpenChange={setRawPricingSourceOpen}
+        />
+      )}
     </Layout>
   );
 }

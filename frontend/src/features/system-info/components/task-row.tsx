@@ -3,14 +3,13 @@ import type { ReactElement } from "react";
 
 import type { TaskSummary } from "@/api";
 import { TableActionButton } from "@/components/data-table/table-action-button";
-import { ContentLoading } from "@/components/content-loading";
+import { TaskStartupState } from "@/components/task-startup-state";
 import { StatusBadge } from "@/components/status-badge";
 import { Progress } from "@/components/ui/progress";
 import { TableCell, TableRow } from "@/components/ui/table";
 import { TableOverflowTooltip } from "@/components/ui/table-overflow-tooltip";
 import {
-  activeTaskStatuses,
-  isModelDetectionTask,
+  isTaskStarting,
   taskOperationLabel,
   taskStatusLabel,
   taskStatusVariant,
@@ -22,10 +21,7 @@ export function TaskRow(props: {
   onSelect: (id: string) => void;
 }): ReactElement {
   const operation = taskOperationLabel(props.task.operation);
-  const starting =
-    isModelDetectionTask(props.task.operation) &&
-    activeTaskStatuses.has(props.task.status) &&
-    props.task.progress === 0;
+  const starting = isTaskStarting(props.task);
   return (
     <TableRow>
       <TableCell overflowTooltip={false}>
@@ -63,7 +59,7 @@ export function TaskRow(props: {
             ) : null}
           </div>
           {starting ? (
-            <ContentLoading compact label="等待检测进度" />
+            <TaskStartupState message="等待任务进度" className="min-h-0" />
           ) : (
             <Progress value={props.task.progress} aria-label={`${props.task.id} 任务进度`} />
           )}

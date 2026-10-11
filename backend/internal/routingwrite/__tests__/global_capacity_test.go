@@ -37,6 +37,7 @@ func newGlobalCapacityFixture(t *testing.T, current, other int, active bool) (*r
 }
 
 func TestGlobalCapacityGrowthWaitsWhenAnotherUpstreamConsumesCalculatedHeadroom(t *testing.T) {
+	t.Parallel()
 	service, fixture := newGlobalCapacityFixture(t, 4, 4, true)
 	fixture.snapshotConcurrency = map[string]int{"42": 6}
 	desired := int64(6)
@@ -57,6 +58,7 @@ func TestGlobalCapacityGrowthWaitsWhenAnotherUpstreamConsumesCalculatedHeadroom(
 }
 
 func TestGlobalCapacityBatchAndSeparateTasksCannotReuseCrossUpstreamHeadroom(t *testing.T) {
+	t.Parallel()
 	for _, separateTasks := range []bool{false, true} {
 		name := "one batch"
 		if separateTasks {
@@ -96,6 +98,7 @@ func TestGlobalCapacityBatchAndSeparateTasksCannotReuseCrossUpstreamHeadroom(t *
 }
 
 func TestGlobalCapacityGrowthRejectsUnconfirmedOutsideInventory(t *testing.T) {
+	t.Parallel()
 	for _, scenario := range []string{"missing account", "new remote account", "missing concurrency", "unlimited concurrency", "snapshot failure"} {
 		t.Run(scenario, func(t *testing.T) {
 			service, fixture := newGlobalCapacityFixture(t, 4, 4, true)
@@ -131,6 +134,7 @@ func TestGlobalCapacityGrowthRejectsUnconfirmedOutsideInventory(t *testing.T) {
 }
 
 func TestGlobalCapacityKeepsNonCapacityPausesReservedAndRechecksRecovery(t *testing.T) {
+	t.Parallel()
 	for _, recovery := range []bool{false, true} {
 		name := "outside manual pause keeps its reservation"
 		if recovery {
@@ -156,6 +160,7 @@ func TestGlobalCapacityKeepsNonCapacityPausesReservedAndRechecksRecovery(t *test
 }
 
 func TestGlobalCapacityDoesNotSpendUnconfirmedCrossUpstreamReduction(t *testing.T) {
+	t.Parallel()
 	service, fixture := newGlobalCapacityFixture(t, 6, 4, true)
 	result, err := service.Apply(t.Context(), map[string]business.AccountRoutingTarget{
 		"41": {AccountID: "41", GroupNames: []string{"capacity-group"}, Concurrency: writeCapacityPointer(4)},
@@ -172,6 +177,7 @@ func TestGlobalCapacityDoesNotSpendUnconfirmedCrossUpstreamReduction(t *testing.
 }
 
 func TestGlobalCapacityEnabledThroughGroupOverrideStillGuardsSharedBudget(t *testing.T) {
+	t.Parallel()
 	service, fixture := newGlobalCapacityFixture(t, 4, 6, true)
 	if _, err := fixture.store.UpdatePolicy(t.Context(), map[string]any{"advanced_policy": map[string]any{
 		"scaling": map[string]any{"enabled": false, "global_max_concurrency": 10},
@@ -207,6 +213,7 @@ func (store *globalCapacityPolicyStore) ControlPolicy(context.Context) (map[stri
 }
 
 func TestGlobalCapacityGroupOverrideUsesDefaultBudgetWhenScalingSectionIsAbsent(t *testing.T) {
+	t.Parallel()
 	_, fixture := newGlobalCapacityFixture(t, 400, 500, true)
 	policy, err := fixture.store.ControlPolicy(t.Context())
 	if err != nil {
@@ -235,6 +242,7 @@ func TestGlobalCapacityGroupOverrideUsesDefaultBudgetWhenScalingSectionIsAbsent(
 }
 
 func TestUpstreamCapacityReservesManualPauseEvenWhenGlobalBudgetHasRoom(t *testing.T) {
+	t.Parallel()
 	service, fixture := newUpstreamCapacityWriteFixture(t, writeCapacityPointer(10), 2, 8, true)
 	fixture.states["42"]["schedulable"] = false
 	result, err := service.Apply(t.Context(), map[string]business.AccountRoutingTarget{
@@ -249,6 +257,7 @@ func TestUpstreamCapacityReservesManualPauseEvenWhenGlobalBudgetHasRoom(t *testi
 }
 
 func TestGlobalCapacityConfirmedCapacityPauseReleasesItsReservation(t *testing.T) {
+	t.Parallel()
 	service, fixture := newGlobalCapacityFixture(t, 4, 80, true)
 	_, err := service.Apply(t.Context(), map[string]business.AccountRoutingTarget{
 		"42": {AccountID: "42", GroupNames: []string{"capacity-group"}, Schedulable: writeEnabledPointer(false), DesiredHealth: business.AccountStateConcurrencyLimited},
@@ -273,6 +282,7 @@ func TestGlobalCapacityConfirmedCapacityPauseReleasesItsReservation(t *testing.T
 }
 
 func TestGlobalCapacityOrdinaryReductionAndPauseDoNotRequireSuccessfulSnapshot(t *testing.T) {
+	t.Parallel()
 	for _, pause := range []bool{false, true} {
 		name := "concurrency reduction"
 		if pause {
@@ -297,6 +307,7 @@ func TestGlobalCapacityOrdinaryReductionAndPauseDoNotRequireSuccessfulSnapshot(t
 }
 
 func TestGlobalCapacityDoesNotConstrainIndependentUpstreamReduction(t *testing.T) {
+	t.Parallel()
 	service, fixture := newUpstreamCapacityWriteFixture(t, writeCapacityPointer(10), 8, 8, true)
 	setReductionWritePolicy(t, fixture, true)
 	if _, err := fixture.store.UpdatePolicy(t.Context(), map[string]any{"advanced_policy": map[string]any{
@@ -317,6 +328,7 @@ func TestGlobalCapacityDoesNotConstrainIndependentUpstreamReduction(t *testing.T
 }
 
 func TestGlobalCapacityAutomaticControlReleaseSharesBudgetWithConcurrentGrowth(t *testing.T) {
+	t.Parallel()
 	service, fixture := newGlobalCapacityFixture(t, 8, 4, true)
 	_, err := service.Apply(t.Context(), map[string]business.AccountRoutingTarget{
 		"41": {AccountID: "41", GroupNames: []string{"capacity-group"}, Concurrency: writeCapacityPointer(4)},

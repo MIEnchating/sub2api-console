@@ -7,6 +7,7 @@ import (
 )
 
 func TestOpenPreservesLiteralDatabaseFilename(t *testing.T) {
+	t.Parallel()
 	for _, name := range []string{"console?mode=memory.sqlite3", "console#private.sqlite3", "console%2Fprivate.sqlite3", "console 数据.sqlite3"} {
 		t.Run(name, func(t *testing.T) {
 			directory := t.TempDir()

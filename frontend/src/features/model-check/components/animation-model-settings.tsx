@@ -10,6 +10,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { toast } from "sonner";
 import { LoaderCircle, RefreshCw } from "lucide-react";
 import type { AnimationForm } from "../lib/animation-schema";
+import { createQueuedRead } from "../lib/queued-read";
 
 export function AnimationModelSettings(props: {
   form: UseFormReturn<AnimationForm>;
@@ -27,10 +28,11 @@ export function AnimationModelSettings(props: {
     exact: true,
   });
   const [requested, setRequested] = useState(false);
+  const [readModels] = useState(() => createQueuedRead(api.accountAnimationModels));
   const queries = useQueries({
     queries: selected.map((id) => ({
       queryKey: ["model-animation", "account-models", id],
-      queryFn: ({ signal }: { signal: AbortSignal }) => api.accountAnimationModels(id, signal),
+      queryFn: ({ signal }: { signal: AbortSignal }) => readModels(id, signal),
       enabled: requested,
       staleTime: 0,
       gcTime: 0,

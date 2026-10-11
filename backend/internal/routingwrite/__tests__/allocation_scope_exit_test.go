@@ -6,6 +6,7 @@ import (
 )
 
 func TestOutsideAllocationScopeRecoveryIgnoresUpstreamQuotaButKeepsAccountConcurrency(t *testing.T) {
+	t.Parallel()
 	service, fixture := newUpstreamCapacityWriteFixture(t, writeCapacityPointer(1), 31, 100, true)
 	paused := business.AccountRoutingTarget{AccountID: "41", GroupNames: []string{"capacity-group"}, Schedulable: writeEnabledPointer(false), DesiredHealth: business.AccountStateConcurrencyLimited}
 	result, err := service.Apply(t.Context(), map[string]business.AccountRoutingTarget{"41": paused}, "test")
@@ -24,6 +25,7 @@ func TestOutsideAllocationScopeRecoveryIgnoresUpstreamQuotaButKeepsAccountConcur
 }
 
 func TestConfirmedAutomaticFuseFreesCapacityForSharedRecovery(t *testing.T) {
+	t.Parallel()
 	service, fixture := newUpstreamCapacityWriteFixture(t, writeCapacityPointer(10), 1, 10, true)
 	for id, state := range map[string]string{"41": business.AccountStateConcurrencyLimited, "42": "fused"} {
 		result, err := service.Apply(t.Context(), map[string]business.AccountRoutingTarget{id: {AccountID: id, GroupNames: []string{"capacity-group"}, Schedulable: writeEnabledPointer(false), DesiredHealth: state}}, "test")
@@ -44,6 +46,7 @@ func TestConfirmedAutomaticFuseFreesCapacityForSharedRecovery(t *testing.T) {
 }
 
 func TestConfirmedAutomaticFuseFreesCapacityWithOnlyScalingEnabled(t *testing.T) {
+	t.Parallel()
 	service, fixture := newUpstreamCapacityWriteFixture(t, writeCapacityPointer(10), 1, 10, true)
 	for id, state := range map[string]string{"41": business.AccountStateConcurrencyLimited, "42": "fused"} {
 		result, err := service.Apply(t.Context(), map[string]business.AccountRoutingTarget{id: {AccountID: id, GroupNames: []string{"capacity-group"}, Schedulable: writeEnabledPointer(false), DesiredHealth: state}}, "test")
@@ -65,6 +68,7 @@ func TestConfirmedAutomaticFuseFreesCapacityWithOnlyScalingEnabled(t *testing.T)
 }
 
 func TestGroupScalingOffAndSharedOffRecoversWithoutOtherGroupsGlobalBudget(t *testing.T) {
+	t.Parallel()
 	service, fixture := newGlobalCapacityFixture(t, 31, 100, true)
 	target := business.AccountRoutingTarget{AccountID: "41", GroupNames: []string{"capacity-group"}, Schedulable: writeEnabledPointer(false), DesiredHealth: business.AccountStateConcurrencyLimited}
 	result, err := service.Apply(t.Context(), map[string]business.AccountRoutingTarget{"41": target}, "test")
@@ -85,6 +89,7 @@ func TestGroupScalingOffAndSharedOffRecoversWithoutOtherGroupsGlobalBudget(t *te
 }
 
 func TestIndependentAllocationTargetCannotBypassEnabledScalingSwitches(t *testing.T) {
+	t.Parallel()
 	service, fixture := newUpstreamCapacityWriteFixture(t, writeCapacityPointer(10), 4, 4, true)
 	setReductionWritePolicy(t, fixture, true)
 	if _, err := fixture.store.UpdatePolicy(t.Context(), map[string]any{"advanced_policy": map[string]any{"scaling": map[string]any{"enabled": true}}}, "test"); err != nil {

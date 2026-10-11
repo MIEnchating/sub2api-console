@@ -8,6 +8,7 @@ import (
 )
 
 func TestAlertPolicyTypedPersistenceAndThresholdNormalization(t *testing.T) {
+	t.Parallel()
 	store := openPolicyStore(t)
 	ctx := context.Background()
 	defaults, err := store.AlertPolicy(ctx)
@@ -47,6 +48,7 @@ func TestAlertPolicyTypedPersistenceAndThresholdNormalization(t *testing.T) {
 }
 
 func TestAlertPolicyRejectsUnknownDegradedAndRecoveryTypes(t *testing.T) {
+	t.Parallel()
 	store := openPolicyStore(t)
 	payload := alertPolicyDocument(DefaultAlertPolicy())
 	payload["routing_degraded_types"] = []any{"score"}
@@ -61,6 +63,7 @@ func TestAlertPolicyRejectsUnknownDegradedAndRecoveryTypes(t *testing.T) {
 }
 
 func TestAlertPolicyRejectsUnknownAndPartialWrites(t *testing.T) {
+	t.Parallel()
 	store := openPolicyStore(t)
 	if _, err := store.UpdateAlertPolicy(context.Background(), map[string]any{"enabled": true}); err == nil {
 		t.Fatal("partial alert policy must be rejected")
@@ -73,6 +76,7 @@ func TestAlertPolicyRejectsUnknownAndPartialWrites(t *testing.T) {
 }
 
 func TestAlertPolicyRejectsInvalidRecoveryAndCooldownLimits(t *testing.T) {
+	t.Parallel()
 	store := openPolicyStore(t)
 	payload := alertPolicyDocument(DefaultAlertPolicy())
 	payload["probe_recovery_streak"] = 0
@@ -87,6 +91,7 @@ func TestAlertPolicyRejectsInvalidRecoveryAndCooldownLimits(t *testing.T) {
 }
 
 func TestZeroStateChangeCooldownIsImmediatelyDue(t *testing.T) {
+	t.Parallel()
 	now := time.Now().UTC()
 	deliveredAt := now.Format(time.RFC3339Nano)
 	if !deliveryCooldownDue(&deliveredAt, 0, now) {

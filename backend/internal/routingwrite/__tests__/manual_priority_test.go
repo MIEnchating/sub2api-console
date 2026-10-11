@@ -9,6 +9,7 @@ import (
 )
 
 func TestManualPriorityOrderingWritesOnlyPriorityAndRetainsReleaseBaseline(t *testing.T) {
+	t.Parallel()
 	service, fixture := newUpstreamCapacityWriteFixture(t, nil, 20, 30, true)
 	prepareManualOrder(t, fixture)
 	result, err := service.ReorderManualPriorities(t.Context(), "test")
@@ -43,6 +44,7 @@ func TestManualPriorityOrderingWritesOnlyPriorityAndRetainsReleaseBaseline(t *te
 	}
 }
 func TestManualPriorityOrderingDoesNotWriteWhenDisabledOrMonitoring(t *testing.T) {
+	t.Parallel()
 	for _, scenario := range []string{"disabled", "monitoring"} {
 		t.Run(scenario, func(t *testing.T) {
 			service, fixture := newUpstreamCapacityWriteFixture(t, nil, 20, 30, true)
@@ -65,6 +67,7 @@ func TestManualPriorityOrderingDoesNotWriteWhenDisabledOrMonitoring(t *testing.T
 	}
 }
 func TestManualPriorityOrderingStopsOnUnconfirmedReadback(t *testing.T) {
+	t.Parallel()
 	service, fixture := newUpstreamCapacityWriteFixture(t, nil, 20, 30, true)
 	prepareManualOrder(t, fixture)
 	fixture.ignoreParameters = true

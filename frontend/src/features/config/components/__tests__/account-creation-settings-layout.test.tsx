@@ -1,3 +1,4 @@
+import { seedDictionaries } from "@/test/dictionary-fixtures";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
@@ -10,6 +11,7 @@ describe("账号设置响应式布局", () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { enabled: false, retry: false } },
     });
+    seedDictionaries(queryClient);
     const settings: AccountCreationSettings = {
       default: {
         models: [],
@@ -63,6 +65,7 @@ describe("账号设置响应式布局", () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { enabled: false, retry: false } },
     });
+    seedDictionaries(queryClient);
     const group: GroupStatus = {
       id: "6",
       name: "用于验证超长名称不会挤压开关的账号分组",
@@ -91,6 +94,7 @@ describe("账号设置响应式布局", () => {
       platform_probe_models: {},
     });
     queryClient.setQueryData(["groups"], [group]);
+    seedDictionaries(queryClient, { group: [{ value: "6", name: group.name }] });
 
     const markup = renderToStaticMarkup(
       <QueryClientProvider client={queryClient}>
@@ -124,6 +128,7 @@ describe("账号设置响应式布局", () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { enabled: false, retry: false } },
     });
+    seedDictionaries(queryClient);
     const policy = {
       models: [],
       concurrency: 10,
@@ -157,6 +162,7 @@ describe("账号设置响应式布局", () => {
       ],
     );
 
+    seedDictionaries(queryClient, { group: [{ value: "6", name: "无动画分组" }] });
     const markup = renderToStaticMarkup(
       <QueryClientProvider client={queryClient}>
         <AccountCreationSettingsCard

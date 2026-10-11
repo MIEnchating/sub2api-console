@@ -462,12 +462,14 @@ describe("account pool cells", () => {
           schedulable: false,
           decision_state: "fused",
           decision_reason: "人工熔断，等待手动解除",
+          manual_fused: true,
           upstream_block: "unschedulable",
           upstream_block_reason: "Sub2API 调度开关已关闭，但未记录触发原因",
         }}
       />,
     );
 
+    expect(markup).toContain(">人工熔断<");
     expect(markup).toContain("熔断原因：人工熔断，等待手动解除");
     expect(markup).not.toContain("停止原因未记录");
   });

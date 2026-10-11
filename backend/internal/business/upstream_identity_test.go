@@ -7,6 +7,7 @@ import (
 )
 
 func TestUpstreamIdentityMergesExplicitAliasesAndSurvivesMutableAddressChanges(t *testing.T) {
+	t.Parallel()
 	path := filepath.Join(t.TempDir(), "business.sqlite3")
 	store, err := Open(path)
 	if err != nil {
@@ -69,6 +70,7 @@ func TestUpstreamIdentityMergesExplicitAliasesAndSurvivesMutableAddressChanges(t
 }
 
 func TestCreateUpstreamConfigurationAssignsStableUpstreamIdentity(t *testing.T) {
+	t.Parallel()
 	store, err := Open(filepath.Join(t.TempDir(), "business.sqlite3"))
 	if err != nil {
 		t.Fatal(err)
@@ -99,6 +101,7 @@ func TestCreateUpstreamConfigurationAssignsStableUpstreamIdentity(t *testing.T) 
 }
 
 func TestUpstreamIdentityMergeMovesStableBindingsAndCatalogTombstones(t *testing.T) {
+	t.Parallel()
 	store, err := Open(filepath.Join(t.TempDir(), "merge.sqlite3"))
 	if err != nil {
 		t.Fatal(err)

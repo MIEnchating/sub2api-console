@@ -65,6 +65,7 @@ CREATE TABLE IF NOT EXISTS account_groups (
  FOREIGN KEY(account_id) REFERENCES accounts(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS ix_account_groups_group_account ON account_groups(group_name,account_id);
+CREATE INDEX IF NOT EXISTS ix_account_groups_membership_counts ON account_groups(group_id,group_name);
 CREATE TRIGGER IF NOT EXISTS trg_account_groups_use_account_cost_after_insert
 AFTER INSERT ON account_groups
 BEGIN
@@ -111,8 +112,20 @@ CREATE TABLE IF NOT EXISTS account_stability_samples (
  usage_known INTEGER NOT NULL DEFAULT 0,
  PRIMARY KEY(account_id,source,evidence_key)
 );
-CREATE INDEX IF NOT EXISTS ix_account_stability_window ON account_stability_samples(account_id,observed_at);
-CREATE INDEX IF NOT EXISTS ix_account_stability_covering ON account_stability_samples(account_id,observed_at,outcome);
+CREATE INDEX IF NOT EXISTS ix_account_stability_grouped ON account_stability_samples(account_id,outcome,observed_at);
+CREATE TABLE IF NOT EXISTS account_stability_version (
+ id INTEGER PRIMARY KEY CHECK(id=1),revision INTEGER NOT NULL
+);
+INSERT OR IGNORE INTO account_stability_version(id,revision) VALUES(1,0);
+CREATE TRIGGER IF NOT EXISTS account_stability_insert_version AFTER INSERT ON account_stability_samples BEGIN
+ UPDATE account_stability_version SET revision=revision+1 WHERE id=1;
+END;
+CREATE TRIGGER IF NOT EXISTS account_stability_update_version AFTER UPDATE ON account_stability_samples BEGIN
+ UPDATE account_stability_version SET revision=revision+1 WHERE id=1;
+END;
+CREATE TRIGGER IF NOT EXISTS account_stability_delete_version AFTER DELETE ON account_stability_samples BEGIN
+ UPDATE account_stability_version SET revision=revision+1 WHERE id=1;
+END;
 CREATE TABLE IF NOT EXISTS routing_decisions (
  account_id TEXT NOT NULL,group_name TEXT NOT NULL,priority INTEGER,schedulable INTEGER,role TEXT,routing_state TEXT,
  rank INTEGER,reason TEXT,updated_at TEXT NOT NULL,payload_json TEXT NOT NULL DEFAULT '{}',PRIMARY KEY(account_id)
@@ -222,6 +235,8 @@ CREATE TABLE IF NOT EXISTS alert_incidents (
  status TEXT NOT NULL,first_seen_at TEXT NOT NULL,last_seen_at TEXT NOT NULL,delivery_status TEXT,last_error TEXT
 );
 CREATE INDEX IF NOT EXISTS ix_alert_incidents_status ON alert_incidents(status,incident_key);
+CREATE INDEX IF NOT EXISTS ix_alert_incidents_delivery_recent ON alert_incidents(last_seen_at,incident_key)
+ WHERE status IN ('firing','recovered');
 CREATE TABLE IF NOT EXISTS alert_deliveries (
  incident_key TEXT NOT NULL,channel_key TEXT NOT NULL,status TEXT NOT NULL,attempts INTEGER NOT NULL DEFAULT 0,
  last_error TEXT,delivered_at TEXT,updated_at TEXT NOT NULL,PRIMARY KEY(incident_key,channel_key),
@@ -266,7 +281,8 @@ CREATE TABLE IF NOT EXISTS run_records (
 CREATE INDEX IF NOT EXISTS ix_run_records_display_time ON run_records(
  COALESCE(ended_at,started_at,updated_at) DESC,run_key
 );
-CREATE INDEX IF NOT EXISTS ix_run_records_updated_at ON run_records(updated_at);
+CREATE INDEX IF NOT EXISTS ix_run_records_log_cleanup ON run_records(updated_at)
+ WHERE COALESCE(status,'') NOT IN ('queued','running','waiting_input');
 CREATE TABLE IF NOT EXISTS usage_records (
  id INTEGER PRIMARY KEY AUTOINCREMENT,request_id TEXT NOT NULL,account_id TEXT,account_name TEXT,group_name TEXT,
  is_error INTEGER,error_reason TEXT,first_token_ms TEXT,observed_at TEXT,source TEXT NOT NULL,payload_json TEXT NOT NULL DEFAULT '{}',
@@ -282,6 +298,9 @@ CREATE INDEX IF NOT EXISTS ix_usage_records_account_recent ON usage_records(
 CREATE INDEX IF NOT EXISTS ix_usage_records_source_account_recent ON usage_records(
  LOWER(REPLACE(source,'_','-')),account_id,COALESCE(observed_at,'') DESC,id DESC
 );
+CREATE INDEX IF NOT EXISTS ix_usage_records_recovery_time ON usage_records(
+ account_id,console_recovery_time_v1(observed_at) DESC,id DESC
+) WHERE LOWER(REPLACE(source,'_','-'))='traffic';
 CREATE INDEX IF NOT EXISTS ix_usage_records_traffic_window ON usage_records(
  LOWER(source),observed_at,account_id,request_id,id
 );
@@ -304,7 +323,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS ux_onboarding_pending_identity ON onboarding_p
 `
 
 // Older compatible schemas can receive additive tables and indexes at startup.
-const businessSchemaVersion = 10
+const businessSchemaVersion = 12
 
 func (s *Store) ensureSchema(ctx context.Context) error {
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -332,7 +351,10 @@ func (s *Store) ensureSchema(ctx context.Context) error {
 	// The v2 filter includes all legacy rows and additionally preserves failed
 	// deletions. Keeping both indexes doubles this history index's write cost.
 	if _, err := tx.ExecContext(ctx, `DROP INDEX IF EXISTS ix_operation_audit_log_recent;
-		DROP INDEX IF EXISTS ix_runtime_events_type_status_recent`); err != nil {
+		DROP INDEX IF EXISTS ix_runtime_events_type_status_recent;
+		DROP INDEX IF EXISTS ix_run_records_updated_at;
+		DROP INDEX IF EXISTS ix_account_stability_window;
+		DROP INDEX IF EXISTS ix_account_stability_covering`); err != nil {
 		return err
 	}
 	if !fresh {

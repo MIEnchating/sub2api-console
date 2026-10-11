@@ -17,7 +17,7 @@ export function useChannelMaintenance(platformId: string, onCompleted: () => voi
   const handledTask = useRef("");
   const taskQuery = useQuery({
     queryKey: ["tasks", task?.id],
-    queryFn: () => api.task(task!.id),
+    queryFn: ({ signal }) => api.task(task!.id, signal),
     enabled: !!task,
     retry: false,
     refetchInterval: (query) =>

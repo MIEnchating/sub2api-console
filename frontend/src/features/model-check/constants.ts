@@ -1,9 +1,9 @@
 import type { PrecheckQuestionID } from "@/api";
+import type { AccountSort } from "@/features/accounts/lib/account-sort";
 
 export const detectionStageOptions = [
   { value: "animation", label: "动画检测", description: "生成并预览动画结果" },
   { value: "precheck", label: "前置检测", description: "使用糖果题检查回答" },
-  { value: "terminal", label: "终端检测", description: "多轮检测终端续接能力" },
 ] as const;
 
 export const animationPlatformLabels = { openai: "OpenAI", anthropic: "Anthropic" } as const;
@@ -34,6 +34,12 @@ export const precheckVerdictLabels = {
 };
 
 export type DetectionResultTone = "success" | "danger" | "warning" | "muted";
+
+export const animationManualVerdictLabels = {
+  passed: "不降智",
+  not_passed: "降智",
+  unmarked: "未标记",
+} as const;
 
 export const detectionMissingResultStates = {
   waiting: { label: "等待检测结果", tone: "muted" },
@@ -90,3 +96,12 @@ export const precheckQuestionLabels: Record<string, string> = {
 };
 
 export const animationTestModel = "gpt-6-astra";
+
+export const animationAccountSortOptions = [
+  { value: "default", label: "默认排序" },
+  { value: "priority_asc", label: "优先级：从小到大" },
+  { value: "priority_desc", label: "优先级：从大到小" },
+  { value: "weight_desc", label: "权重：从大到小" },
+  { value: "weight_asc", label: "权重：从小到大" },
+] as const satisfies ReadonlyArray<{ value: AccountSort; label: string }>;
+export type AnimationAccountSort = (typeof animationAccountSortOptions)[number]["value"];

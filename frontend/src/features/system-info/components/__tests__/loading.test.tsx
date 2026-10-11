@@ -1,3 +1,4 @@
+import { seedDictionaries } from "@/test/dictionary-fixtures";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -33,6 +34,7 @@ it("资源首次读取失败后停止骨架并提供重试，重试成功后展�
     }),
   );
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  seedDictionaries(client);
   render(
     <QueryClientProvider client={client}>
       <SystemInfoPage />

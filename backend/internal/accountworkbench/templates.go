@@ -150,13 +150,6 @@ func (s *Service) SaveTemplate(ctx context.Context, input TemplateInput) (Templa
 		if input.SourceVersion == "" {
 			return TemplateLibrary{}, errors.New("请先读取来源账号")
 		}
-		source, err = s.TemplateSource(ctx, input.SourceID)
-		if err != nil {
-			return TemplateLibrary{}, err
-		}
-		if source.SourceVersion != input.SourceVersion {
-			return TemplateLibrary{}, errors.New("来源配置已变化，请重新读取后保存")
-		}
 	}
 	target, err := targetguard.Settings(ctx, s.private)
 	if err != nil {
@@ -169,34 +162,54 @@ func (s *Service) SaveTemplate(ctx context.Context, input TemplateInput) (Templa
 	if input.Revision != library.Revision {
 		return library, configstore.ErrWorkbenchVersion
 	}
+	// Reject stale drafts and invalid destinations before spending time on the
+	// upstream. The final document CAS still protects changes during that read.
+	index, err := templateUpdateIndex(library, input)
+	if err != nil {
+		return library, err
+	}
+	if input.Config == nil {
+		source, err = s.TemplateSource(ctx, input.SourceID)
+		if err != nil {
+			return TemplateLibrary{}, err
+		}
+		if source.SourceVersion != input.SourceVersion {
+			return TemplateLibrary{}, errors.New("来源配置已变化，请重新读取后保存")
+		}
+	}
 	source.ID, source.Name, source.SyncedAt = input.ID, input.Name, time.Now().UTC().Format(time.RFC3339)
-	if input.ID == "" {
+	if index < 0 {
 		source.ID = newID()
 		source.Revision = 1
 		library.Items = append(library.Items, source)
 	} else {
-		found := false
-		for i, item := range library.Items {
-			if item.ID == input.ID {
-				if input.Config != nil {
-					preserveTemplateSource(&source, item)
-				}
-				if item.SourceID != source.SourceID {
-					return library, errors.New("不能更改模板来源，请创建新模板")
-				}
-				source.Revision = item.Revision + 1
-				library.Items[i] = source
-				found = true
-				break
-			}
+		item := library.Items[index]
+		if input.Config != nil {
+			preserveTemplateSource(&source, item)
 		}
-		if !found {
-			return library, errors.New("待刷新模板不存在")
-		}
+		source.Revision = item.Revision + 1
+		library.Items[index] = source
 	}
 	library.PreferredID = source.ID
 	return s.saveTemplates(ctx, target, library)
 }
+
+func templateUpdateIndex(library TemplateLibrary, input TemplateInput) (int, error) {
+	if input.ID == "" {
+		return -1, nil
+	}
+	for index, item := range library.Items {
+		if item.ID != input.ID {
+			continue
+		}
+		if input.Config == nil && item.SourceID != input.SourceID {
+			return -1, errors.New("不能更改模板来源，请创建新模板")
+		}
+		return index, nil
+	}
+	return -1, errors.New("待刷新模板不存在")
+}
+
 func (s *Service) ChangeTemplate(ctx context.Context, id string, revision int64, remove bool) (TemplateLibrary, error) {
 	ctx, err := targetguard.Capture(ctx, s.private)
 	if err != nil {

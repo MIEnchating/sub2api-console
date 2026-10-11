@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, it, vi } from "vitest";
 import { MaintenancePanel } from "../components/maintenance-panel";
@@ -59,6 +59,7 @@ it("开启维护先展示账号范围，确认后只提交预览标识", async (
     }),
   );
   const user = userEvent.setup();
+  await user.click(screen.getByRole("button", { name: "维护设置" }));
   await user.click(screen.getByRole("checkbox", { name: "启用定时检查" }));
   expect(screen.getByRole("button", { name: "立即检查" })).toBeDisabled();
   await user.click(screen.getByRole("button", { name: "预览并保存" }));
@@ -73,7 +74,7 @@ it("开启维护先展示账号范围，确认后只提交预览标识", async (
     }),
   );
 });
-it("维护运行时禁止改设置和重复检查，同时保留停止入口", () => {
+it("维护运行时禁止改设置和重复检查，同时保留停止入口", async () => {
   mount(
     {
       ...settings,
@@ -91,17 +92,21 @@ it("维护运行时禁止改设置和重复检查，同时保留停止入口", (
     },
     vi.fn(),
   );
+  const user = userEvent.setup();
+  await user.click(screen.getByRole("button", { name: "维护设置" }));
   expect(screen.getByRole("spinbutton", { name: "检查间隔（分钟）" })).toBeDisabled();
   expect(screen.getByRole("button", { name: "立即检查" })).toBeDisabled();
   expect(screen.getByRole("button", { name: "预览并保存" })).toBeDisabled();
   expect(screen.getByRole("button", { name: "停止维护" })).toBeEnabled();
-  expect(screen.getByRole("status")).toHaveTextContent("正在维护账号");
+  await user.click(screen.getByRole("button", { name: "取消" }));
+  expect(await screen.findByRole("status")).toHaveTextContent("正在维护账号");
   expect(screen.getByRole("cell", { name: "上游限流，冷却后再检查" })).toBeVisible();
 });
 it("检查间隔小于一分钟时阻止预览并显示字段错误", async () => {
   const fetcher = vi.fn();
   mount(settings, fetcher);
   const user = userEvent.setup();
+  await user.click(screen.getByRole("button", { name: "维护设置" }));
   const input = screen.getByRole("spinbutton", { name: "检查间隔（分钟）" });
   await user.clear(input);
   await user.type(input, "0");
@@ -113,7 +118,7 @@ it("检查间隔小于一分钟时阻止预览并显示字段错误", async () =
   expect(fetcher).not.toHaveBeenCalled();
 });
 
-it("首次读取维护设置显示分栏骨架，读取完成后展示表单和结果", async () => {
+it("首次读取显示表格骨架，结果就绪后通过按钮打开设置弹窗", async () => {
   let complete: (response: Response) => void = () => undefined;
   mount(
     undefined,
@@ -126,10 +131,52 @@ it("首次读取维护设置显示分栏骨架，读取完成后展示表单和�
   );
   const loading = screen.getByLabelText("正在读取维护设置");
   expect(loading).toHaveAttribute("aria-busy", "true");
-  expect(loading.lastElementChild).toHaveClass("grid", "lg:grid-cols-2");
+  expect(loading.lastElementChild).toHaveClass("grid");
   expect(screen.queryByRole("form", { name: "维护设置" })).not.toBeInTheDocument();
   complete(Response.json(settings));
-  expect(await screen.findByRole("form", { name: "维护设置" })).toBeVisible();
+  expect(await screen.findByRole("button", { name: "维护设置" })).toBeVisible();
+  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  expect(screen.getByRole("table", { name: "维护运行状态" })).toBeVisible();
   expect(screen.getByRole("region", { name: "维护结果" })).toBeVisible();
   expect(screen.queryByLabelText("正在读取维护设置")).not.toBeInTheDocument();
+  const user = userEvent.setup();
+  const trigger = screen.getByRole("button", { name: "维护设置" });
+  trigger.focus();
+  await user.keyboard("{Enter}");
+  expect(await screen.findByRole("dialog", { name: "维护设置" })).toBeVisible();
+  await user.keyboard("{Escape}");
+  await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  expect(screen.getByRole("table", { name: "维护运行状态" })).toBeVisible();
+});
+
+it("读取维护范围期间可以取消，迟到响应不会重新打开确认弹窗", async () => {
+  let complete!: (response: Response) => void;
+  mount(
+    settings,
+    vi.fn(
+      () =>
+        new Promise<Response>((resolve) => {
+          complete = resolve;
+        }),
+    ),
+  );
+  const user = userEvent.setup();
+  await user.click(screen.getByRole("button", { name: "维护设置" }));
+  await user.click(screen.getByRole("button", { name: "预览并保存" }));
+  expect(screen.getByRole("status", { name: "正在读取维护范围" })).toBeVisible();
+  await user.click(screen.getByRole("button", { name: "取消" }));
+  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  await act(async () =>
+    complete(
+      Response.json({
+        id: "late-preview",
+        revision: 1,
+        expires_at: "2099-01-01T00:00:00Z",
+        settings,
+        accounts: [],
+      }),
+    ),
+  );
+  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  expect(screen.getByRole("table", { name: "维护运行状态" })).toBeVisible();
 });

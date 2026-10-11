@@ -27,7 +27,7 @@ export function DetectionTaskEditor(props: {
   onClose: () => void;
 }): ReactElement {
   const client = useQueryClient();
-  const groups = useQuery({ queryKey: ["groups"], queryFn: api.groups });
+  const groups = useQuery({ queryKey: ["groups"], queryFn: ({ signal }) => api.groups(signal) });
   const [confirmation, setConfirmation] = useState<DetectionTaskForm | null>(null);
   const form = useForm<DetectionTaskForm>({
     resolver: zodResolver(detectionTaskSchema),
@@ -37,13 +37,13 @@ export function DetectionTaskEditor(props: {
       name: "",
       group_ids: [],
       precheck: false,
-      terminal: false,
-      terminal_rounds: 3,
       automatic: false,
       schedule_type: "interval",
       interval_minutes: 60,
       timeout_seconds: 120,
       ...props.value,
+      terminal: false,
+      terminal_rounds: 0,
       concurrency: props.value?.concurrency || 4,
       model: props.value?.model ?? animationTestModel,
       animation: props.value?.animation ?? true,
@@ -57,6 +57,7 @@ export function DetectionTaskEditor(props: {
         ...value,
         daily_times: value.schedule_type === "daily" ? value.daily_times.slice().sort() : undefined,
         timezone: value.schedule_type === "daily" ? "Asia/Shanghai" : undefined,
+        prompt: undefined,
       }),
     onSuccess: (values) => {
       client.setQueryData(["model-detection-tasks"], values);

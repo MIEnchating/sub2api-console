@@ -1,3 +1,4 @@
+import { seedDictionaries } from "@/test/dictionary-fixtures";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, render, screen, within } from "@testing-library/react";
 import { afterEach, expect, it } from "vitest";
@@ -59,6 +60,7 @@ it("分组含有两个仅高精度小数不同的成本时保留两档并合并�
     generated_at: "2026-09-14T00:00:00Z",
   };
   client = new QueryClient({ defaultOptions: { queries: { enabled: false } } });
+  seedDictionaries(client);
   client.setQueryData(["pricing"], snapshot);
   render(
     <QueryClientProvider client={client}>

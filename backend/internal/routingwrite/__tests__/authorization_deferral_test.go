@@ -9,6 +9,7 @@ import (
 )
 
 func TestPolicyChangeDefersOldTargetAndAllowsRecalculatedTargetNextRound(t *testing.T) {
+	t.Parallel()
 	_, fixture := newUpstreamCapacityWriteFixture(t, writeCapacityPointer(20), 4, 4, true)
 	if err := fixture.store.PersistRoutingRound(t.Context(), nil, nil, nil, nil, nil, nil, nil, true, time.Now().UTC()); err != nil {
 		t.Fatal(err)
@@ -50,6 +51,7 @@ func TestPolicyChangeDefersOldTargetAndAllowsRecalculatedTargetNextRound(t *test
 }
 
 func TestPolicyChangeSkipDoesNotResolveAnEarlierWriteFailure(t *testing.T) {
+	t.Parallel()
 	_, fixture := newUpstreamCapacityWriteFixture(t, writeCapacityPointer(20), 4, 4, true)
 	reason := "远端写入失败：HTTP 503"
 	if err := fixture.store.RecordAccountOperation(t.Context(), business.AccountOperation{

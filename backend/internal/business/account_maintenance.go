@@ -196,37 +196,58 @@ func (s *Store) RepairAccountUpstreamHosts(ctx context.Context, accountIDs []str
 }
 
 func (s *Store) AccountNamesForMaintenance(ctx context.Context, requestedIDs []string) (map[string]string, error) {
-	requested := make(map[string]struct{}, len(requestedIDs))
-	for _, id := range requestedIDs {
-		requested[strings.TrimSpace(id)] = struct{}{}
+	predicate, args, err := maintenanceAccountScope(requestedIDs)
+	if err != nil {
+		return nil, err
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT id,name FROM accounts ORDER BY CASE WHEN id GLOB '[0-9]*' THEN CAST(id AS INTEGER) ELSE 0 END,id`)
+	query := `SELECT id,name FROM accounts`
+	if predicate != "" {
+		query += " WHERE id" + predicate
+	}
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	result := make(map[string]string, len(requested))
+	result := make(map[string]string)
 	for rows.Next() {
 		var id, name string
 		if err := rows.Scan(&id, &name); err != nil {
 			return nil, err
-		}
-		if len(requested) > 0 {
-			if _, found := requested[id]; !found {
-				continue
-			}
 		}
 		result[id] = name
 	}
 	return result, rows.Err()
 }
 
-func (s *Store) BoundAccountsForMaintenance(ctx context.Context, requestedIDs []string) ([]BoundAccountMaintenance, error) {
-	requested := make(map[string]struct{}, len(requestedIDs))
-	for _, id := range requestedIDs {
-		requested[strings.TrimSpace(id)] = struct{}{}
+// Empty input is the existing all-accounts maintenance scope. A nonempty
+// input stays scoped even when it contains only blank or missing IDs.
+func maintenanceAccountScope(requestedIDs []string) (string, []any, error) {
+	if len(requestedIDs) == 0 {
+		return "", nil, nil
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT DISTINCT a.id,a.name,COALESCE(a.multiplier,''),u.host,COALESCE(b.source_auth_host,''),u.upstream_type,
+	if len(requestedIDs) == 1 {
+		return " = ?", []any{strings.TrimSpace(requestedIDs[0])}, nil
+	}
+	ids := make([]string, len(requestedIDs))
+	for index, id := range requestedIDs {
+		ids[index] = strings.TrimSpace(id)
+	}
+	// A single JSON parameter avoids SQLite's variable limit on large scopes;
+	// IN retains membership semantics when the caller repeats an ID.
+	raw, err := json.Marshal(ids)
+	if err != nil {
+		return "", nil, err
+	}
+	return " IN (SELECT value FROM json_each(?))", []any{string(raw)}, nil
+}
+
+func (s *Store) BoundAccountsForMaintenance(ctx context.Context, requestedIDs []string) ([]BoundAccountMaintenance, error) {
+	predicate, args, err := maintenanceAccountScope(requestedIDs)
+	if err != nil {
+		return nil, err
+	}
+	query := `SELECT DISTINCT a.id,a.name,COALESCE(a.multiplier,''),u.host,COALESCE(b.source_auth_host,''),u.upstream_type,
 		b.upstream_key_id,COALESCE(b.upstream_group_id,''),COALESCE(source_rate.recharge_rate,primary_rate.recharge_rate,'1'),
 		COALESCE(NULLIF(TRIM(b.upstream_rate),''),source_group_catalog.raw_rate,primary_group_catalog.raw_rate,''),
 		CASE WHEN NULLIF(TRIM(b.upstream_rate),'') IS NOT NULL THEN 'account_observation'
@@ -244,8 +265,12 @@ func (s *Store) BoundAccountsForMaintenance(ctx context.Context, requestedIDs []
 			AND primary_group_catalog.group_id=b.upstream_group_id
 		LEFT JOIN recharge_rates source_rate ON source_rate.host=NULLIF(TRIM(b.source_auth_host),'')
 		LEFT JOIN recharge_rates primary_rate ON primary_rate.host=u.host
-		LEFT JOIN manual_priority_accounts m ON m.account_id=a.id
-		ORDER BY CASE WHEN a.id GLOB '[0-9]*' THEN CAST(a.id AS INTEGER) ELSE 0 END,a.id`)
+		LEFT JOIN manual_priority_accounts m ON m.account_id=a.id`
+	if predicate != "" {
+		query += " WHERE a.id" + predicate
+	}
+	query += ` ORDER BY CASE WHEN a.id GLOB '[0-9]*' THEN CAST(a.id AS INTEGER) ELSE 0 END,a.id`
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -258,11 +283,6 @@ func (s *Store) BoundAccountsForMaintenance(ctx context.Context, requestedIDs []
 			&item.UpstreamKeyID, &item.UpstreamGroupID, &item.RechargeRate, &item.KnownRawRate, &item.KnownRawRateSource, &baseURL, &metadataRaw,
 			&accountMetadataRaw, &item.ConsoleOnboarded, &item.ManualPriority, &item.SyncBalanceMultiplier); err != nil {
 			return nil, err
-		}
-		if len(requested) > 0 {
-			if _, found := requested[item.AccountID]; !found {
-				continue
-			}
 		}
 		metadata := map[string]any{}
 		if err := json.Unmarshal([]byte(metadataRaw), &metadata); err != nil || metadata == nil {
@@ -463,9 +483,7 @@ func (s *Store) CleanupMissingBindings(ctx context.Context, accountIDs []string,
 	if err := s.removeDeletedAccountPolicyReferences(ctx, tx, accountIDs, now); err != nil {
 		return MissingBindingCleanupResult{}, err
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE local_groups SET account_count=(
-		SELECT COUNT(*) FROM account_groups WHERE group_name=local_groups.name
-	),updated_at=?`, now); err != nil {
+	if err := refreshAccountGroupCounts(ctx, tx, now); err != nil {
 		return MissingBindingCleanupResult{}, err
 	}
 	payload := map[string]any{"actor": strings.TrimSpace(actor), "account_ids": accountIDs, "account_names": names,

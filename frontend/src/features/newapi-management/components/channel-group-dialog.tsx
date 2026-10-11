@@ -100,7 +100,7 @@ export function ChannelGroupDialog(props: {
         </DialogHeader>
         <form className="flex min-h-0 flex-1 flex-col gap-4" onSubmit={form.handleSubmit(submit)}>
           <DialogBody className="flex min-h-0 flex-col gap-4 overflow-y-auto">
-            <div className="flex flex-wrap items-start gap-2 rounded-xl border border-dashed bg-muted/20 p-3 sm:p-4">
+            <div className="flex flex-wrap items-start gap-2 rounded-lg border border-dashed bg-muted/20 p-3 sm:p-4">
               <div className="min-w-0 flex-1 basis-48">
                 <label htmlFor="channel-group-new" className="mb-1.5 block text-sm font-medium">
                   新建分组名称

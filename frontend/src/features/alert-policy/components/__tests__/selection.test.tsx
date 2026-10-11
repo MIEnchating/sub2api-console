@@ -1,3 +1,4 @@
+import { dictionaryItems } from "@/test/dictionary-fixtures";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -88,4 +89,25 @@ describe("告警策略开关联动", () => {
       "true",
     );
   });
+});
+
+it("告警分组旧配置不在字典时仅回显，不补入候选且可清除", async () => {
+  const client = new QueryClient({ defaultOptions: { queries: { enabled: false } } });
+  cacheAlertPolicyPageData(client);
+  client.setQueryData(["dictionaries", "group"], {
+    items: dictionaryItems("group", [{ value: "6", name: "codex" }]),
+  });
+  const view = render(
+    <QueryClientProvider client={client}>
+      <AlertPolicyPage onOpenSettings={() => undefined} />
+    </QueryClientProvider>,
+  );
+  const trigger = screen.getByRole("combobox", { name: "主动探测告警分组" });
+  expect(trigger).toHaveTextContent("pro");
+  await userEvent.click(trigger);
+  expect(screen.getAllByRole("option").map((option) => option.textContent)).toEqual(["codex"]);
+  await userEvent.click(screen.getByRole("button", { name: "应用于全部分组" }));
+  expect(trigger).not.toHaveTextContent("pro");
+  view.unmount();
+  client.clear();
 });

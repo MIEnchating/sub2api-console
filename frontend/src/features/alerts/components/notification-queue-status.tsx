@@ -50,6 +50,8 @@ type QueueDisplayItem = {
   alert: NotificationQueueItem;
   queueStatus: string;
   queueReason?: string;
+  notification: NotificationPresentation;
+  searchText: string;
 };
 
 type NotificationPresentation = {
@@ -76,14 +78,36 @@ function QueueMetric(props: QueueMetricProps) {
 }
 
 function queueItems(details: NotificationQueueDetails): QueueDisplayItem[] {
-  return details.consumer_items.map((alert) => ({
-    alert,
-    queueStatus: alert.queue_status || "状态未知",
-    queueReason: alert.queue_reason,
-  }));
+  return details.consumer_items.map((alert) => {
+    const queueStatus = alert.queue_status || "状态未知";
+    const queueReason = alert.queue_reason;
+    const notification = notificationPresentation({ alert, queueStatus, queueReason });
+    const searchText = [
+      alertSubjectLabel(alert.event_type),
+      alertTypeLabel(alert.event_type, alert.status, alert.cause_code),
+      alertObjectLabel(alert),
+      alertCauseLabel(alert.cause_code),
+      notification.label,
+      notification.detail,
+      alert.last_error,
+      alert.incident_key,
+    ]
+      .filter((value): value is string => Boolean(value))
+      .join(" ")
+      .toLocaleLowerCase();
+    return {
+      alert,
+      queueStatus,
+      queueReason,
+      notification,
+      searchText,
+    };
+  });
 }
 
-function notificationPresentation(item: QueueDisplayItem): NotificationPresentation {
+function notificationPresentation(
+  item: Pick<QueueDisplayItem, "alert" | "queueStatus" | "queueReason">,
+): NotificationPresentation {
   const detail = item.queueReason?.trim() || item.alert.last_error?.trim() || undefined;
   if (item.queueStatus === "发送失败，等待重试") {
     return { label: "发送失败，等待重试", detail, variant: "danger" };
@@ -138,21 +162,8 @@ function formatQueueTime(value: string | null | undefined) {
       });
 }
 
-function queueItemMatches(item: QueueDisplayItem, search: string) {
-  const query = search.trim().toLocaleLowerCase();
-  if (!query) return true;
-  const alert = item.alert;
-  const notification = notificationPresentation(item);
-  return [
-    alertSubjectLabel(alert.event_type),
-    alertTypeLabel(alert.event_type, alert.status, alert.cause_code),
-    alertObjectLabel(alert),
-    alertCauseLabel(alert.cause_code),
-    notification.label,
-    notification.detail,
-    alert.last_error,
-    alert.incident_key,
-  ].some((value) => value?.toLocaleLowerCase().includes(query));
+function queueItemMatches(item: QueueDisplayItem, query: string) {
+  return query === "" || item.searchText.includes(query);
 }
 
 function QueueDetailsTable(props: { items: QueueDisplayItem[] }) {
@@ -168,7 +179,7 @@ function QueueDetailsTable(props: { items: QueueDisplayItem[] }) {
       <div className="divide-border divide-y sm:hidden">
         {props.items.map((item) => {
           const alert = item.alert;
-          const notification = notificationPresentation(item);
+          const notification = item.notification;
           return (
             <article className="space-y-3 p-3" key={alert.incident_key}>
               <div className="flex items-start justify-between gap-3">
@@ -225,7 +236,7 @@ function QueueDetailsTable(props: { items: QueueDisplayItem[] }) {
           <TableBody>
             {props.items.map((item) => {
               const alert = item.alert;
-              const notification = notificationPresentation(item);
+              const notification = item.notification;
               return (
                 <TableRow key={alert.incident_key}>
                   <TableCell className="whitespace-normal" overflowTooltip={false}>
@@ -286,9 +297,10 @@ function QueueDetailsTable(props: { items: QueueDisplayItem[] }) {
 
 export function NotificationQueueDetailsList(props: { details: NotificationQueueDetails }) {
   const [search, setSearch] = useState("");
+  const normalizedSearch = search.trim().toLocaleLowerCase();
   const filteredItems = useMemo(
-    () => queueItems(props.details).filter((item) => queueItemMatches(item, search)),
-    [props.details, search],
+    () => queueItems(props.details).filter((item) => queueItemMatches(item, normalizedSearch)),
+    [props.details, normalizedSearch],
   );
   const pagination = useClientPagination(filteredItems);
 
@@ -330,36 +342,44 @@ export function NotificationQueueDetailsList(props: { details: NotificationQueue
 
 export function NotificationQueueStatus(props: {
   queues: NotificationStatus["queues"];
-  loadDetails: () => Promise<NotificationQueueDetails>;
+  loadDetails: (signal?: AbortSignal) => Promise<NotificationQueueDetails>;
 }) {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [details, setDetails] = useState<NotificationQueueDetails | null>(null);
   const [loading, setLoading] = useState(false);
   const [loadFailed, setLoadFailed] = useState(false);
   const loadVersion = useRef(0);
+  const loadController = useRef<AbortController | null>(null);
 
   useEffect(
     () => () => {
       loadVersion.current += 1;
+      loadController.current?.abort();
     },
     [],
   );
 
   const loadQueue = async () => {
     const version = ++loadVersion.current;
+    loadController.current?.abort();
+    const controller = new AbortController();
+    loadController.current = controller;
     setDialogOpen(true);
     setDetails(null);
     setLoadFailed(false);
     setLoading(true);
     try {
-      const result = await props.loadDetails();
+      const result = await props.loadDetails(controller.signal);
       if (version === loadVersion.current) setDetails(result);
     } catch (loadError) {
       if (version !== loadVersion.current) return;
       notifyOperationError(loadError, "队列内容读取失败");
       setLoadFailed(true);
     } finally {
-      if (version === loadVersion.current) setLoading(false);
+      if (version === loadVersion.current) {
+        loadController.current = null;
+        setLoading(false);
+      }
     }
   };
 
@@ -406,6 +426,8 @@ export function NotificationQueueStatus(props: {
         onOpenChange={(open) => {
           if (!open) {
             loadVersion.current += 1;
+            loadController.current?.abort();
+            loadController.current = null;
             setDialogOpen(false);
           }
         }}

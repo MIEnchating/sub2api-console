@@ -1,4 +1,5 @@
 import { QueryClientProvider } from "@tanstack/react-query";
+import userEvent from "@testing-library/user-event";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 import { Toaster, toast } from "sonner";
@@ -9,6 +10,66 @@ afterEach(() => {
   cleanup();
   toast.dismiss();
   vi.unstubAllGlobals();
+});
+
+it("已有详情刷新失败后重试期间保留结果并禁用重复读取", async () => {
+  const client = createConsoleQueryClient();
+  client.setDefaultOptions({ queries: { retry: false } });
+  client.setQueryData(["task", "cached-task"], {
+    id: "cached-task",
+    skill: "console",
+    operation: "active-probe",
+    status: "succeeded",
+    message: "已保存的探活结果",
+    progress: 100,
+    result: {},
+    created_at: "2026-10-09T00:00:00Z",
+    updated_at: "2026-10-09T00:00:01Z",
+  });
+  let finish!: (response: Response) => void;
+  const fetch = vi
+    .fn()
+    .mockResolvedValueOnce(Response.json({ detail: "详情暂不可读" }, { status: 503 }))
+    .mockImplementationOnce(
+      () =>
+        new Promise<Response>((resolve) => {
+          finish = resolve;
+        }),
+    );
+  vi.stubGlobal("fetch", fetch);
+  render(
+    <QueryClientProvider client={client}>
+      <Toaster />
+      <LogDetailsDialog
+        entry={{
+          id: "log-cached",
+          kind: "task",
+          source: "task",
+          source_id: "cached-task",
+          occurred_at: "2026-10-09T00:00:00Z",
+          title: "active-probe",
+          summary: "列表摘要",
+          status: "succeeded",
+          actor: null,
+          object_label: null,
+          related_count: 0,
+          details: {},
+        }}
+        onClose={() => {}}
+      />
+    </QueryClientProvider>,
+  );
+  try {
+    const retry = await screen.findByRole("button", { name: "重新读取" });
+    await userEvent.setup().click(retry);
+    await waitFor(() => expect(fetch).toHaveBeenCalledTimes(2));
+    expect(screen.getByText("已保存的探活结果")).toBeVisible();
+    expect(screen.getByRole("button", { name: "重新读取" })).toBeDisabled();
+  } finally {
+    finish?.(Response.json(client.getQueryData(["task", "cached-task"])));
+    cleanup();
+    client.clear();
+  }
 });
 it("任务详情请求失败时保留日志摘要，只通过悬浮提示错误", async () => {
   vi.stubGlobal(

@@ -1,0 +1,8 @@
+.github/workflows/ci.yml	53390afafab11dd2a86bc41b435fb17628e12067770f07a1b3f30017fd6e7cf1	reviewed	全文核对 main push/PR 触发、共享质量入口和 checks 成功后的容器构建；没有用本地部分验证冒充该工作流通过。
+.github/workflows/quality.yml	fa5cdeb1fc87d87cbd834d36b3c792d22e2f3e30db160f6221046c4dde90fd51	reviewed	全文核对四类门禁、Go 自动发现、浏览器四分片与失败产物；命令覆盖前后端、部署配置和浏览器，无跳过或继续失败设置。
+.github/scripts/validate-browser-gates.test.mjs	35c4f8e9281a7726a5eaad690be948bab88a26f3e2f9ac3ce734c521c05c19c2	reviewed	全文核对共享工作流、四分片、产物、发布依赖断言；本次配置测试通过。
+.github/scripts/validate-go-test-discovery.test.mjs	7a4eb6c50c263a2b37f4ee1978d5ae80db496f079287d024b15565a31df7ccf9	fixed	先复现 test 参数期望缺少 -p=4/-parallel=4；按现有规范补齐期望，保留嵌套包发现和非零退出传递，显式 Node 导入后 3 项测试及 ESLint 通过。
+backend/scripts/check-go.sh	6a008e7574992e17918108139f1fe76da18177a87143ef47c9631faecde285b0	reviewed	全文核对单一工作目录、完整/显式包路径分支、嵌套 __tests__ 自动发现、-race 和两个并发上限；未修改脚本或重复执行 Go 全量测试。
+frontend/eslint.config.mjs	d29c69f9529c15a58b33d77cfa756ac6f3bf6d040bde9329d17c39aabc9662ec	reviewed	全文核对构建备份排除及源码 no-nested-ternary/原生弹窗限制；本次完整 lint 通过，修改文件另行补查。
+frontend/knip.json	a16c8c3fd7e13e20632847d4ce38cd2e7d66399cd403cc3928794d0f588d7a02	reviewed	全文核对测试入口、src 项目与 Rsbuild 入口；本次真实报告两个仅内部使用的导出，收回导出后 Knip 通过，未添加忽略规则。
+frontend/rsbuild.config.ts	259413477171495002b5ca425720b68451c7fcd8364e22706057bd0b6bd819ab	reviewed	全文核对开发端口与 API 代理、Tailwind、按生产模式路由分割和 dist 输出；本轮未改构建配置，也未将历史产物当作当前构建证据。

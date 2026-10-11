@@ -1,0 +1,1 @@
+backend/internal/taskstore/__tests__/log_cleanup_candidate_order_test.go	93e28211de9f9570af4bf620ff4002785048bd7868a97f79a3d186ca86b58026	reviewed	全文核对临时任务库回归；ID逆序与日期递增、相同日期跨批，核对4001条删除、2000/4000/4001提交进度及防复活标记。原实现兼容基线及定向竞态通过；候选优化试验未获益，生产改动已撤回。

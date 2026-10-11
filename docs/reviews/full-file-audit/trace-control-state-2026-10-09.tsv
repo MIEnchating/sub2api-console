@@ -1,0 +1,3 @@
+frontend/src/features/request-trace/components/trace-account-actions.tsx	a7c7d9d7005d42e02bc8872996ecb7e650b5c33e663a2452b31c262a1ddac087	fixed	完整复审；日志处置使用8字段状态接口和详情子键，状态判定沿用effectiveAccountState，保留稳定ID、手动保护、并发等待、取消、重试及前缀刷新。
+frontend/src/features/request-trace/components/__tests__/account-request-lifecycle.test.tsx	d1d74ae3e2bdfbf0150b537204da7e31edef337e2f514837177946c4a466b16e	reviewed	完整复审；先复现旧详情读取，再验证轻量端点、完整缓存隔离、共享请求取消及任务继续执行。
+frontend/src/features/request-trace/components/__tests__/account-actions.test.tsx	846dfe7cfb9b51a838a300ba2d4f21ac8e548d17d8529315b4413f2b381fc6df	reviewed	完整复审；fixture收窄到真实8字段响应，原熔断/恢复、保护条件、刷新、错误重试及键盘回归通过。

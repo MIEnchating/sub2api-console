@@ -24,12 +24,14 @@ function setup(): void {
   );
 }
 
-it("账号筛选保留紧凑超时设置，默认展示可编辑的检测模型", () => {
+it.each(["账号检测", "前置检测"])("%s 的模型和超时位于开始检测操作栏内", (tab) => {
   setup();
-  const settings = screen.getByRole("group", { name: "动画筛选与模型" });
-  expect(settings).toHaveClass("flex-wrap");
-  expect(within(settings).getByRole("group", { name: "动画账号筛选" })).toBeVisible();
-  const fields = within(settings).getByRole("group", { name: "动画模型参数" });
+  fireEvent.click(screen.getByRole("tab", { name: tab }));
+  const operations = screen.getByRole("group", {
+    name: tab === "账号检测" ? "动画检测操作" : "前置检测操作",
+  });
+  const fields = within(operations).getByRole("group", { name: "动画模型参数" });
+  expect(within(operations).getByRole("button", { name: /开始检测|^前置检测（/ })).toBeVisible();
   expect(fields).toHaveClass("w-full", "sm:w-[36rem]", "max-w-full");
   expect(within(fields).getByRole("combobox", { name: "检测模型" })).toHaveValue("gpt-6-astra");
   expect(within(fields).getByRole("spinbutton", { name: "请求超时（秒）" })).toBeVisible();
@@ -56,7 +58,7 @@ it("动画与前置检测使用独立操作区且保留公共账号选择", () =
   expect(within(operations).getByRole("button", { name: "全选账号" })).toBeVisible();
   expect(within(operations).getByRole("button", { name: "清空选择" })).toBeVisible();
   expect(within(operations).getByRole("button", { name: /开始检测/ })).toBeVisible();
-  expect(within(operations).queryByRole("combobox", { name: "检测模型" })).not.toBeInTheDocument();
+  expect(within(operations).getByRole("combobox", { name: "检测模型" })).toBeVisible();
 
   fireEvent.click(screen.getByRole("tab", { name: "前置检测" }));
   const precheckOperations = screen.getByRole("group", { name: "前置检测操作" });
@@ -66,6 +68,34 @@ it("动画与前置检测使用独立操作区且保留公共账号选择", () =
   expect(
     within(precheckOperations).queryByRole("button", { name: /开始检测/ }),
   ).not.toBeInTheDocument();
+});
+
+it("没有取消或重试操作时，批量设置紧邻开始检测且只保留标准间距", () => {
+  setup();
+  const operations = screen.getByRole("group", { name: "动画检测操作" });
+  const batch = within(operations).getByRole("button", { name: "批量自动检测设置" });
+  const start = within(operations).getByRole("button", { name: /开始检测/ });
+  expect(batch.parentElement).toBe(start.parentElement);
+  expect(batch.nextElementSibling).toBe(start);
+  expect(start.parentElement).toHaveClass("flex", "flex-wrap", "gap-2");
+});
+
+it("开始检测按钮按内容扩展并保留共享按钮的左右内边距", () => {
+  setup();
+  const start = screen.getByRole("button", { name: /开始检测/ });
+  expect(start).not.toHaveClass("w-40");
+  expect(start).toHaveClass("min-w-40", "px-2.5", "h-8");
+});
+
+it("提示词设置与账号选择共用下方操作栏，点击后才显示编辑弹窗", () => {
+  setup();
+  const operations = screen.getByRole("group", { name: "动画检测操作" });
+  expect(operations).toHaveClass("flex-wrap", "items-center");
+  const trigger = within(operations).getByRole("button", { name: "编辑动画提示词" });
+  expect(trigger).toBeVisible();
+  expect(screen.queryByRole("textbox", { name: "动画提示词" })).not.toBeInTheDocument();
+  fireEvent.click(trigger);
+  expect(screen.getByRole("dialog", { name: "动画提示词设置" })).toBeVisible();
 });
 
 it("窄屏卡片列表完整展开并由表单统一滚动，桌面保留列表内部滚动", () => {

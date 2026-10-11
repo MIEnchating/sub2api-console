@@ -10,6 +10,7 @@ import (
 )
 
 func TestProjectHealthNeutralClientErrorDoesNotAdvanceScoredEvidenceTime(t *testing.T) {
+	t.Parallel()
 	for _, hasScoredEvidence := range []bool{false, true} {
 		t.Run(fmt.Sprintf("has_scored_evidence_%t", hasScoredEvidence), func(t *testing.T) {
 			store, _ := healthEvidenceStore(t)

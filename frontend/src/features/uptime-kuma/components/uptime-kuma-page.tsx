@@ -7,34 +7,39 @@ import { ConfirmActionDialog } from "@/components/confirm-action-dialog";
 import { PageHeading } from "@/components/page-heading";
 import { PageLayout } from "@/components/page-layout";
 import { QueryErrorToast } from "@/components/query-error-toast";
+import { ContentRetry } from "@/components/content-retry";
 import { Button } from "@/components/ui/button";
 import { PageActions } from "@/components/page-actions";
 import { RefreshButton } from "@/components/refresh-button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { CirclePlus, ExternalLink, FolderPlus } from "lucide-react";
 import { notifyOperationError } from "@/lib/operation-feedback";
-import {
-  actionLabels,
-  kumaConfigKey,
-  kumaMonitorsKey,
-  kumaQueryKey,
-  kumaTemplatesKey,
-} from "../constants";
+import { actionLabels, kumaConfigKey, kumaMonitorsKey, kumaQueryKey } from "../constants";
 import type { MonitorValues } from "../lib/schemas";
 import { useTaskCompletion } from "../hooks/use-task-completion";
-import { MonitorDialog } from "./monitor-dialog";
+import { MonitorEditor } from "./monitor-editor";
 import { MonitorWorkspace } from "./monitor-workspace";
+import { KumaTaskProgress } from "./kuma-task-progress";
+import { isKumaTaskCancellation } from "../lib/task-cancellation";
 
-type Confirmation = { monitor: KumaMonitor; action: keyof typeof actionLabels };
+type Confirmation = {
+  monitor: KumaMonitor;
+  action: keyof typeof actionLabels;
+  configRevision: number;
+};
 const emptyMonitors: KumaMonitor[] = [];
 export function UptimeKumaPage() {
   const client = useQueryClient();
   const task = useTaskCompletion();
-  const configQuery = useQuery({ queryKey: kumaConfigKey, queryFn: api.kumaConfig, retry: false });
+  const configQuery = useQuery({
+    queryKey: kumaConfigKey,
+    queryFn: ({ signal }) => api.kumaConfig(signal),
+    retry: false,
+  });
   const config = configQuery.data;
   const monitorsQuery = useQuery({
     queryKey: [...kumaMonitorsKey, config?.revision],
-    queryFn: api.kumaMonitors,
+    queryFn: ({ signal }) => api.kumaMonitors(signal),
     enabled: !!config?.api_key_configured,
     retry: false,
     refetchInterval: 60_000,
@@ -43,20 +48,17 @@ export function UptimeKumaPage() {
   const [editor, setEditor] = useState<{
     monitor: KumaMonitor | null;
     initialType?: "group";
+    configRevision: number;
   } | null>(null);
-  const templatesQuery = useQuery({
-    queryKey: kumaTemplatesKey,
-    queryFn: api.kumaTemplates,
-    enabled: !!editor && editor.initialType !== "group" && !!config?.management_configured,
-    retry: false,
-  });
   const [confirmation, setConfirmation] = useState<Confirmation | null>(null);
   const refresh = async (): Promise<void> => {
     await client.invalidateQueries({ queryKey: kumaQueryKey });
   };
   const write = useMutation({
-    mutationFn: (input: { id: number; value: KumaWriteInput }) =>
-      api.writeKumaMonitor(input.id, input.value).then(task.wait),
+    mutationFn: (input: { id: number; value: KumaWriteInput }) => {
+      task.prepare();
+      return api.writeKumaMonitor(input.id, input.value).then(task.wait);
+    },
     onSuccess: async () => {
       setEditor(null);
       setConfirmation(null);
@@ -64,12 +66,17 @@ export function UptimeKumaPage() {
       await refresh();
     },
     onError: async (error) => {
-      if (!editor) notifyOperationError(error, "监控操作失败");
+      if (isKumaTaskCancellation(error)) {
+        setEditor(null);
+        setConfirmation(null);
+        toast.info(error.message);
+      } else if (!editor) notifyOperationError(error, "监控操作失败");
       await refresh();
     },
   });
   const pending = write.isPending;
   const stale =
+    configQuery.isError ||
     !monitorsQuery.data ||
     monitorsQuery.isError ||
     monitorsQuery.isFetching ||
@@ -77,10 +84,11 @@ export function UptimeKumaPage() {
   const monitors = monitorsQuery.data?.monitors ?? emptyMonitors;
   const submitMonitor = (values: MonitorValues): void => {
     if (!config || !editor) return;
+    if (!canSubmit(editor.configRevision)) return;
     write.mutate({
       id: editor.monitor?.id ?? 0,
       value: {
-        config_revision: config.revision,
+        config_revision: editor.configRevision,
         revision: editor.monitor?.revision ?? "",
         action: editor.monitor ? "edit" : "create",
         monitor: values,
@@ -89,15 +97,27 @@ export function UptimeKumaPage() {
   };
   const confirmAction = (): void => {
     if (!config || !confirmation) return;
+    if (!canSubmit(confirmation.configRevision)) return;
     write.mutate({
       id: confirmation.monitor.id,
       value: {
-        config_revision: config.revision,
+        config_revision: confirmation.configRevision,
         revision: confirmation.monitor.revision,
         action: confirmation.action,
       },
     });
   };
+  function canSubmit(configRevision: number): boolean {
+    if (configRevision !== config?.revision) {
+      notifyOperationError("监控平台配置已更改，请关闭窗口并重新打开后操作", "监控操作未提交");
+      return false;
+    }
+    if (stale || configQuery.isFetching) {
+      notifyOperationError("监控数据尚未读取完成，请刷新后重试", "监控操作未提交");
+      return false;
+    }
+    return true;
+  }
   return (
     <PageLayout fixedContent>
       <PageHeading
@@ -130,7 +150,11 @@ export function UptimeKumaPage() {
                 disabled={pending || stale}
                 onClick={() => {
                   write.reset();
-                  setEditor({ monitor: null, initialType: "group" });
+                  setEditor({
+                    monitor: null,
+                    initialType: "group",
+                    configRevision: config.revision,
+                  });
                 }}
               >
                 <FolderPlus aria-hidden="true" />
@@ -142,7 +166,7 @@ export function UptimeKumaPage() {
                 disabled={pending || stale}
                 onClick={() => {
                   write.reset();
-                  setEditor({ monitor: null });
+                  setEditor({ monitor: null, configRevision: config.revision });
                 }}
               >
                 <CirclePlus aria-hidden="true" />
@@ -158,15 +182,15 @@ export function UptimeKumaPage() {
           fallback="Uptime Kuma 数据读取失败"
         />
       )}
-      {templatesQuery.error && (
-        <QueryErrorToast
-          error={templatesQuery.error}
-          fallback="模板读取失败，请关闭编辑窗口后刷新重试"
-        />
-      )}
       <div className="flex h-full min-h-0 min-w-0 flex-col gap-3">
         {configQuery.isPending && (
           <PageLoadingSkeleton label="正在读取接入配置…" variant="table" fill />
+        )}
+        {!config && configQuery.isError && (
+          <ContentRetry
+            pending={configQuery.isFetching}
+            onRetry={() => void configQuery.refetch()}
+          />
         )}
         {config && !config.api_key_configured && (
           <Card size="sm">
@@ -184,6 +208,12 @@ export function UptimeKumaPage() {
             {monitorsQuery.isPending && (
               <PageLoadingSkeleton label="正在读取监控项…" variant="table" fill />
             )}
+            {!monitorsQuery.data && monitorsQuery.isError && (
+              <ContentRetry
+                pending={monitorsQuery.isFetching}
+                onRetry={() => void monitorsQuery.refetch()}
+              />
+            )}
             {monitorsQuery.data?.warning && (
               <Card size="sm">
                 <CardContent role="status">{monitorsQuery.data.warning}</CardContent>
@@ -196,25 +226,25 @@ export function UptimeKumaPage() {
                 disabled={pending || stale}
                 onEdit={(monitor) => {
                   write.reset();
-                  setEditor({ monitor });
+                  setEditor({ monitor, configRevision: config.revision });
                 }}
-                onAction={(monitor, action) => setConfirmation({ monitor, action })}
+                onAction={(monitor, action) =>
+                  setConfirmation({ monitor, action, configRevision: config.revision })
+                }
               />
             )}
           </>
         )}
       </div>
       {editor && (
-        <MonitorDialog
+        <MonitorEditor
+          management={!!config?.management_configured}
           monitor={editor.monitor}
           initialType={editor.initialType}
           monitors={monitors}
-          templates={templatesQuery.data}
-          templatesPending={templatesQuery.isPending}
-          templatesError={templatesQuery.isError}
-          onTemplatesRetry={() => void templatesQuery.refetch()}
           pending={write.isPending}
           task={task.task}
+          starting={task.starting}
           error={write.error}
           onClose={() => setEditor(null)}
           onSubmit={submitMonitor}
@@ -230,6 +260,7 @@ export function UptimeKumaPage() {
         }
         confirmLabel={confirmation ? actionLabels[confirmation.action] : "确认"}
         pending={write.isPending}
+        pendingContent={<KumaTaskProgress task={task.task} starting={task.starting} />}
         onOpenChange={(open) => {
           if (!open) setConfirmation(null);
         }}

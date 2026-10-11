@@ -121,7 +121,7 @@ func TestConfigurationRejectsInvalidWeightsAndStaleWrites(t *testing.T) {
 func TestPreparedRunKeepsPublishedProfileSnapshot(t *testing.T) {
 	accounts := &profileAccounts{fakeAccounts: fakeAccounts{
 		rows:    []business.AccountStatus{{ID: "41", Name: "主账号"}},
-		details: map[string]*business.AccountDetail{"41": {}},
+		details: map[string]*business.AccountDetail{"41": {AccountStatus: business.AccountStatus{ID: "41", Name: "主账号"}}},
 	}}
 	service := newConfigurationService(t, accounts)
 	prepared, err := service.prepare(context.Background(), Request{

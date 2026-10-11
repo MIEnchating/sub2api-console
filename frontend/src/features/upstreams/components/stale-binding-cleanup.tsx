@@ -1,6 +1,6 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Unlink } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import { api } from "@/api";
@@ -34,7 +34,27 @@ const refreshKeys = [
 ];
 
 export function StaleBindingCleanup(props: Props) {
+  const identity = JSON.stringify([
+    props.host,
+    props.bindingId,
+    props.upstreamId,
+    props.accountId,
+    props.upstreamKeyId,
+    props.groupId,
+  ]);
+  return <BindingCleanupAction key={identity} {...props} />;
+}
+
+function BindingCleanupAction(props: Props) {
   const [open, setOpen] = useState(false);
+  const mounted = useRef(false);
+  const submitting = useRef(false);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
   const queryClient = useQueryClient();
   const identityReady = Boolean(
     props.upstreamId &&
@@ -44,22 +64,30 @@ export function StaleBindingCleanup(props: Props) {
     props.bindingId > 0,
   );
   const cleanup = useMutation({
-    mutationFn: () =>
-      api.cleanupUpstreamBinding(props.host, props.bindingId, {
-        upstream_id: props.upstreamId,
-        account_id: props.accountId,
-        upstream_key_id: props.upstreamKeyId,
-        upstream_group_id: props.groupId,
+    retry: false,
+    networkMode: "always",
+    mutationFn: (target: Props) =>
+      api.cleanupUpstreamBinding(target.host, target.bindingId, {
+        upstream_id: target.upstreamId,
+        account_id: target.accountId,
+        upstream_key_id: target.upstreamKeyId,
+        upstream_group_id: target.groupId,
       }),
     onSuccess: () => {
-      setOpen(false);
-      toast.success("失效绑定已清理");
       void Promise.all(
         refreshKeys.map((key) => queryClient.invalidateQueries({ queryKey: [key] })),
       );
+      if (!mounted.current) return;
+      setOpen(false);
+      toast.success("失效绑定已清理");
       props.onChanged?.();
     },
-    onError: (error) => notifyOperationError(error, "清理失效绑定失败"),
+    onError: (error) => {
+      if (mounted.current) notifyOperationError(error, "清理失效绑定失败");
+    },
+    onSettled: () => {
+      submitting.current = false;
+    },
   });
 
   return (
@@ -81,7 +109,11 @@ export function StaleBindingCleanup(props: Props) {
         pending={cleanup.isPending}
         confirmDisabled={props.disabled || !identityReady}
         onOpenChange={setOpen}
-        onConfirm={() => cleanup.mutate()}
+        onConfirm={() => {
+          if (submitting.current || props.disabled || !identityReady) return;
+          submitting.current = true;
+          cleanup.mutate({ ...props });
+        }}
       />
     </>
   );

@@ -11,10 +11,10 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { Badge } from "@/components/ui/badge";
 
-import { AnimationResultMetrics } from "./animation-result-metrics";
-import { AnimationEndpointDetails } from "./animation-endpoint-details";
+import { DetectionResultSummary, DetectionResultMetadata } from "./detection-result-summary";
+import { DetectionStageStatus } from "./detection-stage-status";
+import { animationResultStatuses } from "../constants";
 
 export function AnimationResultDetails(props: { result: AnimationResult }): ReactElement {
   const [open, setOpen] = useState(false);
@@ -42,71 +42,61 @@ export function AnimationResultDetails(props: { result: AnimationResult }): Reac
         <TooltipContent>查看动画检测详情</TooltipContent>
       </Tooltip>
       <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent width="progress" height="adaptive" finalFocus={triggerRef}>
+        <DialogContent
+          width="wide"
+          height="adaptive"
+          finalFocus={triggerRef}
+          className="sm:max-w-3xl"
+        >
           <DialogHeader>
-            <DialogTitle>动画检测详情</DialogTitle>
+            <div className="flex flex-wrap items-center gap-2.5">
+              <DialogTitle>动画检测详情</DialogTitle>
+              <DetectionStageStatus
+                stage="动画检测"
+                label={animationResultStatuses[result.status].label}
+                tone={animationResultStatuses[result.status].tone}
+              />
+            </div>
             <DialogDescription>{result.account_name}</DialogDescription>
           </DialogHeader>
-          <DialogBody className="space-y-4">
-            <dl className="grid grid-cols-[5rem_minmax(0,1fr)] gap-x-3 gap-y-2 text-sm">
-              <AnimationEndpointDetails source={result} />
-              <dt className="text-muted-foreground">检测模型</dt>
-              <dd className="wrap-anywhere">{result.model}</dd>
-              {result.response_model ? (
-                <>
-                  <dt className="text-muted-foreground">返回模型</dt>
-                  <dd className="wrap-anywhere">{result.response_model}</dd>
-                  {result.response_model !== result.model ? (
-                    <>
-                      <dt className="text-muted-foreground">模型状态</dt>
-                      <dd>
-                        <Badge variant="destructive">重点：模型不一致</Badge>
-                      </dd>
-                    </>
-                  ) : null}
-                </>
-              ) : null}
-              <dt className="text-muted-foreground">完成时间</dt>
-              <dd className="wrap-anywhere">
-                {new Date(result.completed_at).toLocaleString("zh-CN")}
-              </dd>
-              <dt className="text-muted-foreground">耗时</dt>
-              <dd>{(result.duration_ms / 1000).toFixed(1)} 秒</dd>
-              {result.retry_count ? (
-                <>
-                  <dt className="text-muted-foreground">自动重试</dt>
-                  <dd>自动重试 {result.retry_count} 次</dd>
-                </>
-              ) : null}
-              <dt className="text-muted-foreground">请求 ID</dt>
-              <dd className="font-mono text-xs leading-5 wrap-anywhere">{result.request_id}</dd>
-            </dl>
-            <AnimationResultMetrics result={result} showIdentity={false} />
+          <DialogBody role="region" aria-label="动画检测详细结果" className="space-y-5">
+            <DetectionResultSummary result={result} label="动画生成统计" />
             {result.error ? (
-              <section aria-label="失败原因" className="space-y-2 border-t pt-3">
+              <section
+                aria-label="失败原因"
+                className="space-y-2 rounded-lg border border-destructive/20 bg-destructive/5 p-3"
+              >
                 <h3 className="text-sm font-medium text-destructive">失败原因</h3>
                 <p className="whitespace-pre-wrap text-sm leading-relaxed wrap-anywhere">
                   {result.error}
                 </p>
               </section>
             ) : null}
-            <section aria-label="生成原文" className="space-y-2 border-t pt-3">
-              <h3 className="text-sm font-medium">生成原文</h3>
-              {result.source ? (
-                <>
-                  <pre className="max-h-[min(50svh,28rem)] overflow-auto overscroll-contain whitespace-pre-wrap rounded-md border bg-muted/30 p-3 font-mono text-xs leading-5 wrap-anywhere">
-                    {result.source}
-                  </pre>
-                  {result.source_truncated ? (
-                    <p className="text-xs text-muted-foreground">
-                      原文超过 128 KB，仅展示前 128 KB。
-                    </p>
-                  ) : null}
-                </>
-              ) : (
-                <p className="text-sm text-muted-foreground">该历史记录未保存生成原文</p>
-              )}
-            </section>
+            {result.status === "failed" ? (
+              <section aria-label="生成原文" className="min-w-0 space-y-3">
+                <h3 className="text-sm font-medium">生成原文</h3>
+                {result.source ? (
+                  <>
+                    <pre
+                      role="region"
+                      aria-label="生成原文内容"
+                      tabIndex={0}
+                      className="max-h-[min(50svh,28rem)] overflow-auto overscroll-contain whitespace-pre-wrap rounded-md border bg-muted/30 p-3 font-mono text-xs leading-5 wrap-anywhere focus-visible:outline-2 focus-visible:outline-ring"
+                    >
+                      {result.source}
+                    </pre>
+                    {result.source_truncated ? (
+                      <p className="text-xs text-muted-foreground">
+                        原文超过 128 KB，仅展示前 128 KB。
+                      </p>
+                    ) : null}
+                  </>
+                ) : (
+                  <p className="text-sm text-muted-foreground">本次结果未保存生成原文。</p>
+                )}
+              </section>
+            ) : null}
+            <DetectionResultMetadata result={result} />
           </DialogBody>
         </DialogContent>
       </Dialog>

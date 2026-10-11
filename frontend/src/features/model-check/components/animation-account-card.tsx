@@ -15,7 +15,9 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { animationActivityLabel, type AnimationActivity } from "../lib/animation-task-results";
 import { cn } from "@/lib/utils";
+import { schedulingMetric } from "@/lib/scheduling-display";
 import { PrecheckAccountResult } from "./precheck-account-result";
+import { AnimationManualVerdictControls } from "./animation-manual-verdict";
 import { DetectionAccountControls } from "./detection-account-controls";
 
 export const AnimationAccountCard = memo(function AnimationAccountCard(props: {
@@ -76,28 +78,56 @@ export const AnimationAccountCard = memo(function AnimationAccountCard(props: {
       )}
     >
       <header className="flex h-18 shrink-0 flex-col justify-center gap-2 px-3">
-        <label className="flex h-5 min-w-0 items-center gap-2">
-          <Checkbox
-            checked={props.checked}
-            disabled={props.disabled || unavailable}
-            onCheckedChange={(checked) => props.onToggle(props.account.id, checked)}
-            aria-label={`检测 ${props.account.name}`}
-          />
-          <Tooltip>
-            <TooltipTrigger
-              render={<span className="min-w-0 flex-1 truncate text-sm font-medium" />}
-            >
-              {props.account.name}
-            </TooltipTrigger>
-            <TooltipContent>{props.account.name}</TooltipContent>
-          </Tooltip>
-          {props.account.manual_priority != null ? (
-            <Badge variant="secondary" className="max-w-28 shrink-0">
-              手动控制 #{props.account.manual_priority}
-            </Badge>
-          ) : null}
-          <span className="text-muted-foreground shrink-0 text-xs">ID {props.account.id}</span>
-        </label>
+        <div
+          role="group"
+          aria-label="账号名称与调度参数"
+          className="flex h-5 min-w-0 items-center gap-2"
+        >
+          <label className="flex min-w-0 flex-1 items-center gap-2">
+            <Checkbox
+              checked={props.checked}
+              disabled={props.disabled || unavailable}
+              onCheckedChange={(checked) => props.onToggle(props.account.id, checked)}
+              aria-label={`检测 ${props.account.name}`}
+            />
+            <Tooltip>
+              <TooltipTrigger
+                render={<span className="min-w-0 flex-1 truncate text-sm font-medium" />}
+              >
+                {props.account.name}
+              </TooltipTrigger>
+              <TooltipContent>{props.account.name}</TooltipContent>
+            </Tooltip>
+          </label>
+          <dl
+            role="group"
+            aria-label="账号调度参数"
+            className="flex min-w-0 shrink-0 items-center gap-2 whitespace-nowrap text-xs tabular-nums"
+          >
+            <div className="flex min-w-0 items-baseline gap-1">
+              <dt className="shrink-0 text-muted-foreground">优先级</dt>
+              <Tooltip>
+                <TooltipTrigger
+                  render={<dd tabIndex={0} className="max-w-14 truncate font-medium" />}
+                >
+                  {schedulingMetric(props.account.priority)}
+                </TooltipTrigger>
+                <TooltipContent>{schedulingMetric(props.account.priority)}</TooltipContent>
+              </Tooltip>
+            </div>
+            <div className="flex min-w-0 items-baseline gap-1">
+              <dt className="shrink-0 text-muted-foreground">调度权重</dt>
+              <Tooltip>
+                <TooltipTrigger
+                  render={<dd tabIndex={0} className="max-w-14 truncate font-medium" />}
+                >
+                  {schedulingMetric(props.account.weight)}
+                </TooltipTrigger>
+                <TooltipContent>{schedulingMetric(props.account.weight)}</TooltipContent>
+              </Tooltip>
+            </div>
+          </dl>
+        </div>
         <div
           role="group"
           aria-label="账号信息"
@@ -118,6 +148,12 @@ export const AnimationAccountCard = memo(function AnimationAccountCard(props: {
             </TooltipTrigger>
             <TooltipContent>{props.account.upstream_host || "未配置 Host"}</TooltipContent>
           </Tooltip>
+          {props.account.manual_priority != null ? (
+            <Badge variant="secondary" className="max-w-28 shrink-0">
+              手动控制 #{props.account.manual_priority}
+            </Badge>
+          ) : null}
+          <span className="text-muted-foreground shrink-0 text-xs">ID {props.account.id}</span>
         </div>
       </header>
       {precheckMode ? (
@@ -165,7 +201,7 @@ export const AnimationAccountCard = memo(function AnimationAccountCard(props: {
               <p
                 role={running && props.result ? "status" : undefined}
                 className={cn(
-                  "min-w-0 truncate text-xs text-muted-foreground",
+                  "min-w-0 flex-1 truncate text-xs text-muted-foreground",
                   props.schedule?.last_error && "text-destructive",
                 )}
               />
@@ -175,7 +211,14 @@ export const AnimationAccountCard = memo(function AnimationAccountCard(props: {
           </TooltipTrigger>
           <TooltipContent>{scheduleLabel}</TooltipContent>
         </Tooltip>
-        <div className="flex shrink-0 items-center gap-1">
+        <div role="group" aria-label="账号操作" className="flex shrink-0 items-center gap-1">
+          {!precheckMode && props.result && !currentActivity ? (
+            <AnimationManualVerdictControls
+              compact
+              result={props.result}
+              disabled={props.retryDisabled || running || unavailable}
+            />
+          ) : null}
           <DetectionAccountControls account={props.account} />
           <Tooltip>
             <TooltipTrigger

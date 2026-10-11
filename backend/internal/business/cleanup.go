@@ -203,9 +203,7 @@ func (s *Store) deleteAccountProjection(
 		return err
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	if _, err := tx.ExecContext(ctx, `UPDATE local_groups SET account_count=(
-		SELECT COUNT(*) FROM account_groups WHERE group_name=local_groups.name
-	),updated_at=?`, now); err != nil {
+	if err := refreshAccountGroupCounts(ctx, tx, now); err != nil {
 		return err
 	}
 	return tx.Commit()

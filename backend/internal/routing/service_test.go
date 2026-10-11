@@ -1254,7 +1254,11 @@ func TestFreshFatalProbeOverridesOlderFreshTraffic(t *testing.T) {
 		{Result: "通过", Source: "traffic", ObservedAt: now.Add(-2 * time.Minute).Format(time.RFC3339Nano)},
 	}
 	healthRows, _ := selectRoutingEvidence(rows, now, 2*time.Hour, 15*time.Minute, 60)
-	healthRows = withCriticalProbeEvidence(healthRows, rows, now, 15*time.Minute, testPolicy())
+	config, err := parseScoringConfig(testPolicy())
+	if err != nil {
+		t.Fatal(err)
+	}
+	healthRows = withCriticalProbeEvidence(healthRows, rows, now, 15*time.Minute, config)
 	if len(healthRows) == 0 || healthRows[0].Source != "active-probe" {
 		t.Fatalf("new fatal probe did not override older traffic: %#v", healthRows)
 	}
@@ -1269,7 +1273,11 @@ func TestOlderFatalProbeDoesNotOverrideNewerTrafficOrProbeSuccess(t *testing.T) 
 		{Result: "失败", FailureReason: "invalid api key", Source: "active-probe", ObservedAt: now.Add(-3 * time.Minute).Format(time.RFC3339Nano), Payload: map[string]any{"status_code": status}},
 	}
 	healthRows, _ := selectRoutingEvidence(rows, now, 2*time.Hour, 15*time.Minute, 60)
-	healthRows = withCriticalProbeEvidence(healthRows, rows, now, 15*time.Minute, testPolicy())
+	config, err := parseScoringConfig(testPolicy())
+	if err != nil {
+		t.Fatal(err)
+	}
+	healthRows = withCriticalProbeEvidence(healthRows, rows, now, 15*time.Minute, config)
 	if len(healthRows) != 2 || healthRows[0].Source != "active-probe" || healthRows[1].Source != "traffic" {
 		t.Fatalf("superseded fatal probe overrode newer evidence: %#v", healthRows)
 	}

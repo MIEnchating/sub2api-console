@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/MIEnchating/sub2api-console/backend/internal/business"
 	"github.com/MIEnchating/sub2api-console/backend/internal/runtimepolicy"
 	"github.com/MIEnchating/sub2api-console/backend/internal/targetguard"
 )
@@ -36,34 +37,24 @@ func (s *Service) ReconcileAccountRates(ctx context.Context, accountIDs []string
 	if err != nil || !config.Enabled {
 		return err
 	}
-	value, err := s.buildPlan(ctx, config)
+	repository, ok := s.repository.(interface {
+		PricingCatalogForAccounts(context.Context, []string) (business.PricingCatalog, error)
+	})
+	if !ok {
+		return fmt.Errorf("价格管理范围目录读取服务不可用")
+	}
+	catalog, err := repository.PricingCatalogForAccounts(ctx, accountIDs)
+	if err != nil {
+		return fmt.Errorf("Console 本地价格目录读取失败：%w", err)
+	}
+	snapshot, err := evaluate(config, catalog)
 	if err != nil {
 		return err
 	}
-	if err := validateExchangeCatalog(config, value.snapshot.Groups); err != nil {
+	if err := validateExchangeCatalog(config, snapshot.Groups); err != nil {
 		return err
 	}
-	selected := make(map[string]bool, len(accountIDs))
-	for _, id := range accountIDs {
-		selected[id] = true
-	}
-	decisions := []Decision{}
-	value.snapshot.Accounts, value.snapshot.Changes, value.snapshot.Skipped = 0, 0, 0
-	for _, d := range value.snapshot.Decisions {
-		if !selected[d.AccountID] {
-			continue
-		}
-		decisions = append(decisions, d)
-		value.snapshot.Accounts++
-		if d.Skipped {
-			value.snapshot.Skipped++
-		}
-		if d.Changed {
-			value.snapshot.Changes++
-		}
-	}
-	value.snapshot.Decisions = decisions
-	result, err := s.applyPlan(ctx, value, config, actor)
+	result, err := s.applyPlan(ctx, plan{snapshot: snapshot}, config, actor)
 	if err != nil {
 		return err
 	}

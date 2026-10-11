@@ -21,7 +21,7 @@ type KeyRevealer interface {
 func (s *Service) UseKeyRevealer(reader KeyRevealer) { s.keyRevealer = reader }
 
 type probeAccountReader interface {
-	Account(context.Context, string) (*business.AccountDetail, error)
+	ProbeAccountBinding(context.Context, string) (*business.ProbeAccountBinding, error)
 }
 
 type probeCredentialStore interface {
@@ -112,7 +112,7 @@ func (s *Service) revealProbeKey(ctx context.Context, private probeCredentialSto
 }
 
 func readProbeKeySelection(ctx context.Context, accounts probeAccountReader, accountID, liveBaseURL string) (probeKeySelection, error) {
-	detail, err := accounts.Account(ctx, accountID)
+	detail, err := accounts.ProbeAccountBinding(ctx, accountID)
 	if err != nil || detail == nil || detail.ID != accountID {
 		return probeKeySelection{}, probeKeyUnavailable("probe_key_binding_unavailable", "无法按账号 ID 核对本地绑定，请同步账号后重试")
 	}

@@ -1,7 +1,6 @@
 package routing
 
 import (
-	"fmt"
 	"sort"
 	"time"
 
@@ -61,10 +60,7 @@ func PlanManualPriorityOrder(policy map[string]any, accounts []business.RoutingA
 				item.priority = *account.Priority
 			}
 			byID[account.ID] = item
-			summary, err := evaluateRoutingHealth(account, evidence[account.ID], business.PreviousRoutingDecision{}, config, policy, now)
-			if err != nil {
-				return nil, err
-			}
+			summary := evaluateRoutingHealth(account, evidence[account.ID], business.PreviousRoutingDecision{}, config, now)
 			item.samples, item.model = summary.performanceSamples, summary.performanceModel
 			if summary.performanceP95MS != nil {
 				item.latency = *summary.performanceP95MS
@@ -118,16 +114,6 @@ func PlanManualPriorityOrder(policy map[string]any, accounts []business.RoutingA
 			best = slow
 		}
 		fast.priority, best.priority = best.priority, fast.priority
-	}
-	// A frozen account can retain an effective slot assigned by a previous round.
-	// Effective positions may temporarily overlap after a partial remote write;
-	// only the user-reserved positions define a manual-control conflict.
-	for i, first := range items {
-		for _, second := range items[i+1:] {
-			if *first.account.ManualPriority == *second.account.ManualPriority && sharedManualGroup(first, second) {
-				return nil, fmt.Errorf("手动控制位置存在冲突（账号 %s、%s），请同步账号并调整保留位置后重试", first.account.ID, second.account.ID)
-			}
-		}
 	}
 	result := []ManualPriorityChange{}
 	for _, item := range items {

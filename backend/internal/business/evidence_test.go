@@ -10,6 +10,7 @@ import (
 )
 
 func TestEvidenceTargetsAndTrafficPersistence(t *testing.T) {
+	t.Parallel()
 	store := openPolicyStore(t)
 	ctx := context.Background()
 	if _, err := store.db.ExecContext(ctx, `INSERT INTO accounts(id,name,upstream_type,routing_state,metadata_json,updated_at)
@@ -69,6 +70,7 @@ func TestEvidenceTargetsAndTrafficPersistence(t *testing.T) {
 }
 
 func TestEvidenceTargetsExcludeManualPriorityAccounts(t *testing.T) {
+	t.Parallel()
 	store := openPolicyStore(t)
 	ctx := context.Background()
 	if _, err := store.db.ExecContext(ctx, `INSERT INTO accounts(id,name,metadata_json,updated_at)
@@ -85,6 +87,7 @@ func TestEvidenceTargetsExcludeManualPriorityAccounts(t *testing.T) {
 }
 
 func TestPersistTrafficSamplesRejectsNonFiniteJSON(t *testing.T) {
+	t.Parallel()
 	store := openPolicyStore(t)
 	_, err := store.PersistTrafficSamples(context.Background(), []TrafficSample{{
 		AccountID: "41", GroupName: "codex", Result: "通过", ObservedAt: time.Now().UTC().Format(time.RFC3339Nano),
@@ -96,6 +99,7 @@ func TestPersistTrafficSamplesRejectsNonFiniteJSON(t *testing.T) {
 }
 
 func TestPersistTrafficSamplesKeepsThirtyDaysOfUsageForRanking(t *testing.T) {
+	t.Parallel()
 	store := openPolicyStore(t)
 	ctx := context.Background()
 	if _, err := store.db.ExecContext(ctx, `INSERT INTO accounts(id,name,metadata_json,updated_at)
@@ -120,6 +124,7 @@ func TestPersistTrafficSamplesKeepsThirtyDaysOfUsageForRanking(t *testing.T) {
 }
 
 func TestPersistTrafficFetchesRecordsSuccessfulEmptyPull(t *testing.T) {
+	t.Parallel()
 	store := openPolicyStore(t)
 	ctx := context.Background()
 	now := time.Date(2026, 8, 27, 12, 0, 0, 0, time.UTC)
@@ -136,6 +141,7 @@ func TestPersistTrafficFetchesRecordsSuccessfulEmptyPull(t *testing.T) {
 }
 
 func TestPersistTrafficSamplesEnrichesExistingRequestWithFirstTokenLatency(t *testing.T) {
+	t.Parallel()
 	store := openPolicyStore(t)
 	ctx := context.Background()
 	now := time.Now().UTC().Format(time.RFC3339Nano)
@@ -172,6 +178,7 @@ func TestPersistTrafficSamplesEnrichesExistingRequestWithFirstTokenLatency(t *te
 }
 
 func TestPersistTrafficSamplesUpgradesFirstTokenAggregateToRequestDuration(t *testing.T) {
+	t.Parallel()
 	store := openPolicyStore(t)
 	ctx := context.Background()
 	now := time.Now().UTC().Format(time.RFC3339Nano)
@@ -218,6 +225,7 @@ func TestPersistTrafficSamplesUpgradesFirstTokenAggregateToRequestDuration(t *te
 }
 
 func TestPersistTrafficSamplesKeepsLatestTwoHundredPerAccount(t *testing.T) {
+	t.Parallel()
 	store := openPolicyStore(t)
 	ctx := context.Background()
 	base := time.Date(2026, 8, 28, 0, 0, 0, 0, time.UTC)
@@ -260,6 +268,7 @@ func TestPersistTrafficSamplesKeepsLatestTwoHundredPerAccount(t *testing.T) {
 }
 
 func TestPersistTrafficSamplesDeduplicatesEvidenceAcrossGroups(t *testing.T) {
+	t.Parallel()
 	store := openPolicyStore(t)
 	ctx := context.Background()
 	base := time.Date(2026, 8, 28, 0, 0, 0, 0, time.UTC)
@@ -282,6 +291,7 @@ func TestPersistTrafficSamplesDeduplicatesEvidenceAcrossGroups(t *testing.T) {
 }
 
 func TestPersistTrafficSamplesRollsBackWholeBatch(t *testing.T) {
+	t.Parallel()
 	store := openPolicyStore(t)
 	ctx := context.Background()
 	now := time.Now().UTC().Format(time.RFC3339Nano)
@@ -302,6 +312,7 @@ func TestPersistTrafficSamplesRollsBackWholeBatch(t *testing.T) {
 }
 
 func TestPersistTrafficSamplesEnrichesExistingFirstTokenWithoutLosingItOnRetry(t *testing.T) {
+	t.Parallel()
 	store := openPolicyStore(t)
 	ctx := context.Background()
 	if _, err := store.db.ExecContext(ctx, `INSERT INTO accounts(id,name,metadata_json,updated_at) VALUES('41','demo','{}','now')`); err != nil {
@@ -338,6 +349,7 @@ func TestPersistTrafficSamplesEnrichesExistingFirstTokenWithoutLosingItOnRetry(t
 }
 
 func TestFirstTokenOnlyEnrichmentPreservesExistingTotalDuration(t *testing.T) {
+	t.Parallel()
 	store := openPolicyStore(t)
 	ctx := context.Background()
 	if _, err := store.db.Exec(`INSERT INTO accounts(id,name,metadata_json,updated_at) VALUES('41','test','{}','now')`); err != nil {

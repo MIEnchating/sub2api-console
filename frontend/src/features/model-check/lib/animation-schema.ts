@@ -9,6 +9,7 @@ const modelID = z
 export const animationSchema = z.object({
   account_ids: z.array(z.string().regex(/^[1-9]\d*$/)).min(1, "请选择至少一个账号"),
   unified_model: modelID,
+  prompt: z.string().max(10000, "提示词不能超过 10000 个字符").optional(),
   timeout_seconds: z.number().int().min(5, "超时不能小于 5 秒").max(120, "超时不能超过 120 秒"),
 });
 export type AnimationForm = z.infer<typeof animationSchema>;
@@ -44,6 +45,7 @@ export const customAnimationSchema = z
       .regex(/^[\x21-\x7e]+$/, "API Key 不能包含空白或非 ASCII 字符"),
     platform: z.enum(["openai", "anthropic"]),
     model: modelID,
+    prompt: z.string().max(10000, "提示词不能超过 10000 个字符").optional(),
     timeout_seconds: animationSchema.shape.timeout_seconds,
   })
   .refine((value) => !value.api_key || !value.model.includes(value.api_key), {
@@ -55,6 +57,7 @@ export type CustomAnimationForm = z.infer<typeof customAnimationSchema>;
 export const animationScheduleSchema = z
   .object({
     precheck_questions: z.array(z.enum(["candy"])).optional(),
+    prompt: z.string().max(10000, "提示词不能超过 10000 个字符").optional(),
     mode: z.enum(["animation", "precheck", "both"]).optional(),
     schedule_type: z.enum(["interval", "daily"]).optional(),
     daily_time: z.string().optional(),

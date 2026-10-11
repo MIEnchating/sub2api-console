@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -98,41 +99,67 @@ func (s *Store) AccountModelCatalogs(ctx context.Context, accountIDs []string) (
 	if err != nil {
 		return nil, err
 	}
+	encoded, err := json.Marshal(ids)
+	if err != nil {
+		return nil, err
+	}
+	// One statement keeps the selected catalogs in one SQLite snapshot. Drive
+	// the join from the request to retain its order and first missing-ID error.
+	rows, err := s.db.QueryContext(ctx, `SELECT requested.value,a.name,a.metadata_json
+		FROM json_each(?) requested LEFT JOIN accounts a ON a.id=requested.value
+		ORDER BY CAST(requested.key AS INTEGER)`, string(encoded))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
 	result := make([]AccountModelCatalog, 0, len(ids))
-	for _, accountID := range ids {
-		var name, rawMetadata string
-		err := s.db.QueryRowContext(ctx, `SELECT name,metadata_json FROM accounts WHERE id=?`, accountID).Scan(&name, &rawMetadata)
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, fmt.Errorf("账号 %s 不存在", accountID)
-		}
-		if err != nil {
+	for rows.Next() {
+		var accountID string
+		var name, rawMetadata sql.NullString
+		if err := rows.Scan(&accountID, &name, &rawMetadata); err != nil {
 			return nil, err
 		}
-		metadata, err := decodeJSONObject(rawMetadata)
+		if !name.Valid {
+			return nil, fmt.Errorf("账号 %s 不存在", accountID)
+		}
+		metadata, err := decodeJSONObject(rawMetadata.String)
 		if err != nil {
 			return nil, fmt.Errorf("账号 %s 元数据损坏，无法读取模型目录", accountID)
 		}
 		models := normalizeAccountModels(metadataStringList(metadata["known_models"]))
 		result = append(result, AccountModelCatalog{
-			AccountID: accountID, AccountName: name,
+			AccountID: accountID, AccountName: name.String,
 			EnabledModels: normalizeAccountModels(metadataStringList(metadata["enabled_models"])),
 			Platform:      strings.ToLower(strings.TrimSpace(metadataText(metadata, "platform"))), Models: models,
 		})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
 	}
 	return result, nil
 }
 
 func (s *Store) AccountModelSyncPreview(ctx context.Context, accountIDs []string) (AccountModelSyncPreview, error) {
+	var preview AccountModelSyncPreview
+	err := s.WithReadSnapshot(ctx, func(ctx context.Context) error {
+		var err error
+		preview, err = s.accountModelSyncPreview(ctx, accountIDs)
+		return err
+	})
+	return preview, err
+}
+
+func (s *Store) accountModelSyncPreview(ctx context.Context, accountIDs []string) (AccountModelSyncPreview, error) {
 	catalogs, err := s.AccountModelCatalogs(ctx, accountIDs)
-	if err != nil {
-		return AccountModelSyncPreview{}, err
-	}
-	blockedPatterns, err := s.AccountModelExclusionList(ctx)
 	if err != nil {
 		return AccountModelSyncPreview{}, err
 	}
 	configuredProbeModels := map[string]any{}
 	policy, err := s.readPolicyDocument(ctx, s.db, "control-plane")
+	if err != nil {
+		return AccountModelSyncPreview{}, err
+	}
+	blockedPatterns, err := modelBlockPatternsFromDocument(policy)
 	if err != nil {
 		return AccountModelSyncPreview{}, err
 	}
@@ -203,6 +230,10 @@ func (s *Store) AccountModelExclusionList(ctx context.Context) ([]string, error)
 	if err != nil {
 		return nil, err
 	}
+	return modelBlockPatternsFromDocument(document)
+}
+
+func modelBlockPatternsFromDocument(document map[string]any) ([]string, error) {
 	if document == nil {
 		return nil, errors.New("控制面策略不存在")
 	}
@@ -237,22 +268,59 @@ func (s *Store) AccountModelExclusionList(ctx context.Context) ([]string, error)
 }
 
 func (s *Store) SaveAccountModelExclusionList(ctx context.Context, models []string, actor string) error {
+	_, err := s.saveModelBlockRules(ctx, models, nil, actor)
+	return err
+}
+
+var ErrModelSyncSettingsChanged = errors.New("全局屏蔽规则已更新，请加载最新规则后重新编辑并保存")
+
+func (s *Store) ReplaceAccountModelBlocks(ctx context.Context, models, expected []string, actor string) (AccountModelSyncSettings, error) {
+	if expected == nil {
+		return AccountModelSyncSettings{}, errors.New("必须提供编辑前的屏蔽规则")
+	}
+	normalized, err := validatedModelBlockPatterns(expected)
+	if err != nil {
+		return AccountModelSyncSettings{}, err
+	}
+	return s.saveModelBlockRules(ctx, models, normalized, actor)
+}
+
+func (s *Store) saveModelBlockRules(ctx context.Context, models, expected []string, actor string) (AccountModelSyncSettings, error) {
 	normalized, err := validatedModelBlockPatterns(models)
 	if err != nil {
-		return err
+		return AccountModelSyncSettings{}, err
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return err
+		return AccountModelSyncSettings{}, err
 	}
 	defer tx.Rollback()
 	document, err := s.readPolicyDocument(ctx, tx, "control-plane")
 	if err != nil {
-		return err
+		return AccountModelSyncSettings{}, err
 	}
 	if document == nil {
-		return errors.New("控制面策略不存在")
+		return AccountModelSyncSettings{}, errors.New("控制面策略不存在")
 	}
+	if expected != nil {
+		current, err := modelBlockPatternsFromDocument(document)
+		if err != nil {
+			return AccountModelSyncSettings{}, err
+		}
+		if !slices.Equal(current, expected) {
+			return AccountModelSyncSettings{}, ErrModelSyncSettingsChanged
+		}
+	}
+	if err := s.writeModelBlockPatterns(ctx, tx, document, normalized, actor); err != nil {
+		return AccountModelSyncSettings{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return AccountModelSyncSettings{}, err
+	}
+	return AccountModelSyncSettings{BlockedPatterns: normalized}, nil
+}
+
+func (s *Store) writeModelBlockPatterns(ctx context.Context, tx *sql.Tx, document map[string]any, normalized []string, actor string) error {
 	values := make([]any, len(normalized))
 	for index, model := range normalized {
 		values[index] = model
@@ -287,7 +355,7 @@ func (s *Store) SaveAccountModelExclusionList(ctx context.Context, models []stri
 		fmt.Sprintf("全局屏蔽模型列表已更新：%d 条规则", len(normalized)), string(payload)); err != nil {
 		return err
 	}
-	return tx.Commit()
+	return nil
 }
 
 func validatedModelBlockPatterns(patterns []string) ([]string, error) {

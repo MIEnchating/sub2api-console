@@ -265,15 +265,20 @@ func (s *Store) ClearRoutingRuntimeBlocks(ctx context.Context, accountID string)
 	if !positiveNumericID(accountID) {
 		return errors.New("账号必须使用有效的稳定 ID")
 	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
 	var raw string
-	if err := s.db.QueryRowContext(ctx, `SELECT metadata_json FROM accounts WHERE id=?`, accountID).Scan(&raw); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT metadata_json FROM accounts WHERE id=?`, accountID).Scan(&raw); err != nil {
 		return err
 	}
 	encoded, err := clearedRoutingRuntimeMetadata(raw, accountID)
 	if err != nil {
 		return err
 	}
-	result, err := s.db.ExecContext(ctx, `UPDATE accounts SET metadata_json=?,updated_at=? WHERE id=?`,
+	result, err := tx.ExecContext(ctx, `UPDATE accounts SET metadata_json=?,updated_at=? WHERE id=?`,
 		encoded, time.Now().UTC().Format(time.RFC3339Nano), accountID)
 	if err != nil {
 		return err
@@ -281,12 +286,12 @@ func (s *Store) ClearRoutingRuntimeBlocks(ctx context.Context, accountID string)
 	if affected, err := result.RowsAffected(); err != nil || affected != 1 {
 		return sql.ErrNoRows
 	}
-	return nil
+	return tx.Commit()
 }
 
 func clearedRoutingRuntimeMetadata(raw, accountID string) (string, error) {
-	metadata := map[string]any{}
-	if err := json.Unmarshal([]byte(raw), &metadata); err != nil {
+	metadata, err := decodeObject(raw)
+	if err != nil {
 		return "", fmt.Errorf("账号 %s metadata 配置无效", accountID)
 	}
 	for _, key := range []string{

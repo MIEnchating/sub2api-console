@@ -23,6 +23,7 @@ func TestOpenCreatesAndRepairsPerformanceIndexes(t *testing.T) {
 	}
 	expected := []string{
 		"ix_account_groups_group_account",
+		"ix_account_stability_grouped",
 		"ix_bindings_upstream_lookup",
 		"ix_health_samples_account_recent",
 		"ix_health_samples_normalized_source_latest",
@@ -45,7 +46,16 @@ func TestOpenCreatesAndRepairsPerformanceIndexes(t *testing.T) {
 			t.Fatalf("business index %s missing: count=%d err=%v", name, count, err)
 		}
 	}
+	if _, err := store.db.Exec(`DROP INDEX ix_account_stability_grouped`); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := store.db.Exec(`DROP INDEX ix_operation_audit_recent`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.Exec(`CREATE INDEX ix_account_stability_covering ON account_stability_samples(account_id,observed_at,outcome)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.Exec(`CREATE INDEX ix_account_stability_window ON account_stability_samples(account_id,observed_at)`); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.Close(); err != nil {
@@ -57,8 +67,15 @@ func TestOpenCreatesAndRepairsPerformanceIndexes(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = reopened.Close() })
 	var repaired int
-	if err := reopened.db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='ix_operation_audit_recent'`).Scan(&repaired); err != nil || repaired != 1 {
+	if err := reopened.db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='ix_account_stability_grouped'`).Scan(&repaired); err != nil || repaired != 1 {
 		t.Fatalf("reopening an existing database did not repair indexes: count=%d err=%v", repaired, err)
+	}
+	if err := reopened.db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='ix_operation_audit_recent'`).Scan(&repaired); err != nil || repaired != 1 {
+		t.Fatalf("reopening an existing database did not repair audit index: count=%d err=%v", repaired, err)
+	}
+	var obsolete int
+	if err := reopened.db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name IN ('ix_account_stability_covering','ix_account_stability_window')`).Scan(&obsolete); err != nil || obsolete != 0 {
+		t.Fatalf("reopening an existing database kept obsolete stability indexes: count=%d err=%v", obsolete, err)
 	}
 }
 
@@ -446,9 +463,9 @@ func TestEmptyBusinessDatabaseCanOpenButIsNotReady(t *testing.T) {
 	if err := store.db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil {
 		t.Fatal(err)
 	}
-	const deployedSchemaVersion = 10
-	if version != deployedSchemaVersion {
-		t.Fatalf("schema version=%d, want deployed baseline %d", version, deployedSchemaVersion)
+	const expectedSchemaVersion = 12
+	if version != expectedSchemaVersion {
+		t.Fatalf("schema version=%d, want %d", version, expectedSchemaVersion)
 	}
 	if err := store.Close(); err != nil {
 		t.Fatal(err)

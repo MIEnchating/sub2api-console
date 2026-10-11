@@ -8,6 +8,7 @@ import (
 )
 
 func TestAccountMutationProtectionsCombineManualControls(t *testing.T) {
+	t.Parallel()
 	store, err := Open(filepath.Join(t.TempDir(), "mutation-protection.sqlite3"))
 	if err != nil {
 		t.Fatal(err)
@@ -40,6 +41,7 @@ func TestAccountMutationProtectionsCombineManualControls(t *testing.T) {
 }
 
 func TestAccountMutationProtectionsSupportsMoreIDsThanSQLiteVariableLimit(t *testing.T) {
+	t.Parallel()
 	store, err := Open(filepath.Join(t.TempDir(), "mutation-protection-large.sqlite3"))
 	if err != nil {
 		t.Fatal(err)

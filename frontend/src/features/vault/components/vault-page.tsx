@@ -1,4 +1,4 @@
-import { useId, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { FieldError } from "@/components/field-error";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Eraser, KeyRound, Pencil, Plus, Search, Trash2 } from "lucide-react";
@@ -98,17 +98,21 @@ function isComplete(entry: VaultEntryIndex): boolean {
 
 function hostConflictEntries(entries: VaultEntryIndex[]): Set<string> {
   const matches = new Map<string, string[]>();
-  const wildcardEntries = entries.filter((entry) => entry.hosts.length === 0);
+  const wildcardEntries: VaultEntryIndex[] = [];
   const conflicts = new Set<string>();
-  if (wildcardEntries.length > 1) {
-    for (const entry of wildcardEntries) conflicts.add(entry.entry);
-  }
   for (const entry of entries) {
+    if (entry.hosts.length === 0) {
+      wildcardEntries.push(entry);
+      continue;
+    }
     for (const host of entry.hosts) {
       const current = matches.get(host) ?? [];
       current.push(entry.entry);
       matches.set(host, current);
     }
+  }
+  if (wildcardEntries.length > 1) {
+    for (const entry of wildcardEntries) conflicts.add(entry.entry);
   }
   for (const names of matches.values()) {
     if (names.length > 1 || wildcardEntries.length > 0) {
@@ -243,9 +247,18 @@ export function VaultPage() {
   const queryClient = useQueryClient();
   const config = useQuery({
     queryKey: ["auth-recovery-config"],
-    queryFn: api.authRecoveryConfig,
+    queryFn: ({ signal }) => api.authRecoveryConfig(signal),
   });
-  const configReady = config.data !== undefined && !config.isError;
+  const configReady = config.data !== undefined && !config.isError && !config.isFetching;
+  const mounted = useRef(false);
+  const writing = useRef(false);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      pendingSave.current = null;
+    };
+  }, []);
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<VaultStatusFilter>("all");
   const [editorOpen, setEditorOpen] = useState(false);
@@ -263,19 +276,26 @@ export function VaultPage() {
   const entries = useMemo(() => {
     const keyword = search.trim().toLowerCase();
     const rows = config.data?.vault_entries ?? [];
-    const filtered = keyword
-      ? rows.filter((entry) =>
-          [entry.entry, ...entry.hosts, ...entry.header_names].some((value) =>
-            String(value ?? "")
-              .toLowerCase()
-              .includes(keyword),
-          ),
-        )
-      : rows;
-    if (statusFilter === "all") return filtered;
-    return filtered.filter((entry) =>
-      statusFilter === "complete" ? isComplete(entry) : !isComplete(entry),
-    );
+    if (!keyword && statusFilter === "all") return rows;
+    const filtered: VaultEntryIndex[] = [];
+    for (const entry of rows) {
+      if (keyword) {
+        const matchesSearch = [entry.entry, ...entry.hosts, ...entry.header_names].some((value) =>
+          String(value ?? "")
+            .toLowerCase()
+            .includes(keyword),
+        );
+        if (!matchesSearch) continue;
+      }
+      if (
+        statusFilter !== "all" &&
+        (statusFilter === "complete" ? !isComplete(entry) : isComplete(entry))
+      ) {
+        continue;
+      }
+      filtered.push(entry);
+    }
+    return filtered;
   }, [config.data?.vault_entries, search, statusFilter]);
 
   const allEntries = config.data?.vault_entries ?? [];
@@ -313,25 +333,34 @@ export function VaultPage() {
 
   const save = useMutation({
     gcTime: 0,
+    retry: false,
+    networkMode: "always",
     mutationFn: () => {
       const payload = pendingSave.current;
       pendingSave.current = null;
       if (!payload) throw new Error("凭据提交内容已清除，请重新填写");
       return api.configureVaultEntry(payload);
     },
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["auth-recovery-config"] });
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["auth-recovery-config"] });
+      if (!mounted.current) return;
       setEditorOpen(false);
       setForm(emptyVaultForm);
       setCleared(new Set());
       setHeadersError(null);
       toast.success(editing === null ? "凭据已添加" : "凭据已更新");
     },
-    onError: (error) => notifyOperationError(error, "凭据保存失败"),
+    onError: (error) => {
+      if (mounted.current) notifyOperationError(error, "凭据保存失败");
+    },
+    onSettled: () => {
+      writing.current = false;
+    },
   });
 
   function savePayload(payload: Parameters<typeof api.configureVaultEntry>[0]): void {
-    if (save.isPending || pendingSave.current) return;
+    if (writing.current || !configReady) return;
+    writing.current = true;
     pendingSave.current = payload;
     save.mutate();
   }
@@ -389,13 +418,21 @@ export function VaultPage() {
   }
 
   const remove = useMutation({
+    retry: false,
+    networkMode: "always",
     mutationFn: (entry: VaultEntryIndex) => api.deleteVaultEntry(entry.entry),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["auth-recovery-config"] });
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["auth-recovery-config"] });
+      if (!mounted.current) return;
       setDeleteTarget(null);
       toast.success("凭据已删除");
     },
-    onError: (error) => notifyOperationError(error, "凭据删除失败"),
+    onError: (error) => {
+      if (mounted.current) notifyOperationError(error, "凭据删除失败");
+    },
+    onSettled: () => {
+      writing.current = false;
+    },
   });
   let saveButtonLabel = "添加凭据";
   if (save.isPending) saveButtonLabel = "保存中...";
@@ -708,7 +745,7 @@ export function VaultPage() {
                 savePayload(overwritePayload);
                 setOverwritePayload(null);
               }}
-              disabled={save.isPending || overwritePayload === null}
+              disabled={!configReady || save.isPending || overwritePayload === null}
             >
               {save.isPending ? "保存中..." : "确认覆盖"}
             </Button>
@@ -752,9 +789,11 @@ export function VaultPage() {
             <Button
               variant="destructive"
               onClick={() => {
-                if (deleteTarget) remove.mutate(deleteTarget);
+                if (!deleteTarget || writing.current || !configReady) return;
+                writing.current = true;
+                remove.mutate(deleteTarget);
               }}
-              disabled={remove.isPending || deleteTarget === null}
+              disabled={!configReady || remove.isPending || deleteTarget === null}
             >
               <Trash2 />
               {remove.isPending ? "删除中..." : "确认删除"}

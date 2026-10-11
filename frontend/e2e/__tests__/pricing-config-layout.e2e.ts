@@ -1,3 +1,4 @@
+import { dictionaryResponse } from "./fixtures/dictionaries";
 import { expect, test, type Page } from "@playwright/test";
 
 import type { PricingConfig, PricingSnapshot } from "../../src/api";
@@ -27,7 +28,13 @@ async function setupPricing(
       "/api/setup/status": { initialized: true, configuration_errors: [] },
       "/api/auth/session": { authenticated: true, username: "价格布局测试" },
       "/api/pricing": snapshot,
-      "/api/dictionaries": { items: [] },
+      "/api/dictionaries": dictionaryResponse(
+        route.request().url(),
+        (initialSnapshot.groups.length ? initialSnapshot.groups : pricing.groups).map((group) => ({
+          value: group.id,
+          name: group.name,
+        })),
+      ),
       "/api/inspection/automation": {
         enabled: false,
         running: false,
@@ -163,11 +170,10 @@ test("没有可选分组时显示刷新提示，刷新成功后可以继续选�
     groups: [],
   };
   await setupPricing(page, colorScheme, emptySnapshot);
-  let reads = 0;
+  let refreshed = false;
   await page.route("**/api/pricing", (route) => {
-    reads += 1;
     return route.fulfill({
-      json: reads === 1 ? emptySnapshot : { ...emptySnapshot, groups: pricing.groups },
+      json: refreshed ? { ...emptySnapshot, groups: pricing.groups } : emptySnapshot,
     });
   });
   await page.goto("/pricing-config");
@@ -175,6 +181,7 @@ test("没有可选分组时显示刷新提示，刷新成功后可以继续选�
   await expect(choices.getByText("暂无可选分组", { exact: true })).toBeVisible();
   await expect(choices.getByText(/刷新/)).toBeVisible();
   await expect(choices.getByRole("checkbox")).toHaveCount(0);
+  refreshed = true;
   await page.getByRole("button", { name: "刷新价格数据", exact: true }).click();
   const option = choices.getByRole("checkbox", { name: "互换组 1 分组 codex-平价" });
   await expect(option).toBeEnabled();

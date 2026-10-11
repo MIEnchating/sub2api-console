@@ -1,3 +1,4 @@
+import { seedDictionaries } from "@/test/dictionary-fixtures";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, within, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -16,6 +17,7 @@ function setup(
   previous?: Task,
 ): { dispose: () => void; client: ReturnType<typeof createConsoleQueryClient> } {
   const client = createConsoleQueryClient();
+  seedDictionaries(client);
   client.setDefaultOptions({ queries: { retry: false, staleTime: Infinity } });
   client.setQueryData(
     ["accounts"],

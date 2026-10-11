@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -63,14 +64,43 @@ type PricingChangeRecord struct {
 }
 
 func (s *Store) PricingCatalog(ctx context.Context) (PricingCatalog, error) {
-	ignored, err := s.costWallIgnoredAccounts(ctx, s.db)
+	return s.pricingCatalog(ctx, nil)
+}
+
+// PricingCatalogForAccount keeps the full group options but only reads the
+// selected account and its memberships. Empty or invalid scope never means all.
+func (s *Store) PricingCatalogForAccount(ctx context.Context, accountID string) (PricingCatalog, error) {
+	return s.PricingCatalogForAccounts(ctx, []string{accountID})
+}
+
+// PricingCatalogForAccounts reads a confirmed scope in one snapshot. An empty
+// scope selects no accounts while retaining all group options for validation.
+func (s *Store) PricingCatalogForAccounts(ctx context.Context, accountIDs []string) (PricingCatalog, error) {
+	for _, accountID := range accountIDs {
+		id, err := strconv.ParseUint(accountID, 10, 64)
+		if err != nil || id == 0 || strconv.FormatUint(id, 10) != accountID {
+			return PricingCatalog{}, errors.New("账号必须使用有效的稳定 ID")
+		}
+	}
+	if accountIDs == nil {
+		accountIDs = []string{}
+	}
+	var catalog PricingCatalog
+	err := s.WithReadSnapshot(ctx, func(ctx context.Context) error {
+		var readErr error
+		catalog, readErr = s.pricingCatalog(ctx, accountIDs)
+		return readErr
+	})
+	return catalog, err
+}
+
+func (s *Store) pricingCatalog(ctx context.Context, accountIDs []string) (PricingCatalog, error) {
+	scope, err := s.readAccountControlScope(ctx, s.db)
 	if err != nil {
 		return PricingCatalog{}, err
 	}
-	locked, err := s.groupLockedAccounts(ctx, s.db)
-	if err != nil {
-		return PricingCatalog{}, err
-	}
+	ignored := controlAccountIDs(scope["ignore_cost_wall_account_ids"])
+	locked := controlAccountIDs(scope[groupLockedAccountIDs])
 	catalog := PricingCatalog{Accounts: []PricingAccount{}, Groups: []PricingGroup{}}
 	groupRows, err := s.db.QueryContext(ctx, `SELECT name,remote_id,platform,rate_multiplier
 		FROM local_groups ORDER BY CASE WHEN remote_id GLOB '[0-9]*' THEN CAST(remote_id AS INTEGER) ELSE 0 END,remote_id,name`)
@@ -102,17 +132,42 @@ func (s *Store) PricingCatalog(ctx context.Context) (PricingCatalog, error) {
 		groupPlatforms[group.ID] = group.Platform
 	}
 
-	accountRows, err := s.db.QueryContext(ctx, `SELECT a.id,a.name,a.multiplier,a.metadata_json,
-		EXISTS(SELECT 1 FROM manual_priority_accounts m WHERE m.account_id=a.id) FROM accounts a
-		ORDER BY CASE WHEN a.id GLOB '[0-9]*' THEN CAST(a.id AS INTEGER) ELSE 0 END,a.id`)
+	// Only transfer the platform value, not potentially large account metadata.
+	// Like decoding a Go map, the final duplicate key wins, including null or
+	// non-text values that intentionally leave platform inference to groups.
+	accountQuery := `SELECT a.id,a.name,a.multiplier,
+		(SELECT CASE WHEN field.type='text' THEN field.value END
+		 FROM json_each(CASE WHEN json_valid(a.metadata_json) THEN a.metadata_json ELSE '{}' END) field
+		 WHERE field.key='platform' ORDER BY field.id DESC LIMIT 1) AS platform,
+		CASE WHEN NOT json_valid(a.metadata_json) THEN a.metadata_json END AS legacy_metadata,
+		EXISTS(SELECT 1 FROM manual_priority_accounts m WHERE m.account_id=a.id) FROM accounts a`
+	args := []any{}
+	scopePredicate := ""
+	if accountIDs != nil {
+		if len(accountIDs) == 1 {
+			scopePredicate = "=?"
+			args = append(args, accountIDs[0])
+		} else {
+			encoded, err := json.Marshal(accountIDs)
+			if err != nil {
+				return PricingCatalog{}, err
+			}
+			scopePredicate = ` IN (SELECT value FROM json_each(?))`
+			args = append(args, string(encoded))
+		}
+		accountQuery += ` WHERE a.id` + scopePredicate
+	}
+	accountQuery += ` ORDER BY CASE WHEN a.id GLOB '[0-9]*' THEN CAST(a.id AS INTEGER) ELSE 0 END,a.id`
+	accountRows, err := s.db.QueryContext(ctx, accountQuery, args...)
 	if err != nil {
 		return PricingCatalog{}, err
 	}
 	for accountRows.Next() {
 		var item PricingAccount
 		var multiplier sql.NullString
-		var metadata string
-		if err := accountRows.Scan(&item.ID, &item.Name, &multiplier, &metadata, &item.ManualPriority); err != nil {
+		var platform sql.NullString
+		var legacyMetadata sql.NullString
+		if err := accountRows.Scan(&item.ID, &item.Name, &multiplier, &platform, &legacyMetadata, &item.ManualPriority); err != nil {
 			accountRows.Close()
 			return PricingCatalog{}, err
 		}
@@ -122,8 +177,14 @@ func (s *Store) PricingCatalog(ctx context.Context) (PricingCatalog, error) {
 		item.IgnoreCostWall = containsControlID(ignored, item.ID)
 		item.GroupsLocked = containsControlID(locked, item.ID)
 		item.Multiplier = nullString(multiplier)
-		if platform := accountMetadataText(metadata, "platform"); platform != nil {
-			item.Platform = strings.ToLower(strings.TrimSpace(*platform))
+		if platform.Valid {
+			item.Platform = strings.ToLower(strings.TrimSpace(platform.String))
+		} else if legacyMetadata.Valid {
+			// Go accepts deeper JSON than SQLite. Preserve existing legacy reads
+			// without transferring the full metadata on the ordinary path.
+			if value := accountMetadataText(legacyMetadata.String, "platform"); value != nil {
+				item.Platform = strings.ToLower(*value)
+			}
 		}
 		item.GroupIDs = []string{}
 		item.GroupsValid = true
@@ -140,9 +201,13 @@ func (s *Store) PricingCatalog(ctx context.Context) (PricingCatalog, error) {
 		byID[catalog.Accounts[index].ID] = index
 	}
 
-	membershipRows, err := s.db.QueryContext(ctx, `SELECT ag.account_id,ag.group_id,lg.remote_id
-		FROM account_groups ag LEFT JOIN local_groups lg ON lg.name=ag.group_name
-		ORDER BY ag.account_id,ag.group_name`)
+	membershipQuery := `SELECT ag.account_id,ag.group_id,lg.remote_id
+		FROM account_groups ag LEFT JOIN local_groups lg ON lg.name=ag.group_name`
+	if accountIDs != nil {
+		membershipQuery += ` WHERE ag.account_id` + scopePredicate
+	}
+	membershipQuery += ` ORDER BY ag.account_id,ag.group_name`
+	membershipRows, err := s.db.QueryContext(ctx, membershipQuery, args...)
 	if err != nil {
 		return PricingCatalog{}, err
 	}
@@ -279,9 +344,7 @@ func (s *Store) SyncPricingAccountGroups(ctx context.Context, changes map[string
 			AccountID: accountID, AccountName: accountName, Before: before, After: after,
 		})
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE local_groups SET account_count=(
-		SELECT COUNT(*) FROM account_groups WHERE group_name=local_groups.name
-	),updated_at=?`, now); err != nil {
+	if err := refreshAccountGroupCounts(ctx, tx, now); err != nil {
 		return PricingSyncResult{}, err
 	}
 	payload := map[string]any{
@@ -384,7 +447,7 @@ func pricingAccountChangeGroups(ctx context.Context, queryer policyQueryer, acco
 
 func pricingGroupNames(ctx context.Context, queryer policyQueryer) (map[string]string, error) {
 	rows, err := queryer.QueryContext(ctx, `SELECT remote_id,name FROM local_groups WHERE remote_id IS NOT NULL
-		UNION ALL SELECT group_id,group_name FROM account_groups WHERE group_id IS NOT NULL ORDER BY 1,2`)
+		UNION SELECT group_id,group_name FROM account_groups WHERE group_id IS NOT NULL ORDER BY 1,2`)
 	if err != nil {
 		return nil, err
 	}

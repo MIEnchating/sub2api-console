@@ -46,4 +46,28 @@ describe("ConfirmActionDialog", () => {
     expect(markup).toContain("排除中…");
     expect(markup.match(/disabled/g)?.length).toBeGreaterThanOrEqual(2);
   });
+
+  it("only displays supplied task feedback while the confirmed operation is pending", () => {
+    const props = {
+      open: true,
+      title: "暂停监控项",
+      description: "暂停后不再检测该监控项",
+      confirmLabel: "暂停",
+      pendingContent: <div role="status">正在暂停指定监控项</div>,
+      onOpenChange: () => undefined,
+      onConfirm: () => undefined,
+    };
+    const pending = renderToStaticMarkup(
+      <Dialog open>
+        <ConfirmActionDialogContent {...props} pending />
+      </Dialog>,
+    );
+    const idle = renderToStaticMarkup(
+      <Dialog open>
+        <ConfirmActionDialogContent {...props} pending={false} />
+      </Dialog>,
+    );
+    expect(pending).toContain("正在暂停指定监控项");
+    expect(idle).not.toContain("正在暂停指定监控项");
+  });
 });

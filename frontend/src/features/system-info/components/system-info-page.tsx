@@ -21,20 +21,15 @@ export function SystemInfoPage(): ReactElement {
   const [selectedTask, setSelectedTask] = useState<TaskSummary | null>(null);
   const tasks = useQuery({
     queryKey: ["tasks"],
-    queryFn: () => api.tasks(20),
+    queryFn: (context) => api.tasks(20, context.signal),
     refetchInterval: (query) =>
       query.state.data?.some((task) => activeTaskStatuses.has(task.status)) ? 1_000 : 10_000,
   });
   const metrics = useQuery({
     queryKey: ["system-metrics"],
-    queryFn: api.systemMetrics,
+    queryFn: (context) => api.systemMetrics(context.signal),
     refetchInterval: 5_000,
   });
-  const accounts = useQuery({ queryKey: ["accounts"], queryFn: api.accounts });
-  const accountNames = useMemo(
-    () => new Map((accounts.data ?? []).map((account) => [account.id, account.name])),
-    [accounts.data],
-  );
   const groupedTasks = useMemo(() => {
     const active: TaskSummary[] = [];
     const history: TaskSummary[] = [];
@@ -46,8 +41,14 @@ export function SystemInfoPage(): ReactElement {
     }
     return { active, history };
   }, [tasks.data]);
-  const visibleTasks = groupedTasks[group].filter(
-    (task) => statusFilter === null || task.status === statusFilter,
+  const taskByID = useMemo(
+    () => new Map((tasks.data ?? []).map((task) => [task.id, task])),
+    [tasks.data],
+  );
+  const visibleTasks = useMemo(
+    () =>
+      groupedTasks[group].filter((task) => statusFilter === null || task.status === statusFilter),
+    [group, groupedTasks, statusFilter],
   );
 
   return (
@@ -106,7 +107,7 @@ export function SystemInfoPage(): ReactElement {
               refreshing={tasks.isFetching}
               onRetry={() => void tasks.refetch()}
               onClearFilter={() => setStatusFilter(null)}
-              onSelect={(id) => setSelectedTask(tasks.data?.find((task) => task.id === id) ?? null)}
+              onSelect={(id) => setSelectedTask(taskByID.get(id) ?? null)}
             />
           </div>
         </DataTablePanel>
@@ -116,7 +117,6 @@ export function SystemInfoPage(): ReactElement {
       ) : (
         <TaskDetailsDialog
           taskId={selectedTask?.id ?? null}
-          accountNames={accountNames}
           onClose={() => setSelectedTask(null)}
         />
       )}

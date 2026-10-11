@@ -4,53 +4,20 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { AccountDetail, Task, UsageRecord } from "@/api";
+import type { AccountControlState, Task, UsageRecord } from "@/api";
 import { SystemLogSearchPanel } from "../system-log-search-panel";
 import { TraceAccountActions } from "../trace-account-actions";
 
-function account(overrides: Partial<AccountDetail> = {}): AccountDetail {
+function account(overrides: Partial<AccountControlState> = {}): AccountControlState {
   return {
     id: "206",
     name: "极算云-0.15",
-    groups: [],
-    upstream_id: null,
-    upstream_host: null,
-    upstream_type: null,
     schedulable: true,
-    priority: 1,
-    load_factor: null,
-    concurrency: 1,
-    multiplier: null,
-    balance: null,
     paused: false,
-    paused_reason: null,
     routing_state: "healthy",
     health_status: null,
     health: "healthy",
-    desired_health: null,
-    apply_pending: false,
-    apply_error: null,
-    decision_state: null,
-    decision_reason: null,
-    failure_streak: 0,
-    recovery_pass_streak: 0,
-    target_priority: null,
-    target_load_factor: null,
-    target_schedulable: null,
-    target_concurrency: null,
-    health_score: null,
-    short_score: null,
-    long_score: null,
-    sample_count: 0,
-    recent_results: [],
-    ttfb_p50_ms: null,
-    ttfb_p95_ms: null,
-    weight: null,
-    metadata: {},
-    group_rates: {},
-    group_ids: {},
-    bindings: [],
-    test_models: [],
+    manual_priority: null,
     ...overrides,
   };
 }
@@ -77,7 +44,7 @@ function mockNetwork(current = account(), completed = task("succeeded")) {
       writes.push({ path, body: JSON.parse(String(init?.body)) });
       return Response.json(task());
     }
-    if (path === "/api/accounts/206") return Response.json(current);
+    if (path === "/api/accounts/206/control-state") return Response.json(current);
     if (path === "/api/tasks/control-206") return Response.json(completed);
     throw new Error(`Unexpected request: ${path}`);
   });
@@ -265,12 +232,26 @@ describe("请求查询账号处置", () => {
     expect(network.fetch).not.toHaveBeenCalled();
   });
 
-  it("手动控制账号禁止熔断和恢复", async () => {
-    mockNetwork(account({ manual_priority: 1 }));
+  it.each([
+    { health: "manual_priority", schedulable: true, label: "手动熔断", action: "fuse" },
+    { health: "fused", schedulable: false, label: "解除熔断", action: "recover" },
+    { health: "paused", schedulable: false, label: "恢复调度", action: "resume" },
+  ])("人工控制账号处于 $health 时确认后提交 $action", async (scenario) => {
+    const network = mockNetwork(
+      account({ manual_priority: 1, health: scenario.health, schedulable: scenario.schedulable }),
+    );
+    const user = userEvent.setup();
     renderActions();
-    expect(await screen.findByText("请先取消手动控制")).toBeVisible();
-    expect(screen.getByRole("button", { name: "手动熔断" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "恢复调度" })).toBeDisabled();
+    const button = await screen.findByRole("button", { name: scenario.label });
+    await waitFor(() => expect(button).toBeEnabled());
+    await user.click(button);
+    expect(network.writes).toEqual([]);
+    await user.click(screen.getByRole("button", { name: `确认${scenario.label}` }));
+    await waitFor(() =>
+      expect(network.writes).toEqual([
+        { path: "/api/accounts/206/control", body: { action: scenario.action } },
+      ]),
+    );
   });
 
   it("键盘打开确认框后取消不会发送熔断并将焦点还给入口", async () => {

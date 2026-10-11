@@ -8,16 +8,96 @@ import {
   NewAPIHeadingAction,
   NewAPIPlatformDetails,
   NewAPIRemoteLoading,
+  mergeSavedNewAPIRemoteGroups,
+  mergeSavedNewAPIRemoteSnapshot,
+  mergeSavedNewAPIGroupBindings,
   newAPIRemoteSnapshotQueryKey,
   newAPIViewNeedsRemoteSnapshot,
 } from "../newapi-management-page";
 import { NewAPIModelPrices, NewAPIPriceDifferences } from "../model-prices";
 
+it("保存读回绑定时只更新工作区绑定和提交过的本地倍率", () => {
+  const workspace = {
+    platforms: [],
+    local_groups: [
+      { id: "6", name: "标准", ratio: "0.5" },
+      { id: "7", name: "高速", ratio: "1" },
+    ],
+    bindings: [],
+    sub2api_base_url: "https://sub2api.example",
+  };
+  const merged = mergeSavedNewAPIGroupBindings(
+    workspace,
+    [
+      {
+        platform_id: "primary",
+        newapi_group_id: "vip",
+        newapi_group_name: "VIP",
+        sub2api_group_id: "6",
+        sync_ratio: true,
+      },
+    ],
+    [
+      {
+        newapi_group_id: "vip",
+        newapi_group_name: "VIP",
+        sub2api_group_id: "6",
+        sub2api_ratio: "0.75",
+        sync_ratio: true,
+      },
+    ],
+  );
+  expect(merged?.bindings).toHaveLength(1);
+  expect(merged?.local_groups).toEqual([
+    { id: "6", name: "标准", ratio: "0.75" },
+    { id: "7", name: "高速", ratio: "1" },
+  ]);
+});
+
+it("保存读回倍率时只更新开启同步的远端分组和快照", () => {
+  const groups = [
+    { id: "vip", name: "VIP", ratio: "1" },
+    { id: "standard", name: "标准", ratio: "0.5" },
+  ];
+  const updates = [
+    {
+      newapi_group_id: "vip",
+      newapi_group_name: "VIP",
+      sub2api_group_id: "6",
+      sub2api_ratio: "0.75",
+      sync_ratio: true,
+    },
+    {
+      newapi_group_id: "standard",
+      newapi_group_name: "标准",
+      sub2api_group_id: "7",
+      sub2api_ratio: "0.25",
+      sync_ratio: false,
+    },
+  ];
+  expect(mergeSavedNewAPIRemoteGroups(groups, updates)).toEqual([
+    { id: "vip", name: "VIP", ratio: "0.75" },
+    { id: "standard", name: "标准", ratio: "0.5" },
+  ]);
+  const snapshot = {
+    groups,
+    fetched_at: "",
+    models: [],
+    unset_models: [],
+    references: [],
+    differences: [],
+    tool_prices: [],
+  } satisfies NewAPIRemoteSnapshot;
+  expect(mergeSavedNewAPIRemoteSnapshot(snapshot, updates)?.groups[0].ratio).toBe("0.75");
+  expect(mergeSavedNewAPIRemoteGroups(undefined, updates)).toBeUndefined();
+  expect(mergeSavedNewAPIRemoteSnapshot(undefined, updates)).toBeUndefined();
+});
+
 describe("New API 页面加载", () => {
-  it("主平台和渠道列表不预读分组，分组与价格页仍读取远端快照", () => {
+  it("仅价格与比对页读取完整快照，分组页使用专用读取", () => {
     expect(newAPIViewNeedsRemoteSnapshot("platform")).toBe(false);
     expect(newAPIViewNeedsRemoteSnapshot("channels")).toBe(false);
-    expect(newAPIViewNeedsRemoteSnapshot("groups")).toBe(true);
+    expect(newAPIViewNeedsRemoteSnapshot("groups")).toBe(false);
     expect(newAPIViewNeedsRemoteSnapshot("prices")).toBe(true);
     expect(newAPIViewNeedsRemoteSnapshot("differences")).toBe(true);
   });

@@ -254,7 +254,7 @@ func classify(sample Sample, config scoringConfig) Classified {
 	if quota {
 		return Classified{Score: config.eventScores[EventRateLimited], Event: EventRateLimited, Failure: true, RateLimited: true}
 	}
-	if !success && !decisiveCredential && upstreamerror.IsCapacity(text) {
+	if !success && !decisiveCredential && (upstreamerror.IsCapacity(sample.FailureReason) || upstreamerror.IsCapacity(sample.Result)) {
 		return Classified{Score: config.eventScores[EventGateway], Event: EventGateway, Failure: true, Gateway: true}
 	}
 	if trafficClientError(sample.Source, status, config.clientCodes) && !decisiveCredential {

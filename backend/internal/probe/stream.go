@@ -369,7 +369,13 @@ func eventError(value any) string {
 	}
 	eventType, _ := object["type"].(string)
 	status, _ := object["status"].(string)
-	if strings.Contains(eventType, "error") || strings.Contains(eventType, "failed") || eventType == "response.incomplete" || status == "failed" || status == "cancelled" || status == "incomplete" {
+	outputBudgetReached := probeOutputBudgetReached(object)
+	if eventType == "response.incomplete" {
+		response, _ := object["response"].(map[string]any)
+		outputBudgetReached = probeOutputBudgetReached(response)
+	}
+	incomplete := (eventType == "response.incomplete" || status == "incomplete") && !outputBudgetReached
+	if strings.Contains(eventType, "error") || strings.Contains(eventType, "failed") || incomplete || status == "failed" || status == "cancelled" {
 		if nonemptyText(object["message"]) {
 			return fmt.Sprint(object["message"])
 		}

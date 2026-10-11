@@ -14,6 +14,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { DictionaryReadState } from "@/components/dictionary-read-state";
 import { orderByDictionary } from "@/lib/dictionary-order";
 import { modelSyncScopeSchema, type ModelSyncScopeValues } from "../lib/model-sync-scope-schema";
 
@@ -49,12 +50,16 @@ export function ModelSyncScopeDialog(props: {
         result.set(value, group);
       }
     }
-    return orderByDictionary(
-      [...result.values()],
-      dictionary.data?.items,
-      (group) => group.name,
-      "name",
-    );
+    return [...result.values()]
+      .filter((group) => group.value === "ungrouped")
+      .concat(
+        orderByDictionary(
+          [...result.values()].filter((group) => group.value !== "ungrouped"),
+          dictionary.data?.items,
+          (group) => group.name,
+          "name",
+        ),
+      );
   }, [props.accountIds, props.accountGroups, dictionary.data?.items]);
   const form = useForm<ModelSyncScopeValues>({
     resolver: zodResolver(modelSyncScopeSchema),
@@ -86,6 +91,7 @@ export function ModelSyncScopeDialog(props: {
               name="groups"
               render={({ field }) => (
                 <MultiSelect
+                  dictionaryKind="group"
                   options={groups.map((group) => ({
                     value: group.value,
                     label: `${group.name} · ${group.accountIds.size}`,
@@ -102,7 +108,9 @@ export function ModelSyncScopeDialog(props: {
               )}
             />
             {groups.length === 0 ? (
-              <p className="text-muted-foreground text-sm">当前没有可同步的账号</p>
+              <DictionaryReadState kind="group">
+                <p className="text-muted-foreground text-sm">当前没有可同步的账号</p>
+              </DictionaryReadState>
             ) : (
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <p className="text-muted-foreground text-sm" role="status">

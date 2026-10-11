@@ -7,6 +7,7 @@ import (
 )
 
 func TestTrafficRankingPartialUsageKeepsUnreportedFieldsUnknown(t *testing.T) {
+	t.Parallel()
 	store := openPolicyStore(t)
 	ctx := context.Background()
 	end := time.Date(2026, 9, 14, 12, 0, 0, 0, time.UTC)

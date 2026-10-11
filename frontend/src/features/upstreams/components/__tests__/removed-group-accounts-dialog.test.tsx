@@ -216,6 +216,9 @@ it("删除分组绑定超过 50 个账号时本次仅预览前 50 个并提示�
   renderDialog(accounts.map((account) => account.id));
   expect(await screen.findByText(/剩余账号请在本次完成后继续处理/)).toBeVisible();
   expect(screen.getByRole("button", { name: "确认删除 50 个账号" })).toBeVisible();
-  expect(preview).toHaveBeenCalledWith(expect.arrayContaining(["1", "50"]));
+  expect(preview).toHaveBeenCalledWith(
+    expect.arrayContaining(["1", "50"]),
+    expect.any(AbortSignal),
+  );
   expect(preview.mock.calls[0]?.[0]).toHaveLength(50);
 });

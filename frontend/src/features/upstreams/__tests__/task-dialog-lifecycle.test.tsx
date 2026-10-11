@@ -158,7 +158,9 @@ it.each([
   await user.click(await screen.findByRole("menuitem", { name: operation }));
   const dialog = await screen.findByRole("dialog", { name: operation });
   if (phase === "正在读取")
-    await waitFor(() => expect(readTask).toHaveBeenCalledWith("upstream-task"));
+    await waitFor(() =>
+      expect(readTask).toHaveBeenCalledWith("upstream-task", expect.any(AbortSignal)),
+    );
   dialog.focus();
   await user.keyboard("{Escape}");
   expect(screen.getByRole("dialog", { name: operation })).toBeVisible();

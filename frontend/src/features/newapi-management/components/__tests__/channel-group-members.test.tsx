@@ -1,9 +1,10 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { NewAPIChannel, NewAPIChannelGroups } from "@/api";
 import { ExistingChannels } from "../existing-channels";
+import { renderWithRouter } from "./render-with-router";
 
 const primary: NewAPIChannel = {
   id: "1",
@@ -49,7 +50,7 @@ beforeEach(() => {
     }),
   );
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  render(
+  renderWithRouter(
     <QueryClientProvider client={client}>
       <ExistingChannels platformId="primary" />
     </QueryClientProvider>,

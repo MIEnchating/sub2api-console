@@ -9,9 +9,11 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestAccountProjectionUsesStableIDsAndPreservesInvalidBooleanAsUnknown(t *testing.T) {
+	t.Parallel()
 	store := openReadModelFixture(t)
 	ctx := context.Background()
 
@@ -57,6 +59,7 @@ func TestAccountProjectionUsesStableIDsAndPreservesInvalidBooleanAsUnknown(t *te
 }
 
 func TestReadModelsDoNotRequireSQLiteWrites(t *testing.T) {
+	t.Parallel()
 	store := openReadModelFixture(t)
 	ctx := context.Background()
 	if err := store.ensureStableUpstreamRelations(ctx); err != nil {
@@ -93,7 +96,39 @@ func TestReadModelsDoNotRequireSQLiteWrites(t *testing.T) {
 	}
 }
 
+func TestAccountIDsByGroupsUsesStableGroupIDs(t *testing.T) {
+	t.Parallel()
+	store := openReadModelFixture(t)
+
+	accountIDs, err := store.AccountIDsByGroups(context.Background(), []string{"1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(accountIDs, []string{"41"}) {
+		t.Fatalf("account IDs for selected group = %#v", accountIDs)
+	}
+}
+
+func TestAccountIDsByGroupsDeduplicatesTrimmedIDsAndKeepsLegacyMembership(t *testing.T) {
+	t.Parallel()
+	store := openReadModelFixture(t)
+	if _, err := store.db.ExecContext(context.Background(), `INSERT INTO account_groups(account_id,group_name,group_id,group_rate) VALUES('42','legacy',NULL,'1')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.ExecContext(context.Background(), `INSERT INTO local_groups(name,remote_id,updated_at) VALUES('legacy','2','now')`); err != nil {
+		t.Fatal(err)
+	}
+	accountIDs, err := store.AccountIDsByGroups(context.Background(), []string{" 1 ", "1", "2", "2"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(accountIDs, []string{"41", "42"}) {
+		t.Fatalf("account IDs for duplicate group scope = %#v", accountIDs)
+	}
+}
+
 func TestAccountBaseURLCheckAllowsDifferentCustomEndpoints(t *testing.T) {
+	t.Parallel()
 	accountURL := "http://10.0.0.8:8080/v1"
 	upstreamURL := "https://portal.example.test"
 	platform := "openai"
@@ -104,6 +139,7 @@ func TestAccountBaseURLCheckAllowsDifferentCustomEndpoints(t *testing.T) {
 }
 
 func TestAccountBaseURLCheckRecognizesSameHostAcrossSchemes(t *testing.T) {
+	t.Parallel()
 	accountURL := "http://api.example.test:8080/v1"
 	upstreamURL := "https://api.example.test:8080"
 	status, _ := accountBaseURLCheck(&accountURL, &upstreamURL, nil, nil, nil)
@@ -113,6 +149,7 @@ func TestAccountBaseURLCheckRecognizesSameHostAcrossSchemes(t *testing.T) {
 }
 
 func TestAccountBaseURLCheckDistinguishesUncheckedFromMissingDetailValue(t *testing.T) {
+	t.Parallel()
 	status, reason := accountBaseURLCheck(nil, nil, nil, nil, nil)
 	if status != "unchecked" || reason == nil || !strings.Contains(*reason, "尚未读取") {
 		t.Fatalf("unchecked status=%q reason=%v", status, reason)
@@ -125,6 +162,7 @@ func TestAccountBaseURLCheckDistinguishesUncheckedFromMissingDetailValue(t *test
 }
 
 func TestAccountBaseURLCheckExplainsPlatformDefaultMismatch(t *testing.T) {
+	t.Parallel()
 	accountURL := "https://api.openai.com"
 	upstreamURL := "https://relay.example.test"
 	source := "platform_default"
@@ -135,6 +173,7 @@ func TestAccountBaseURLCheckExplainsPlatformDefaultMismatch(t *testing.T) {
 }
 
 func TestAccountBaseURLCheckFallsBackToUpstreamHost(t *testing.T) {
+	t.Parallel()
 	accountURL := "http://172.18.0.1:8317"
 	upstreamHost := "172.18.0.1:8317"
 	status, reason := accountBaseURLCheck(&accountURL, nil, &upstreamHost, nil, nil)
@@ -144,6 +183,7 @@ func TestAccountBaseURLCheckFallsBackToUpstreamHost(t *testing.T) {
 }
 
 func TestAccountProjectionPrefersBindingOwnershipAndMarksStoredHostRepairable(t *testing.T) {
+	t.Parallel()
 	store := openReadModelFixture(t)
 	if _, err := store.db.Exec(`UPDATE accounts SET upstream_host='relay.example' WHERE id='41'`); err != nil {
 		t.Fatal(err)
@@ -159,7 +199,119 @@ func TestAccountProjectionPrefersBindingOwnershipAndMarksStoredHostRepairable(t 
 	}
 }
 
+func TestAccountStabilityCacheInvalidatesAfterPersistedEvidence(t *testing.T) {
+	t.Parallel()
+	store := openReadModelFixture(t)
+	initial, err := store.Accounts(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if initial[0].Stability == nil || initial[0].Stability.Short.Samples != 0 {
+		t.Fatalf("initial stability=%#v", initial[0].Stability)
+	}
+
+	if _, err := store.PersistTrafficSamples(context.Background(), []TrafficSample{{
+		AccountID: "41", GroupName: "codex", Result: "通过", EvidenceKey: "stability-cache-refresh",
+		ObservedAt: time.Now().UTC().Format(time.RFC3339Nano),
+		Payload:    map[string]any{"token_usage": map[string]any{"input_tokens": 1, "output_tokens": 1}},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	updated, err := store.Accounts(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated[0].Stability == nil || updated[0].Stability.Short.Samples != 1 {
+		t.Fatalf("stability cache was not invalidated after evidence write: %#v", updated[0].Stability)
+	}
+}
+
+func TestAccountStabilityCacheMissesWhenRequestedAccountsAreNotFullyCovered(t *testing.T) {
+	t.Parallel()
+	store := openReadModelFixture(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	if _, err := store.db.ExecContext(ctx, `INSERT INTO account_stability_samples
+		(account_id,source,evidence_key,observed_at,outcome) VALUES(?,?,?,?,?)`,
+		"41", "traffic", "partial-cache-41", now.Add(-time.Hour).Format(healthSampleTimeLayout), "passed"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.ExecContext(ctx, `INSERT INTO account_stability_samples
+		(account_id,source,evidence_key,observed_at,outcome) VALUES(?,?,?,?,?)`,
+		"42", "traffic", "partial-cache-42", now.Add(-time.Hour).Format(healthSampleTimeLayout), "failed"); err != nil {
+		t.Fatal(err)
+	}
+
+	partial := &accountProjection{AccountStatus: AccountStatus{ID: "41"}}
+	if err := store.loadAccountStability(ctx, map[string]*accountProjection{"41": partial}); err != nil {
+		t.Fatal(err)
+	}
+	var revision int64
+	if err := store.db.QueryRowContext(ctx, `SELECT revision FROM account_stability_version WHERE id=1`).Scan(&revision); err != nil {
+		t.Fatal(err)
+	}
+	store.cacheAccountStability(now, revision, map[string]*accountProjection{"41": partial})
+
+	accounts := map[string]*accountProjection{
+		"41": {AccountStatus: AccountStatus{ID: "41"}},
+		"42": {AccountStatus: AccountStatus{ID: "42"}},
+	}
+	if err := store.loadAccountStability(ctx, accounts); err != nil {
+		t.Fatal(err)
+	}
+	if accounts["41"].Stability.Short.Samples != 1 || accounts["41"].Stability.Short.Passed != 1 {
+		t.Fatalf("account 41 stability=%#v", accounts["41"].Stability)
+	}
+	if accounts["42"].Stability.Short.Samples != 1 || accounts["42"].Stability.Short.Failed != 1 {
+		t.Fatalf("account 42 stability was not loaded after partial cache hit: %#v", accounts["42"].Stability)
+	}
+}
+
+func TestAccountStabilityCountsEachOutcomeWithinItsTimeWindow(t *testing.T) {
+	t.Parallel()
+	store := openReadModelFixture(t)
+	now := time.Now().UTC()
+	samples := []struct {
+		accountID string
+		key       string
+		age       time.Duration
+		outcome   string
+	}{
+		{"41", "recent-pass", 2 * time.Hour, "passed"},
+		{"41", "older-fail", 48 * time.Hour, "failed"},
+		{"41", "older-unknown", 72 * time.Hour, "inconclusive"},
+		{"41", "expired-pass", 31 * 24 * time.Hour, "passed"},
+		{"42", "other-account-pass", 3 * time.Hour, "passed"},
+	}
+	for _, sample := range samples {
+		_, err := store.db.ExecContext(context.Background(), `INSERT INTO account_stability_samples
+			(account_id,source,evidence_key,observed_at,outcome) VALUES(?,?,?,?,?)`,
+			sample.accountID, "traffic", sample.key, now.Add(-sample.age).Format(healthSampleTimeLayout), sample.outcome)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	accounts, err := store.Accounts(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(accounts) != 2 || accounts[0].Stability == nil || accounts[1].Stability == nil {
+		t.Fatalf("stability projections missing: %#v", accounts)
+	}
+	first := accounts[0].Stability
+	if first.Short.Samples != 1 || first.Short.Passed != 1 || first.Long.Samples != 3 ||
+		first.Long.Passed != 1 || first.Long.Failed != 1 || first.Long.Inconclusive != 1 {
+		t.Fatalf("account 41 stability windows = %#v", first)
+	}
+	other := accounts[1].Stability
+	if other.Short.Samples != 1 || other.Short.Passed != 1 || other.Long.Samples != 1 || other.Long.Passed != 1 {
+		t.Fatalf("account 42 stability windows = %#v", other)
+	}
+}
+
 func TestAccountProjectionReportsDeletedUpstreamKeyGroup(t *testing.T) {
+	t.Parallel()
 	store := openReadModelFixture(t)
 	if _, err := store.Accounts(context.Background()); err != nil {
 		t.Fatal(err)
@@ -179,6 +331,7 @@ func TestAccountProjectionReportsDeletedUpstreamKeyGroup(t *testing.T) {
 }
 
 func TestAccountProjectionUsesLiveKeyGroupWhenBindingGroupIDIsStale(t *testing.T) {
+	t.Parallel()
 	store := openReadModelFixture(t)
 	if _, err := store.db.Exec(`INSERT INTO upstream_groups(host,group_id,name,status,raw_rate,updated_at)
 		VALUES('api.example','gptproo','gptproo','active','0.2','now');
@@ -199,6 +352,7 @@ func TestAccountProjectionUsesLiveKeyGroupWhenBindingGroupIDIsStale(t *testing.T
 }
 
 func TestAccountProjectionPreservesSub2APIErrorStatusAndMessage(t *testing.T) {
+	t.Parallel()
 	store := openReadModelFixture(t)
 	if _, err := store.db.Exec(`UPDATE accounts SET schedulable=0,
 		metadata_json='{"status":"error","error_message":"Access forbidden (403): quota exceeded"}'
@@ -216,6 +370,7 @@ func TestAccountProjectionPreservesSub2APIErrorStatusAndMessage(t *testing.T) {
 }
 
 func TestAccountProjectionExcludesAccountStatePlaceholdersFromRecentResults(t *testing.T) {
+	t.Parallel()
 	store := openReadModelFixture(t)
 	if _, err := store.db.Exec(`INSERT INTO health_samples(
 		account_id,group_name,result,latency_p50,latency_p95,failure_reason,observed_at,source,evidence_key,payload_json
@@ -237,6 +392,7 @@ func TestAccountProjectionExcludesAccountStatePlaceholdersFromRecentResults(t *t
 }
 
 func TestRecentFirstTokenLatencyRequiresExplicitFirstTokenSemantics(t *testing.T) {
+	t.Parallel()
 	latency := sql.NullString{String: "195843", Valid: true}
 	tests := []struct {
 		name    string
@@ -266,6 +422,7 @@ func TestRecentFirstTokenLatencyRequiresExplicitFirstTokenSemantics(t *testing.T
 }
 
 func TestAccountProjectionKeepsTrafficDurationSeparateFromFirstTokenLatency(t *testing.T) {
+	t.Parallel()
 	store := openReadModelFixture(t)
 	if _, err := store.db.Exec(`INSERT INTO health_samples(
 		account_id,group_name,result,latency_p50,latency_p95,observed_at,source,evidence_key,payload_json
@@ -292,6 +449,7 @@ func float64Pointer(value float64) *float64 {
 }
 
 func TestAccountProjectionLimitsRecentResultsWithoutChangingScoringCount(t *testing.T) {
+	t.Parallel()
 	store := openReadModelFixture(t)
 	for index := range 12 {
 		observedAt := fmt.Sprintf("2026-08-26T10:%02d:00Z", index)
@@ -320,6 +478,7 @@ func TestAccountProjectionLimitsRecentResultsWithoutChangingScoringCount(t *test
 }
 
 func TestRecentResultsExposeDistinctStableIDsWhenRequestsShareTimestamp(t *testing.T) {
+	t.Parallel()
 	store := openReadModelFixture(t)
 	for _, key := range []string{"same-time-a", "same-time-b"} {
 		if _, err := store.db.Exec(`INSERT INTO health_samples(account_id,group_name,result,observed_at,source,evidence_key)
@@ -367,6 +526,7 @@ func TestRecentResultsExposeDistinctStableIDsWhenRequestsShareTimestamp(t *testi
 }
 
 func TestRecentEvidenceSelectionUsesBoundedPerAccountWindows(t *testing.T) {
+	t.Parallel()
 	store := openReadModelFixture(t)
 	for index := range 12 {
 		observedAt := fmt.Sprintf("2026-08-30T10:%02d:00Z", index)
@@ -415,6 +575,7 @@ func TestRecentEvidenceSelectionUsesBoundedPerAccountWindows(t *testing.T) {
 }
 
 func TestAccountProjectionIncludesLatestErrorAndUpstreamSchedulingReason(t *testing.T) {
+	t.Parallel()
 	store := openReadModelFixture(t)
 	if _, err := store.db.Exec(`UPDATE accounts SET schedulable=1,metadata_json=? WHERE id='41'`,
 		`{"status":"active","platform":"openai","type":"apikey","error_message":"API returned 503","temp_unschedulable_until":"2099-08-27T13:00:00Z","temp_unschedulable_reason":"令牌刷新失败"}`,
@@ -439,6 +600,7 @@ func TestAccountProjectionIncludesLatestErrorAndUpstreamSchedulingReason(t *test
 }
 
 func TestAccountProjectionSeparatesEffectiveStateFromPendingParameters(t *testing.T) {
+	t.Parallel()
 	allApply := routingApplyView{automatic: true, fields: map[string]bool{
 		"schedulable": true, "priority": true, "load_factor": true, "concurrency": true,
 	}}
@@ -496,6 +658,7 @@ func TestAccountProjectionSeparatesEffectiveStateFromPendingParameters(t *testin
 }
 
 func TestAccountProjectionIgnoresUnscopedWritebackAudit(t *testing.T) {
+	t.Parallel()
 	store := openReadModelFixture(t)
 	if _, err := store.db.Exec(`INSERT INTO operation_audit(
 		source_id,operation_id,operation_type,state,phase,object_id,error,group_names_json,writeback,created_at)
@@ -513,6 +676,7 @@ func TestAccountProjectionIgnoresUnscopedWritebackAudit(t *testing.T) {
 }
 
 func TestAccountProjectionDoesNotExposeDecisionsFromPreviousRuntimeMode(t *testing.T) {
+	t.Parallel()
 	store := openReadModelFixture(t)
 	if _, err := store.db.Exec(`UPDATE app_state SET updated_at='2026-08-26T11:00:00Z'
 		WHERE key='routing-decision-epoch'`); err != nil {
@@ -530,6 +694,7 @@ func TestAccountProjectionDoesNotExposeDecisionsFromPreviousRuntimeMode(t *testi
 }
 
 func TestAccountDetailExposesTypedJSONAndBindingFields(t *testing.T) {
+	t.Parallel()
 	store := openReadModelFixture(t)
 	ctx := context.Background()
 
@@ -549,6 +714,7 @@ func TestAccountDetailExposesTypedJSONAndBindingFields(t *testing.T) {
 }
 
 func TestUpstreamAndGroupCatalogsUseTypedRatesAndPolicyInheritance(t *testing.T) {
+	t.Parallel()
 	store := openReadModelFixture(t)
 	ctx := context.Background()
 	if _, err := store.db.ExecContext(ctx, `UPDATE account_groups SET group_id=NULL WHERE account_id='41'`); err != nil {
@@ -605,6 +771,7 @@ func TestUpstreamAndGroupCatalogsUseTypedRatesAndPolicyInheritance(t *testing.T)
 }
 
 func TestUpstreamGroupsRecognizesBindingsThroughExplicitHostAlias(t *testing.T) {
+	t.Parallel()
 	store := openReadModelFixture(t)
 	ctx := context.Background()
 	if _, err := store.db.ExecContext(ctx, `UPDATE accounts

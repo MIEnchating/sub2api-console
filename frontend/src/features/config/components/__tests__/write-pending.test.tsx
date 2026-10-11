@@ -1,3 +1,4 @@
+import { seedDictionaries } from "@/test/dictionary-fixtures";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
@@ -44,6 +45,7 @@ it("开户策略保存期间锁定字段，保存结束后恢复编辑", () => {
 
 it("平台探活模型保存期间锁定字段，保存结束后恢复编辑", () => {
   const client = new QueryClient({ defaultOptions: { queries: { enabled: false } } });
+  seedDictionaries(client);
   const form = (pending: boolean) => (
     <QueryClientProvider client={client}>
       <PlatformProbeModelsForm
@@ -69,6 +71,7 @@ it("屏蔽规则保存等待期间锁定输入，失败后保留草稿并恢复�
     }),
   );
   const client = new QueryClient({ defaultOptions: { queries: { enabled: false } } });
+  seedDictionaries(client);
   client.setQueryData(["account-model-sync-settings"], { blocked_patterns: ["model-a"] });
   render(
     <QueryClientProvider client={client}>

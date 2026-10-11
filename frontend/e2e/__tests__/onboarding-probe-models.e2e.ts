@@ -1,3 +1,4 @@
+import { dictionaryResponse } from "./fixtures/dictionaries";
 import { expect, test } from "@playwright/test";
 import { pageFixtures } from "./fixtures/page-shell";
 
@@ -95,7 +96,10 @@ for (const batch of [false, true]) {
           last_activity: null,
           mode: "完全模式",
         },
-        "/api/dictionaries": { items: [] },
+        "/api/dictionaries": dictionaryResponse(route.request().url(), [
+          { value: "4", name: "备用 OpenAI" },
+          { value: "3", name: "本地 OpenAI" },
+        ]),
         "/api/inspection/automation": {
           enabled: false,
           interval_seconds: 60,

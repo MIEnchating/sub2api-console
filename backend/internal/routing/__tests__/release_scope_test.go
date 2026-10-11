@@ -7,6 +7,7 @@ import (
 )
 
 func TestOutOfScopeAccountOnlyReceivesReleaseTargetWithCapturedBaseline(t *testing.T) {
+	t.Parallel()
 	for _, scope := range []string{"account_type", "group", "account"} {
 		for _, captured := range []bool{false, true} {
 			name := scope + "/never-managed"

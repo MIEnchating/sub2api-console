@@ -2,6 +2,7 @@ import { ContentRetry } from "@/components/content-retry";
 import { ContentLoading } from "@/components/content-loading";
 import type { GroupAllocation, GroupAllocationChannel, GroupStatus } from "@/api";
 import { AccountHealthScore } from "@/components/account-health-score";
+import { DataTablePagination } from "@/components/data-table/pagination";
 import { DataTablePanel } from "@/components/data-table/table-panel";
 import { StatusBadge, type StatusVariant } from "@/components/status-badge";
 import {
@@ -26,6 +27,8 @@ import { schedulingMetric } from "@/lib/scheduling-display";
 import { schedulingStrategyLabel } from "@/lib/scheduling-strategy";
 import { cn } from "@/lib/utils";
 import { accountStateDictionary } from "@/lib/domain-dictionaries";
+import { useClientPagination } from "@/hooks/use-client-pagination";
+import { useEffect, useMemo, useRef } from "react";
 
 type Props = {
   group: GroupStatus | null;
@@ -40,15 +43,14 @@ export const groupAllocationLayout = {
   dialog: "grid min-w-0 grid-rows-[auto_minmax(0,1fr)] overflow-hidden",
   width: "table",
   height: "tall",
-  content: "flex h-full min-h-0 flex-col gap-3 overflow-hidden",
+  content: "flex h-full min-h-0 flex-col gap-2 overflow-hidden sm:gap-3",
   loading: "h-full",
-  policy:
-    "bg-muted/40 grid min-w-0 grid-cols-1 divide-y overflow-hidden rounded-lg border sm:grid-cols-3 sm:divide-x sm:divide-y-0",
-  policyItem: "grid min-w-0 content-center gap-1.5 px-3 py-2.5",
+  policy: "bg-muted/40 grid min-w-0 grid-cols-3 divide-x overflow-hidden rounded-lg border",
+  policyItem: "grid min-w-0 content-center gap-1 px-2 py-2",
   metrics: "bg-border grid grid-cols-2 gap-px overflow-hidden rounded-lg border lg:grid-cols-4",
-  metric: "bg-popover grid min-w-0 content-start gap-1 px-3 py-3",
+  metric: "bg-popover grid min-w-0 content-start gap-0.5 px-2 py-1 sm:gap-1 sm:px-3 sm:py-3",
   table: "min-w-[1060px] table-fixed",
-  tableContainer: "h-full min-h-0 overflow-auto overscroll-contain",
+  tableContainer: "min-h-0 flex-1 overflow-auto overscroll-contain",
 } as const;
 
 const stateLabels = accountStateDictionary;
@@ -82,13 +84,13 @@ function GroupHeader(props: { allocation: GroupAllocation }) {
       </div>
       <div className={groupAllocationLayout.policyItem}>
         <span className="text-muted-foreground text-xs">巡检策略</span>
-        <strong className="text-base font-semibold">
+        <strong className="text-sm font-semibold sm:text-base">
           {schedulingStrategyLabel(props.allocation.strategy)}策略
         </strong>
       </div>
       <div className={groupAllocationLayout.policyItem}>
         <span className="text-muted-foreground text-xs">测试周期</span>
-        <strong className="text-base font-semibold">
+        <strong className="text-sm font-semibold sm:text-base">
           {interval(props.allocation.probe_interval_seconds)}
         </strong>
       </div>
@@ -97,12 +99,15 @@ function GroupHeader(props: { allocation: GroupAllocation }) {
 }
 
 function stateVariant(state: string): StatusVariant {
-  if (["healthy", "active", "available"].includes(state)) return "success";
-  if (["degraded", "survivor", "cost_blocked", "concurrency_limited"].includes(state))
-    return "warning";
-  if (["fused", "disabled"].includes(state)) return "danger";
+  if (healthyStates.has(state)) return "success";
+  if (warningStates.has(state)) return "warning";
+  if (dangerStates.has(state)) return "danger";
   return "neutral";
 }
+
+const healthyStates = new Set(["healthy", "active", "available"]);
+const warningStates = new Set(["degraded", "survivor", "cost_blocked", "concurrency_limited"]);
+const dangerStates = new Set(["fused", "disabled"]);
 
 const metricToneClasses: Record<StatusVariant, string> = {
   success: "text-success",
@@ -124,7 +129,7 @@ function SummaryMetric(props: {
       <span className="text-muted-foreground truncate text-xs">{props.label}</span>
       <strong
         className={cn(
-          "truncate text-lg font-semibold tabular-nums",
+          "truncate text-base leading-5 font-semibold tabular-nums sm:text-lg sm:leading-7",
           metricToneClasses[props.tone ?? "neutral"],
         )}
       >
@@ -180,11 +185,25 @@ function WeightCell(props: { channel: GroupAllocationChannel; maximum: number })
   );
 }
 
-export function GroupAllocationContent(props: { allocation: GroupAllocation }) {
-  const maximumWeight = Math.max(
-    0,
-    ...props.allocation.channels.map((channel) => channel.weight ?? 0),
+function GroupAllocationContentBody(props: { allocation: GroupAllocation }) {
+  const panelRef = useRef<HTMLDivElement>(null);
+  const pagination = useClientPagination(props.allocation.channels);
+  const maximumWeight = useMemo(
+    () =>
+      props.allocation.channels.reduce(
+        (maximum, channel) => Math.max(maximum, channel.weight ?? 0),
+        0,
+      ),
+    [props.allocation.channels],
   );
+
+  useEffect(() => {
+    const scrollContainer = panelRef.current?.querySelector<HTMLDivElement>(
+      '[data-slot="table-container"]',
+    );
+    if (scrollContainer) scrollContainer.scrollTop = 0;
+  }, [pagination.currentPage, pagination.pageSize]);
+
   const attention = attentionSummary(props.allocation);
   const weightValue = props.allocation.has_allocation
     ? `${schedulingMetric(props.allocation.total_weight)} / ${integer(props.allocation.weight_budget)}`
@@ -227,7 +246,7 @@ export function GroupAllocationContent(props: { allocation: GroupAllocation }) {
         />
       </div>
       {props.allocation.channels.length ? (
-        <DataTablePanel className="flex-1">
+        <DataTablePanel ref={panelRef} className="flex-1">
           <Table
             className={groupAllocationLayout.table}
             containerClassName={groupAllocationLayout.tableContainer}
@@ -245,7 +264,7 @@ export function GroupAllocationContent(props: { allocation: GroupAllocation }) {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {props.allocation.channels.map((channel) => (
+              {pagination.visibleItems.map((channel) => (
                 <TableRow key={channel.account_id}>
                   <TableCell>
                     <AccountHealthScore
@@ -284,6 +303,14 @@ export function GroupAllocationContent(props: { allocation: GroupAllocation }) {
               ))}
             </TableBody>
           </Table>
+          <DataTablePagination
+            currentPage={pagination.currentPage}
+            totalPages={pagination.totalPages}
+            totalItems={props.allocation.channels.length}
+            pageSize={pagination.pageSize}
+            onPageChange={pagination.setCurrentPage}
+            onPageSizeChange={pagination.setPageSize}
+          />
         </DataTablePanel>
       ) : (
         <div className="text-muted-foreground flex min-h-32 items-center justify-center rounded-lg border border-dashed px-4 text-sm">
@@ -294,16 +321,24 @@ export function GroupAllocationContent(props: { allocation: GroupAllocation }) {
   );
 }
 
+export function GroupAllocationContent(props: { allocation: GroupAllocation }) {
+  return (
+    <GroupAllocationContentBody key={props.allocation.group_id} allocation={props.allocation} />
+  );
+}
+
 export function GroupAllocationDialog(props: Props) {
+  const titleRef = useRef<HTMLHeadingElement>(null);
   return (
     <Dialog open={props.group !== null} onOpenChange={(open) => !open && props.onClose()}>
       <DialogContent
         width={groupAllocationLayout.width}
         height={groupAllocationLayout.height}
         className={groupAllocationLayout.dialog}
+        initialFocus={titleRef}
       >
         <DialogHeader>
-          <DialogTitle>
+          <DialogTitle ref={titleRef} tabIndex={-1} className="outline-none">
             {props.group ? `${props.group.name} 调度状态` : "分组账号调度状态"}
           </DialogTitle>
           <DialogDescription>

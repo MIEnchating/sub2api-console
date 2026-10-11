@@ -1,5 +1,5 @@
 import { Controller, type UseFormReturn } from "react-hook-form";
-import { FormField } from "@/App";
+import { FormField } from "@/components/form-field";
 import { Input } from "@/components/ui/input";
 import type { TemplateValues } from "../lib/template-schema";
 import { requestEndpointURL } from "../lib/request-body";

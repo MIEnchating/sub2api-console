@@ -1,18 +1,19 @@
-import type { AnimationResult, GroupStatus, Task, TerminalContinuityResult } from "@/api";
+import type { AnimationResult, GroupStatus, Task } from "@/api";
 import { collectAnimationTasks } from "./animation-task-results";
+import type { TerminalHistoryResult } from "./terminal-continuity";
 export type AccountRow = {
   id: string;
   name: string;
   animation?: AnimationResult;
   precheck?: AnimationResult;
-  terminal?: TerminalContinuityResult;
+  terminal?: TerminalHistoryResult;
 };
 type GroupRows = { id: string; name: string; rows: AccountRow[] };
 
 export function detectionAccountRows(
   task: Task | undefined,
   state: ReturnType<typeof collectAnimationTasks>,
-  terminals: Map<string, TerminalContinuityResult>,
+  terminals: Map<string, TerminalHistoryResult>,
 ): Map<string, AccountRow> {
   const rows = new Map<string, AccountRow>();
   const add = (id: string, name?: string): AccountRow => {

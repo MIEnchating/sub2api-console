@@ -187,7 +187,7 @@ func (s *Service) controlLocked(ctx context.Context, accountID, action, actor st
 	if err != nil {
 		return nil, err
 	}
-	if local.ManualPriority != nil {
+	if local.ManualPriority != nil && action != "fuse" && action != "recover" && action != "resume" {
 		return nil, errors.New("账号处于手动控制，平台控制操作已禁用；请先取消手动控制")
 	}
 	if mode != runtimepolicy.Full {
@@ -585,6 +585,24 @@ func (s *Service) Models(ctx context.Context, accountID string) ([]string, error
 	return models, nil
 }
 
+func (s *Service) PreviewModels(ctx context.Context, accountID string) ([]string, error) {
+	if !stableID(accountID) {
+		return nil, errors.New("账号必须使用有效的稳定 ID")
+	}
+	if _, _, err := s.localAccount(ctx, accountID); err != nil {
+		return nil, err
+	}
+	ctx, err := targetguard.Bind(ctx, s.targets)
+	if err != nil {
+		return nil, err
+	}
+	client, err := s.adminClient(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return client.AccountModels(ctx, accountID)
+}
+
 func (s *Service) EnqueueFields(ctx context.Context, accountID string, patch FieldPatch, actor string) (taskstore.Task, error) {
 	expectedTarget, err := s.targets.TargetSettings(ctx)
 	if err != nil {
@@ -692,12 +710,28 @@ func (s *Service) applySettings(ctx context.Context, accountID string, input Set
 	if _, err := client.Mutate(ctx, http.MethodPut, "/admin/accounts/"+accountID, body); err != nil {
 		return nil, &OperationError{Message: err.Error()}
 	}
+	schedulingSyncAttempted := false
 	rollback := func(cause error) error {
 		rollbackCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 20*time.Second)
 		defer cancel()
 		_, rollbackErr := client.Mutate(rollbackCtx, http.MethodPut, "/admin/accounts/"+accountID, rollbackBody)
+		if schedulingSyncAttempted {
+			// The ordinary update can ignore schedulable, including on rollback.
+			schedulingErr := writeAccountSchedulable(rollbackCtx, client, accountID, rollbackBody["schedulable"].(bool))
+			rollbackErr = errors.Join(rollbackErr, schedulingErr)
+		}
+		if rollbackErr == nil {
+			restored, readErr := client.Account(rollbackCtx, accountID)
+			rollbackErr = readErr
+			if readErr == nil {
+				rollbackErr = verifyAccountSettingsRollback(restored, rollbackBody)
+			}
+		}
 		if rollbackErr != nil {
-			return fmt.Errorf("%w；账号设置远端回滚失败：%v", cause, rollbackErr)
+			return &OperationError{
+				Message:       fmt.Sprintf("%v；账号设置远端回滚未确认：%v；请刷新账号并核对管理端状态", cause, rollbackErr),
+				RemoteWritten: true,
+			}
 		}
 		return cause
 	}
@@ -705,26 +739,30 @@ func (s *Service) applySettings(ctx context.Context, accountID string, input Set
 	if err != nil {
 		return nil, rollback(fmt.Errorf("账号设置写入后读回失败：%w", err))
 	}
-	patch := FieldPatch{
-		PriorityPresent: true, Priority: &input.Priority, LoadFactorPresent: true, LoadFactor: &input.LoadFactor,
-		ConcurrencyPresent: true, Concurrency: &input.Concurrency,
-	}
-	if err := verifyFieldReadback(after, nil, &input.Priority, expectedLoadFactor, &input.Concurrency, nil, nil, nil, patch); err != nil {
+	if err := verifyAccountSettingsParameters(after, input); err != nil {
 		return nil, rollback(err)
-	}
-	if input.FollowConcurrency {
-		loadFactor, err := accountSettingsLoadFactor(after)
-		if err != nil || loadFactor != "0" {
-			return nil, rollback(errors.New("账号负载因子未恢复为跟随并发上限"))
-		}
 	}
 	schedulable, err := accountSchedulable(after)
-	if err != nil || schedulable != !input.Paused {
-		if err == nil {
-			err = errors.New("账号可调度状态读回不一致")
-		}
+	if err != nil {
 		return nil, rollback(err)
 	}
+	if desired := !input.Paused; schedulable != desired {
+		schedulingSyncAttempted = true
+		after, err = syncAccountScheduling(ctx, client, accountID, after, &desired)
+		if err != nil {
+			return nil, rollback(err)
+		}
+		if err := verifyAccountSettingsParameters(after, input); err != nil {
+			return nil, rollback(err)
+		}
+		schedulable, err = accountSchedulable(after)
+		if err != nil {
+			return nil, rollback(err)
+		}
+	}
+	// A successful sync with a still-stale scheduling value must not undo the
+	// operator's settings. Keep the Console state and report readback honestly.
+	readbackConfirmed := schedulable == !input.Paused
 	operationID, err := operationID("account-settings")
 	if err != nil {
 		return nil, rollback(err)
@@ -741,7 +779,7 @@ func (s *Service) applySettings(ctx context.Context, accountID string, input Set
 	}
 	operation := business.AccountOperation{
 		OperationID: operationID, OperationType: "account.settings", State: "succeeded", Phase: "readback",
-		Actor: actor, RemoteConfirmed: true, ReadbackConfirmed: true, ObjectID: accountID,
+		Actor: actor, RemoteConfirmed: true, ReadbackConfirmed: readbackConfirmed, ObjectID: accountID,
 		ObjectName: &local.Name, GroupNames: []string{}, FieldName: &field, Before: beforeValues,
 		After: afterValues, Writeback: true,
 	}
@@ -753,7 +791,7 @@ func (s *Service) applySettings(ctx context.Context, accountID string, input Set
 	}
 	return map[string]any{
 		"operation_id": operationID, "account_id": accountID, "before": beforeValues,
-		"after": afterValues, "remote_write": true, "readback_confirmed": true,
+		"after": afterValues, "remote_write": true, "readback_confirmed": readbackConfirmed,
 	}, nil
 }
 

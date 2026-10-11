@@ -1,0 +1,12 @@
+frontend/src/features/model-check/components/animation-manual-verdict.tsx	09c6750b7ecf66ec48a959b30377091b7866e8cdb21d1591aa80807b8763d9c6	fixed	全文复审；稳定select按账号/请求消费缓存结果与独立任务状态，避免每卡片整批汇总；保存/取消读取/共享禁用/提示与焦点不变。
+frontend/src/features/model-check/lib/animation-task-results.ts	866ece97df3726b23e5fdd49ac9727c123f2037f9f195f860e70fbfb90270b79	fixed	全文复审；单账号可先筛ID再校验，统一阶段模式判断，仍保留旧格式/来源/精确排序。无全局缓存，原数组仍需扫描。
+frontend/src/features/model-check/components/__tests__/animation-manual-verdict.test.tsx	c8d09010400d6ee1cb5df5886b1b28137f3e0f80dc7ccd3beb82ead263defb44	reviewed	全文复审；新增缓存清除/请求隔离/运行到终态/账号切换交互，统一清理QueryClient；11项最终通过。
+frontend/src/features/model-check/components/__tests__/animation-manual-verdict.bench.tsx	d72d1e4fc1151eda76655a361ffabca1a3b2cf328f828e088054ca6534dbb956	reviewed	全文阅读；真实SSR与旧整批汇总/新单账号选择基准，共享100账号200结果夹具且校验20标记，最终清理QueryClient。
+frontend/src/features/model-check/lib/__tests__/animation-task-selection.test.ts	8b2d0066e8c1d0422ce970b9558d221f3f3b5fbb70e76b79bb9eb8478058d625	reviewed	全文阅读；21项保护单账号选择、无效字段/空集合、请求和来源、精确时间及各任务阶段兼容。
+frontend/src/features/model-check/lib/__tests__/animation-task-results.test.ts	d52528bab7b58509427c32428dab2b9273590b5d2f824a9f6e75c3127c5466ab	reviewed	全文复审；既有全量汇总各格式、账号占用、纳秒排序及目标来源回归保留，30项通过。
+frontend/src/features/model-check/lib/__tests__/combined-task-results.test.ts	170cdbb0e3b3a3e20bbd096a1fccc23c333fb0d0bf76980135eb92f18cf214b1	reviewed	全文复审；组合任务双结果和生成阶段过滤、无效更新隔离，4项通过。
+frontend/src/features/model-check/lib/__tests__/animation-task-results.bench.ts	33a5637f336c0cdeb510a8c82e4cd6bf2d237bb70af42b435cb298afe7190ff8	reviewed	全文阅读；固定100任务4000结果汇总基准，结果数量/忙碌账号校验；本轮未重跑该基准。
+frontend/src/features/model-check/hooks/use-animation-tasks.ts	b9e65f8e37bf9793042a226ddb83c369a7b6b1fb73e3ad898562c8e278f458ce	reviewed	全文复审；Query combine保留数据引用，历史版本/清理和创建ID释放，memo汇总及同步提交互斥。仍读取每个历史完整详情，提交前全量汇总后续审查。
+frontend/src/features/model-check/components/animation-account-result.tsx	bb704b6a01dc136c895b2fc6c6f03e6b0cfa20a9761804d8fb4e4483c5da5619	reviewed	全文阅读；真实生成/失败/活动状态和详情/手动标记入口；本轮未改，日期格式/状态色统一后续审查。
+frontend/src/features/model-check/components/detection-task-stages.tsx	46403184c632e51022b6f1f087eaa1a74de2cd942ba87ee71559aca84c5a6ad9	reviewed	全文阅读；复用阶段字典、字段错误、禁用及ARIA，条件显示前置题目；本輪模型模块回归通过。
+frontend/src/features/model-check/lib/detection-task-stages.ts	08754a20beee107ac5296f03e59701ac90964e9bdf9d35aaee17728fe28d7c47	reviewed	全文阅读；仅前置和动画，旧缺动画开关按开启，终端旧字段不形成新阶段。

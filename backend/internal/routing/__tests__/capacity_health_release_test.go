@@ -8,6 +8,7 @@ import (
 )
 
 func TestConfirmedAutomaticFuseReleasesSharedCapacityForHealthySibling(t *testing.T) {
+	t.Parallel()
 	waiting, fused := upstreamCapacityAccount("41", 1, 10), upstreamCapacityAccount("42", 10, 10)
 	stopped := false
 	waiting.Schedulable, waiting.EffectiveState = &stopped, "concurrency_limited"
@@ -24,6 +25,7 @@ func TestConfirmedAutomaticFuseReleasesSharedCapacityForHealthySibling(t *testin
 }
 
 func TestNewAPIWaitingAccountWithScalingEnabledDoesNotRequireSub2APIIdentity(t *testing.T) {
+	t.Parallel()
 	account := upstreamCapacityAccount("41", 1, 10)
 	stopped, kind := false, "newapi"
 	account.Schedulable, account.EffectiveState = &stopped, "concurrency_limited"
@@ -39,6 +41,7 @@ func TestNewAPIWaitingAccountWithScalingEnabledDoesNotRequireSub2APIIdentity(t *
 }
 
 func TestAutomaticFuseReservationIsRetainedWithoutConfirmedManagedStop(t *testing.T) {
+	t.Parallel()
 	for _, scenario := range []string{"manual pause", "manual fuse", "outside allocation", "unconfirmed", "remote active", "external control"} {
 		t.Run(scenario, func(t *testing.T) {
 			waiting, fused := upstreamCapacityAccount("41", 1, 10), upstreamCapacityAccount("42", 10, 10)
@@ -74,6 +77,7 @@ func TestAutomaticFuseReservationIsRetainedWithoutConfirmedManagedStop(t *testin
 }
 
 func TestGlobalBudgetRebalancesAcrossUpstreamsWithoutStarvingHealthyAccounts(t *testing.T) {
+	t.Parallel()
 	first, second := upstreamCapacityAccount("41", 10, 100), upstreamCapacityAccount("42", 10, 100)
 	second.UpstreamID = "upstream-2"
 	r := allocationFixture(t, first, second)
@@ -95,6 +99,7 @@ func TestGlobalBudgetRebalancesAcrossUpstreamsWithoutStarvingHealthyAccounts(t *
 }
 
 func TestGlobalBudgetRedistributesUnusedSmallUpstreamShare(t *testing.T) {
+	t.Parallel()
 	first, second := upstreamCapacityAccount("41", 1, 2), upstreamCapacityAccount("42", 1, 100)
 	second.UpstreamID = "upstream-2"
 	r := allocationFixture(t, first, second)
@@ -112,6 +117,7 @@ func TestGlobalBudgetRedistributesUnusedSmallUpstreamShare(t *testing.T) {
 }
 
 func TestScarceGlobalBudgetKeepsUnselectedUpstreamWaitingForHealthyPeer(t *testing.T) {
+	t.Parallel()
 	unknown, healthy := upstreamCapacityAccount("41", 1, 10), upstreamCapacityAccount("42", 1, 10)
 	unknown.UpstreamID, healthy.UpstreamID = "upstream-1", "upstream-2"
 	stopped := false
@@ -136,6 +142,7 @@ func TestScarceGlobalBudgetKeepsUnselectedUpstreamWaitingForHealthyPeer(t *testi
 }
 
 func TestHealthyWaitingAccountGetsCapacityBeforeAccountWithoutHealthEvidence(t *testing.T) {
+	t.Parallel()
 	unknown, healthy := upstreamCapacityAccount("41", 1, 1), upstreamCapacityAccount("42", 1, 1)
 	stopped := false
 	healthy.Schedulable, healthy.EffectiveState = &stopped, "concurrency_limited"

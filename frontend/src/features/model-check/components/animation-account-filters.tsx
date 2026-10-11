@@ -1,11 +1,19 @@
 import { useMemo, type ReactElement } from "react";
-import { RotateCcw } from "lucide-react";
+import { ArrowDownUp, RotateCcw } from "lucide-react";
 import type { AccountStatus } from "@/api";
 import { FilterMenu } from "@/components/data-table/filter-menu";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { animationAccountSortOptions, type AnimationAccountSort } from "../constants";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { useDictionaryOrder } from "@/hooks/use-dictionary-order";
+import { useDictionaryOrder, useDictionaryLabel } from "@/hooks/use-dictionary-order";
 import {
   defaultAnimationFilters,
   priorityLabels,
@@ -31,6 +39,7 @@ export function AnimationAccountFilters(props: {
     ],
     [props.accounts],
   );
+  const platformLabel = useDictionaryLabel("platform", (value) => value);
   const orderedPlatforms = useDictionaryOrder("platform", platforms, (platform) => platform);
   const orderedGroups = useDictionaryOrder("group", groups, (group) => group, "name");
   return (
@@ -48,13 +57,16 @@ export function AnimationAccountFilters(props: {
       />
       <FilterMenu
         label="分组"
+        dictionaryKind="group"
         options={orderedGroups}
         value={props.value.group}
         onValueChange={(group) => props.onChange({ ...props.value, group })}
       />
       <FilterMenu
         label="平台"
+        dictionaryKind="platform"
         options={orderedPlatforms}
+        optionLabel={platformLabel}
         value={props.value.platform}
         onValueChange={(platform) => props.onChange({ ...props.value, platform })}
       />
@@ -65,6 +77,28 @@ export function AnimationAccountFilters(props: {
         value={props.value.priority}
         onValueChange={(priority) => props.onChange({ ...props.value, priority })}
       />
+      <Select<AnimationAccountSort>
+        value={props.value.sort}
+        onValueChange={(sort) => {
+          if (sort) props.onChange({ ...props.value, sort });
+        }}
+        items={animationAccountSortOptions}
+        itemToStringLabel={(value) =>
+          animationAccountSortOptions.find((option) => option.value === value)?.label ?? "默认排序"
+        }
+      >
+        <SelectTrigger aria-label="账号排序" className="w-full sm:w-44">
+          <ArrowDownUp aria-hidden="true" />
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          {animationAccountSortOptions.map((option) => (
+            <SelectItem key={option.value} value={option.value}>
+              {option.label}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
       <Tooltip>
         <TooltipTrigger
           render={
@@ -77,7 +111,8 @@ export function AnimationAccountFilters(props: {
                 !props.value.query &&
                 !props.value.group &&
                 !props.value.platform &&
-                !props.value.priority
+                !props.value.priority &&
+                props.value.sort === "default"
               }
               onClick={() => props.onChange(defaultAnimationFilters)}
             />

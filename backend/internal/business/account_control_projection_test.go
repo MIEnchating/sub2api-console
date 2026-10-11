@@ -8,6 +8,7 @@ import (
 )
 
 func TestManualFuseReadbackExposesReasonWithoutRoutingDecision(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{runtimepolicy.Full, runtimepolicy.Monitoring} {
 		t.Run(mode, func(t *testing.T) {
 			store := openPolicyStore(t)
@@ -36,6 +37,7 @@ func TestManualFuseReadbackExposesReasonWithoutRoutingDecision(t *testing.T) {
 }
 
 func TestManualRecoveryClearsManualFuseReason(t *testing.T) {
+	t.Parallel()
 	store := openPolicyStore(t)
 	ctx := context.Background()
 	if _, err := store.db.ExecContext(ctx, `INSERT INTO accounts(id,name,metadata_json,updated_at) VALUES('41','channel-41','{"status":"active"}','now')`); err != nil {
@@ -56,6 +58,7 @@ func TestManualRecoveryClearsManualFuseReason(t *testing.T) {
 }
 
 func TestManualFuseProjectionOverridesStaleSchedulerTarget(t *testing.T) {
+	t.Parallel()
 	stopped, previouslySchedulable := false, true
 	item := accountProjection{
 		AccountStatus: AccountStatus{

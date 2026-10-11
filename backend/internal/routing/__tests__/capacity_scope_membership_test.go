@@ -7,6 +7,7 @@ import (
 )
 
 func TestCapacityWriterUsesSamePrimaryGroupScalingAsCalculation(t *testing.T) {
+	t.Parallel()
 	for _, on := range []bool{false, true} {
 		t.Run(map[bool]string{false: "primary off secondary on", true: "primary on secondary off"}[on], func(t *testing.T) {
 			account := upstreamCapacityAccount("41", 1, 10)
@@ -28,6 +29,7 @@ func TestCapacityWriterUsesSamePrimaryGroupScalingAsCalculation(t *testing.T) {
 }
 
 func TestSharedAllocationDoesNotConstrainNewAPIWhenItsGroupScalingIsOff(t *testing.T) {
+	t.Parallel()
 	account := upstreamCapacityAccount("41", 31, 100)
 	kind := "newapi"
 	account.UpstreamType = &kind
@@ -43,6 +45,7 @@ func TestSharedAllocationDoesNotConstrainNewAPIWhenItsGroupScalingIsOff(t *testi
 }
 
 func TestStaleSharedQuotaStillHonorsEnabledScalingReductionStep(t *testing.T) {
+	t.Parallel()
 	account := upstreamCapacityAccount("41", 40, 10)
 	r := allocationFixture(t, account)
 	r.accounts[0].UpstreamConcurrencyStatus = "stale"

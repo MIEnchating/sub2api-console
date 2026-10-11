@@ -56,8 +56,22 @@ Cached:          100 kB
 	}
 }
 
-func TestParseMemoryRejectsMissingTotal(t *testing.T) {
-	if _, err := parseMemory(strings.NewReader("MemAvailable: 100 kB\n")); err == nil {
-		t.Fatal("expected missing total error")
+func TestParseMemoryRejectsMissingRequiredStatistic(t *testing.T) {
+	for _, fixture := range []struct{ name, input string }{
+		{"total", "MemAvailable: 100 kB\n"},
+		{"available", "MemTotal: 1000 kB\nMemFree: 100 kB\n"},
+	} {
+		t.Run(fixture.name, func(t *testing.T) {
+			if _, err := parseMemory(strings.NewReader(fixture.input)); err == nil {
+				t.Fatalf("expected missing %s error", fixture.name)
+			}
+		})
+	}
+}
+
+func TestParseMemoryAcceptsExplicitZeroAvailable(t *testing.T) {
+	memory, err := parseMemory(strings.NewReader("MemTotal: 1000 kB\nMemAvailable: 0 kB\n"))
+	if err != nil || memory.UsagePercent != 100 || memory.AvailableBytes != 0 || memory.UsedBytes != 1024000 {
+		t.Fatalf("explicit zero available: %#v, %v", memory, err)
 	}
 }

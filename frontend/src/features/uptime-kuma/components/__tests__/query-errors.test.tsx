@@ -51,7 +51,7 @@ describe("Uptime Kuma 查询错误提示", () => {
         <main>{page}</main>
       </QueryClientProvider>,
     );
-    expect(await screen.findByText("请求失败（404）")).toBeVisible();
+    await waitFor(() => expect(screen.getByText("请求失败（404）")).toBeVisible());
     await waitFor(() =>
       expect(view.container.querySelector("main")).not.toHaveTextContent(/失败|重试/),
     );

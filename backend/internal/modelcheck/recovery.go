@@ -10,7 +10,6 @@ import (
 
 	"github.com/MIEnchating/sub2api-console/backend/internal/targetguard"
 	"github.com/MIEnchating/sub2api-console/backend/internal/taskrecovery"
-	"github.com/MIEnchating/sub2api-console/backend/internal/taskrunner"
 	"github.com/MIEnchating/sub2api-console/backend/internal/taskstore"
 )
 
@@ -49,6 +48,9 @@ func (s *Service) prepareRecovery(ctx context.Context, task *taskstore.Task, inp
 }
 
 func (s *Service) ResumeTask(ctx context.Context, task taskstore.Task) error {
+	if task.Operation == "account-terminal-continuity" {
+		return errors.New("终端检测已移除，历史任务不再恢复")
+	}
 	var input detectionRecovery
 	if err := taskstore.RecoveryInput(task, &input); err != nil {
 		return err
@@ -71,6 +73,9 @@ func (s *Service) ResumeTask(ctx context.Context, task taskstore.Task) error {
 		ctx = targetguard.Expect(ctx, target)
 	}
 	if input.Configuration != nil {
+		if input.Configuration.Terminal {
+			return errors.New("终端检测已移除，请重新提交动画检测或前置检测任务")
+		}
 		return s.resumeManagedTask(ctx, task, input)
 	}
 	request, accounts, err := s.prepareAnimation(ctx, input.Request)
@@ -91,16 +96,11 @@ func (s *Service) ResumeTask(ctx context.Context, task taskstore.Task) error {
 		release()
 		return err
 	}
-	err = taskrunner.GoTask(s.taskRunner, task.ID, func(parent context.Context) {
-		defer release()
+	err = taskrecovery.Enqueue(s.taskRunner, s.tasks, task, release, func(parent context.Context, task taskstore.Task) {
 		if target != nil {
 			parent = targetguard.Expect(parent, *target)
 		}
-		if task.Operation == "account-terminal-continuity" {
-			s.executeTerminalContinuity(parent, task, request, accounts, input.Rounds)
-		} else {
-			s.executeAnimation(parent, task, request, accounts)
-		}
+		s.executeAnimation(parent, task, request, accounts)
 	})
 	if err != nil {
 		release()
@@ -123,6 +123,11 @@ func (s *Service) resumeManagedTask(ctx context.Context, task taskstore.Task, in
 		return taskrecovery.ErrBusy
 	}
 	value = cloneDetectionTask(value)
+	value.Prompt = input.Configuration.Prompt
+	if err := validateDetectionTask(value); err != nil {
+		state.mu.Unlock()
+		return err
+	}
 	state.active[value.ID] = task.ID
 	state.last[value.ID] = task.ID
 	state.mu.Unlock()
@@ -144,10 +149,14 @@ func (s *Service) resumeManagedTask(ctx context.Context, task taskstore.Task, in
 		releaseState()
 		return err
 	}
-	if err := bindDetectionRecovery(&task, accounts); err != nil {
+	// Validate legacy checkpoints without changing the queued snapshot. The
+	// execution path persists newly established bindings after it reloads scope.
+	validationTask := task
+	if err := bindDetectionRecovery(&validationTask, accounts); err != nil {
 		releaseState()
 		return err
 	}
+	validatedRecovery := validationTask.Recovery
 	releaseAccounts, err := s.reserveDetectionAccounts(accounts)
 	if err != nil {
 		releaseState()
@@ -159,8 +168,8 @@ func (s *Service) resumeManagedTask(ctx context.Context, task taskstore.Task, in
 		release()
 		return err
 	}
-	err = taskrunner.GoTask(s.taskRunner, task.ID, func(parent context.Context) {
-		defer release()
+	err = taskrecovery.Enqueue(s.taskRunner, s.tasks, task, release, func(parent context.Context, task taskstore.Task) {
+		task.Recovery = validatedRecovery
 		if target != nil {
 			parent = targetguard.Expect(parent, *target)
 		}
@@ -190,28 +199,6 @@ func animationResultKey(accountID, mode string) string {
 		mode = "animation"
 	}
 	return accountID + ":" + mode
-}
-
-func upsertTerminal(values []TerminalContinuityResult, result TerminalContinuityResult) []TerminalContinuityResult {
-	for i, value := range values {
-		if value.AccountID == result.AccountID {
-			values[i] = result
-			return values
-		}
-	}
-	return append(values, result)
-}
-func terminalCounts(values []TerminalContinuityResult) (int, int) {
-	complete, success := 0, 0
-	for _, value := range values {
-		if !value.Incomplete {
-			complete++
-			if value.Verdict != "error" {
-				success++
-			}
-		}
-	}
-	return complete, success
 }
 
 func bindDetectionRecovery(task *taskstore.Task, accounts []selectedAccount) error {

@@ -69,3 +69,76 @@ it("Base URL 修复完成后只提示一次该修复结果", async () => {
   expect(success).toHaveBeenCalledTimes(1);
   client.clear();
 });
+
+it("修复任务运行时关闭并从维护菜单重开只查看结果，不启动另一轮检查", async () => {
+  vi.spyOn(api, "accounts").mockResolvedValue([
+    {
+      ...account,
+      base_url_check: "official_mismatch",
+      base_url_source: "platform_default",
+      upstream_base_url: "https://api.example.test",
+    },
+  ]);
+  vi.spyOn(api, "policy").mockResolvedValue(policy);
+  const check = vi
+    .spyOn(api, "checkAccountConfiguration")
+    .mockResolvedValue(task("configuration-check", "queued"));
+  vi.spyOn(api, "repairAccountBaseURLs").mockResolvedValue(task("base-url-repair", "queued"));
+  vi.spyOn(api, "task").mockImplementation(async (id) =>
+    task(id, id === "base-url-repair" ? "running" : "succeeded"),
+  );
+  client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  render(
+    <QueryClientProvider client={client}>
+      <AccountsPage />
+    </QueryClientProvider>,
+  );
+  await screen.findByText(account.name);
+  fireEvent.click(screen.getByRole("button", { name: "账号维护" }));
+  fireEvent.click(await screen.findByRole("menuitem", { name: "配置校验与修复" }));
+  fireEvent.click(await screen.findByRole("button", { name: "修复并恢复" }));
+  expect(await screen.findByRole("button", { name: "修复中" })).toBeDisabled();
+  fireEvent.click(screen.getByRole("button", { name: "关闭" }));
+  await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  fireEvent.click(screen.getByRole("button", { name: "账号维护" }));
+  fireEvent.click(await screen.findByRole("menuitem", { name: "配置校验与修复" }));
+  expect(await screen.findByRole("button", { name: "修复中" })).toBeDisabled();
+  expect(check).toHaveBeenCalledTimes(1);
+});
+
+it("修复创建请求未返回时禁止重新运行，创建失败后恢复操作", async () => {
+  vi.spyOn(api, "accounts").mockResolvedValue([
+    {
+      ...account,
+      base_url_check: "official_mismatch",
+      base_url_source: "platform_default",
+      upstream_base_url: "https://api.example.test",
+    },
+  ]);
+  vi.spyOn(api, "policy").mockResolvedValue(policy);
+  vi.spyOn(api, "checkAccountConfiguration").mockResolvedValue(task("configuration-check"));
+  let rejectRepair: (error: Error) => void = () => undefined;
+  vi.spyOn(api, "repairAccountBaseURLs").mockReturnValue(
+    new Promise<ReturnType<typeof task>>((_resolve, reject) => {
+      rejectRepair = reject;
+    }),
+  );
+  vi.spyOn(api, "task").mockImplementation(async (id) => task(id));
+  const failure = vi.spyOn(toast, "error");
+  client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  render(
+    <QueryClientProvider client={client}>
+      <AccountsPage />
+    </QueryClientProvider>,
+  );
+  await screen.findByText(account.name);
+  fireEvent.click(screen.getByRole("button", { name: "账号维护" }));
+  fireEvent.click(await screen.findByRole("menuitem", { name: "配置校验与修复" }));
+  fireEvent.click(await screen.findByRole("button", { name: "修复并恢复" }));
+  expect(await screen.findByRole("button", { name: "修复中" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "重新运行" })).toBeDisabled();
+  rejectRepair(new Error("修复服务暂不可用"));
+  await waitFor(() => expect(screen.getByRole("button", { name: "重新运行" })).toBeEnabled());
+  expect(screen.getByRole("button", { name: "修复并恢复" })).toBeEnabled();
+  expect(failure).toHaveBeenCalledTimes(1);
+});

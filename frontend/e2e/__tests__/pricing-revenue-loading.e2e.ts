@@ -63,7 +63,15 @@ test("收益报告加载时预留分类导航并匹配十二列表格，读取�
   page,
   colorScheme,
 }) => {
-  const held = await isolate(page, "/api/pricing/revenue/latest", colorScheme);
+  await isolate(page, "/unused", colorScheme);
+  let release!: () => void;
+  const responseReady = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await page.route("**/api/pricing/revenue/latest", async (route) => {
+    await responseReady;
+    await route.fulfill({ json: revenueTask() });
+  });
   await page.goto("/revenue-analysis");
   const loading = page.getByRole("status", { name: "正在读取最近一次分析" });
   await expect(loading).toBeVisible();
@@ -77,8 +85,7 @@ test("收益报告加载时预留分类导航并匹配十二列表格，读取�
       .locator('[data-slot="page-content"]')
       .evaluate((element) => element.scrollWidth <= element.clientWidth),
   ).toBe(true);
-  await expect.poll(() => held.length).toBe(1);
-  await held[0].fulfill({ json: revenueTask() });
+  release();
   const tabs = page.getByRole("tablist", { name: "收益分析视图" });
   await expect(tabs).toBeVisible();
   expect((await tabs.boundingBox())!.height).toBe(navigationBefore.height);

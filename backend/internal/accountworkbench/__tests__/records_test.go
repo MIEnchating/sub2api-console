@@ -35,3 +35,24 @@ func TestRunDirectoryIsSessionScopedAndNeverReturnsPrivateSources(t *testing.T) 
 		t.Fatal("another session read record by ID")
 	}
 }
+
+func TestRunDirectoryDoesNotDecodePrivateExecutionFields(t *testing.T) {
+	service, store := fixture(t, `{}`)
+	owner, _ := previewOwner(t, store)
+	id := "22222222222222222222222222222222"
+	raw, err := json.Marshal(map[string]any{
+		"owner":  owner,
+		"public": accountworkbench.Run{ID: id, Status: "running"},
+		"items":  "private execution data is not a public run item",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = store.SaveWorkbenchDocument(t.Context(), "run:"+owner+":"+id, 0, raw); err != nil {
+		t.Fatal(err)
+	}
+	runs, err := service.Runs(t.Context(), owner)
+	if err != nil || len(runs) != 1 || runs[0].ID != id {
+		t.Fatalf("public directory should not depend on private execution fields: runs=%v err=%v", runs, err)
+	}
+}

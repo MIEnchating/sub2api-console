@@ -9,10 +9,13 @@ export function ProbeModelInheritance(props: {
   groupIds: (string | null)[];
   metadata?: Record<string, unknown>;
 }): ReactElement {
-  const policy = useQuery({ queryKey: ["policy"], queryFn: api.policy });
+  const policy = useQuery({
+    queryKey: ["policy"],
+    queryFn: ({ signal }) => api.policy(signal),
+  });
   const groups = useQuery({
     queryKey: ["groups"],
-    queryFn: api.groups,
+    queryFn: ({ signal }) => api.groups(signal),
     enabled: props.groupIds.length > 0,
   });
   const loading =

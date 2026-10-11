@@ -16,6 +16,19 @@ import (
 
 var ErrGroupNotFound = errors.New("分组不存在")
 
+const maxGroupBatchSize = 500
+
+// GroupBatchAction is the deliberately small set of mutations exposed by the
+// groups batch control. Keeping the action closed prevents callers from
+// smuggling arbitrary policy patches into the atomic path.
+type GroupBatchAction string
+
+const (
+	GroupBatchReset   GroupBatchAction = "reset"
+	GroupBatchExclude GroupBatchAction = "exclude"
+	GroupBatchInclude GroupBatchAction = "include"
+)
+
 var groupPolicyFields = map[string]struct{}{
 	"enabled": {}, "strategy": {}, "min_pool_size": {}, "weight_budget": {}, "balanced_price_ratio": {},
 	"breaker_enabled": {}, "recovery_enabled": {}, "weights_enabled": {}, "scaling_enabled": {},
@@ -230,6 +243,119 @@ func (s *Store) SetGroupExcluded(ctx context.Context, groupID string, excluded b
 	return s.groupByID(ctx, groupID)
 }
 
+// BatchGroupPolicy applies one closed action to all requested stable group IDs
+// in a single transaction. It intentionally returns only a count: callers
+// already have the selected rows and can invalidate the groups query once,
+// avoiding N post-write catalog reads.
+func (s *Store) BatchGroupPolicy(ctx context.Context, groupIDs []string, action GroupBatchAction, actor string) (int, error) {
+	if len(groupIDs) == 0 || len(groupIDs) > maxGroupBatchSize {
+		return 0, fmt.Errorf("批量分组数量必须在 1 到 %d 个之间", maxGroupBatchSize)
+	}
+	switch action {
+	case GroupBatchReset, GroupBatchExclude, GroupBatchInclude:
+	default:
+		return 0, fmt.Errorf("不支持的批量分组操作")
+	}
+	seen := make(map[string]struct{}, len(groupIDs))
+	for _, groupID := range groupIDs {
+		if !stableNumericID(groupID) {
+			return 0, fmt.Errorf("分组必须使用已登记的稳定数字 ID")
+		}
+		if _, duplicate := seen[groupID]; duplicate {
+			return 0, fmt.Errorf("批量分组 ID 不能重复：%s", groupID)
+		}
+		seen[groupID] = struct{}{}
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+	names := make(map[string]string, len(groupIDs))
+	for _, groupID := range groupIDs {
+		name, lookupErr := registeredGroup(ctx, tx, groupID)
+		if lookupErr != nil {
+			return 0, lookupErr
+		}
+		names[groupID] = name
+	}
+	control, err := s.readPolicyDocument(ctx, tx, "control-plane")
+	if err != nil {
+		return 0, err
+	}
+	if control == nil {
+		return 0, fmt.Errorf("控制面策略不可用，无法执行批量分组操作")
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	switch action {
+	case GroupBatchReset:
+		bindings, ok := control["group_policy_bindings"].(map[string]any)
+		if !ok && control["group_policy_bindings"] != nil {
+			return 0, fmt.Errorf("策略字段 group_policy_bindings 必须是对象")
+		}
+		bindings = copyObject(bindings)
+		for _, groupID := range groupIDs {
+			delete(bindings, groupID)
+		}
+		control["group_policy_bindings"] = bindings
+	case GroupBatchExclude, GroupBatchInclude:
+		scope, ok := control["scope"].(map[string]any)
+		if !ok {
+			return 0, fmt.Errorf("策略字段 scope 必须是对象")
+		}
+		scope = copyObject(scope)
+		excludedIDs, normalizeErr := normalizedStringArray("scope.excluded_group_ids", defaultArray(scope["excluded_group_ids"]))
+		if normalizeErr != nil {
+			return 0, normalizeErr
+		}
+		for _, groupID := range groupIDs {
+			if action == GroupBatchExclude {
+				excludedIDs = appendUniqueFold(excludedIDs, groupID)
+			} else {
+				excludedIDs = removeTextFold(excludedIDs, groupID)
+			}
+		}
+		scope["excluded_group_ids"] = excludedIDs
+		control["scope"] = scope
+	}
+	if err := s.writePolicyDocument(ctx, tx, "control-plane", control, now); err != nil {
+		return 0, err
+	}
+	if action == GroupBatchReset {
+		strategy, strategyErr := effectiveGlobalStrategy(control)
+		if strategyErr != nil {
+			return 0, strategyErr
+		}
+		for _, groupID := range groupIDs {
+			if _, updateErr := tx.ExecContext(ctx, `UPDATE local_groups SET strategy=?,strategy_source='global_default',updated_at=? WHERE remote_id=?`, strategy, now, groupID); updateErr != nil {
+				return 0, updateErr
+			}
+		}
+	}
+	for _, groupID := range groupIDs {
+		eventType, summary := "group.scope.updated", ""
+		payload := map[string]any{"actor": strings.TrimSpace(actor), "group_id": groupID}
+		switch action {
+		case GroupBatchReset:
+			eventType = "group.policy.cleared"
+			summary = "分组策略已回落到全局：" + names[groupID]
+		case GroupBatchExclude:
+			summary = "分组已排除：" + names[groupID]
+			payload["excluded"] = true
+		case GroupBatchInclude:
+			summary = "分组已恢复管控：" + names[groupID]
+			payload["excluded"] = false
+		}
+		if err := insertRuntimeEvent(ctx, tx, eventType, summary, payload, now); err != nil {
+			return 0, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return len(groupIDs), nil
+}
+
 func normalizeGroupPolicyBinding(payload map[string]any) (map[string]any, error) {
 	result := map[string]any{}
 	for _, field := range []string{"enabled", "breaker_enabled", "recovery_enabled", "weights_enabled", "scaling_enabled", "probe_enabled", "animation_enabled"} {
@@ -386,7 +512,7 @@ func removeTextFold(values []any, text string) []any {
 }
 
 func (s *Store) groupByID(ctx context.Context, groupID string) (GroupStatus, error) {
-	groups, err := s.Groups(ctx)
+	groups, err := s.groups(ctx, groupID)
 	if err != nil {
 		return GroupStatus{}, err
 	}

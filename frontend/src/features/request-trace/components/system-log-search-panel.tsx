@@ -8,6 +8,7 @@ import { TableFilterToolbar } from "@/components/data-table/filter-toolbar";
 import { DataTablePagination } from "@/components/data-table/pagination";
 import { DataTablePanel } from "@/components/data-table/table-panel";
 import { QueryErrorToast } from "@/components/query-error-toast";
+import { ContentRetry } from "@/components/content-retry";
 import { StatusBadge } from "@/components/status-badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -132,21 +133,6 @@ export type ReadableSystemLog = {
   protocol: string;
   host: string;
 };
-
-type SystemLogSubmission = {
-  query: SystemLogSearchQuery;
-  execution: number;
-};
-
-export function nextSystemLogSubmission(
-  current: SystemLogSubmission | null,
-  query: SystemLogSearchQuery,
-): SystemLogSubmission {
-  return {
-    query,
-    execution: (current?.execution ?? 0) + 1,
-  };
-}
 
 export function readableSystemLog(record: UsageRecord): ReadableSystemLog {
   const message = messageValues(record.summary ?? "");
@@ -286,10 +272,10 @@ function SystemLogResult(props: { record: UsageRecord }) {
 
 export function SystemLogSearchPanel() {
   const [form, setForm] = useState<SystemLogSearchQuery>(emptySearch);
-  const [submitted, setSubmitted] = useState<SystemLogSubmission | null>(null);
+  const [submitted, setSubmitted] = useState<SystemLogSearchQuery | null>(null);
   const logs = useQuery({
-    queryKey: ["sub2api-system-logs", submitted?.query, submitted?.execution],
-    queryFn: () => api.systemLogs(submitted!.query),
+    queryKey: ["sub2api-system-logs", submitted],
+    queryFn: (context) => api.systemLogs(submitted!, context.signal),
     enabled: submitted !== null,
     retry: false,
   });
@@ -303,12 +289,21 @@ export function SystemLogSearchPanel() {
 
   function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (logs.isFetching) return;
     const query = {
       ...form,
       requestId: form.requestId.trim(),
       page: 1,
     };
-    setSubmitted((current) => nextSystemLogSubmission(current, query));
+    if (
+      submitted?.requestId === query.requestId &&
+      submitted.page === query.page &&
+      submitted.pageSize === query.pageSize
+    ) {
+      void logs.refetch();
+    } else {
+      setSubmitted(query);
+    }
   }
 
   function reset() {
@@ -317,16 +312,12 @@ export function SystemLogSearchPanel() {
   }
 
   function changePage(page: number) {
-    setSubmitted((current) =>
-      current ? { ...current, query: { ...current.query, page } } : current,
-    );
+    setSubmitted((current) => (current ? { ...current, page } : current));
   }
 
   function changePageSize(pageSize: number) {
     setForm((current) => ({ ...current, pageSize }));
-    setSubmitted((current) =>
-      current ? { ...current, query: { ...current.query, page: 1, pageSize } } : current,
-    );
+    setSubmitted((current) => (current ? { ...current, page: 1, pageSize } : current));
   }
 
   const totalPages = logs.data ? Math.max(1, Math.ceil(logs.data.total / logs.data.page_size)) : 1;
@@ -351,7 +342,7 @@ export function SystemLogSearchPanel() {
               {logs.isFetching ? <RefreshCw className="animate-spin" /> : <Search />}
               {logs.isFetching ? "查询中" : "查询"}
             </Button>
-            <Button type="button" variant="outline" onClick={reset} disabled={logs.isFetching}>
+            <Button type="button" variant="outline" onClick={reset}>
               <RotateCcw />
               重置
             </Button>
@@ -372,16 +363,25 @@ export function SystemLogSearchPanel() {
               framed={false}
             />
           )}
-          {!logs.isLoading && logPage && logPage.items.length > 0 && (
+          {logs.isError && !logPage ? (
+            <ContentRetry pending={logs.isFetching} onRetry={() => void logs.refetch()} />
+          ) : null}
+          {!logs.isLoading && logPage && (
             <>
-              <div className="min-h-0 flex-1 divide-y overflow-y-auto">
-                {logPage.items.map((record) => (
-                  <SystemLogResult
-                    key={`${record.id}:${record.request_id}:${record.observed_at ?? ""}`}
-                    record={record}
-                  />
-                ))}
-              </div>
+              {logPage.items.length > 0 ? (
+                <div className="min-h-0 flex-1 divide-y overflow-y-auto">
+                  {logPage.items.map((record) => (
+                    <SystemLogResult
+                      key={`${record.id}:${record.request_id}:${record.observed_at ?? ""}`}
+                      record={record}
+                    />
+                  ))}
+                </div>
+              ) : (
+                <div className="text-muted-foreground flex min-h-0 flex-1 items-center justify-center px-4 py-4 text-sm">
+                  {logPage.total > 0 ? "当前页没有系统日志" : "没有匹配的系统日志"}
+                </div>
+              )}
               <DataTablePagination
                 currentPage={logPage.page}
                 totalPages={totalPages}
@@ -391,11 +391,6 @@ export function SystemLogSearchPanel() {
                 onPageSizeChange={changePageSize}
               />
             </>
-          )}
-          {logs.isSuccess && !logPage?.items.length && (
-            <div className="text-muted-foreground flex min-h-28 items-center justify-center text-sm">
-              没有匹配的系统日志
-            </div>
           )}
         </DataTablePanel>
       )}

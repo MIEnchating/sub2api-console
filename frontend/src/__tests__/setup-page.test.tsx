@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
-import { SetupPage } from "../App";
+import { SetupTestPage as SetupPage } from "../features/setup/components/__tests__/setup-test-page";
 import type { SetupStatus } from "../api";
 
 function renderSetup(status?: SetupStatus): string {

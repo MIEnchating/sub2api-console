@@ -1,6 +1,6 @@
 import { Controller, type UseFormReturn } from "react-hook-form";
 import type { KumaMonitor, KumaTemplate } from "@/api";
-import { FormField } from "@/App";
+import { FormField } from "@/components/form-field";
 import { Input } from "@/components/ui/input";
 import {
   Select,

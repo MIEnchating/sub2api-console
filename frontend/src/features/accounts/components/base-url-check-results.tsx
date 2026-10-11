@@ -55,9 +55,7 @@ function repairKind(account: AccountStatus): RepairKind | null {
   return null;
 }
 
-function matchesSearch(account: AccountStatus, query: string): boolean {
-  const normalized = query.trim().toLocaleLowerCase();
-  if (!normalized) return true;
+function matchesSearch(account: AccountStatus, normalized: string): boolean {
   return [
     account.id,
     account.name,
@@ -73,18 +71,22 @@ function matchesSearch(account: AccountStatus, query: string): boolean {
 
 export function BaseURLCheckResults(props: BaseURLCheckResultsProps) {
   const [search, setSearch] = useState("");
-  const filteredAccounts = useMemo(
+  const busy = props.running || props.repairing;
+  const sortedAccounts = useMemo(
     () =>
-      [...props.accounts]
-        .sort(
-          (left, right) =>
-            (resultPriority[left.base_url_check ?? "unknown"] ?? 5) -
-              (resultPriority[right.base_url_check ?? "unknown"] ?? 5) ||
-            left.name.localeCompare(right.name),
-        )
-        .filter((account) => matchesSearch(account, search)),
-    [props.accounts, search],
+      [...props.accounts].sort(
+        (left, right) =>
+          (resultPriority[left.base_url_check ?? "unknown"] ?? 5) -
+            (resultPriority[right.base_url_check ?? "unknown"] ?? 5) ||
+          left.name.localeCompare(right.name),
+      ),
+    [props.accounts],
   );
+  const filteredAccounts = useMemo(() => {
+    const normalized = search.trim().toLocaleLowerCase();
+    if (!normalized) return sortedAccounts;
+    return sortedAccounts.filter((account) => matchesSearch(account, normalized));
+  }, [sortedAccounts, search]);
   const pagination = useClientPagination(filteredAccounts);
 
   return (
@@ -93,7 +95,7 @@ export function BaseURLCheckResults(props: BaseURLCheckResultsProps) {
       data-testid="base-url-check-results"
     >
       <PageActions>
-        <Button variant="outline" disabled={props.running} onClick={props.onRerun}>
+        <Button variant="outline" disabled={busy} onClick={props.onRerun}>
           <Play size={15} aria-hidden="true" />
           重新运行
         </Button>
@@ -210,7 +212,7 @@ export function BaseURLCheckResults(props: BaseURLCheckResultsProps) {
                         <Button
                           variant="outline"
                           className="w-[120px] justify-center"
-                          disabled={props.repairing}
+                          disabled={busy}
                           onClick={() => props.onRepair(account.id, currentRepairKind)}
                         >
                           <RefreshCw

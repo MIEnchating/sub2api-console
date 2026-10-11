@@ -3,8 +3,6 @@ package accountworkbench
 import (
 	"context"
 	"errors"
-	"slices"
-	"time"
 
 	"github.com/MIEnchating/sub2api-console/backend/internal/configstore"
 	"github.com/MIEnchating/sub2api-console/backend/internal/taskstore"
@@ -161,46 +159,4 @@ func (s *Service) PruneRecords(ctx context.Context, owner string) error {
 	s.opMu.Lock()
 	defer s.opMu.Unlock()
 	return s.pruneRecords(ctx, owner)
-}
-func (s *Service) pruneRecords(ctx context.Context, owner string) error {
-	type candidate struct {
-		key     string
-		created time.Time
-	}
-	candidates := []candidate{}
-	err := s.documents(ctx, "run:"+owner+":", func(record configstore.WorkbenchDocumentRecord) error {
-		value, err := decodeRun(record.Payload)
-		if err != nil {
-			return err
-		}
-		s.activeMu.Lock()
-		active := s.active[value.Public.ID] != nil
-		s.activeMu.Unlock()
-		if !active && value.Public.Action != "maintenance" {
-			candidates = append(candidates, candidate{record.ID, value.Public.CreatedAt})
-		}
-		return nil
-	})
-	if err != nil {
-		return err
-	}
-	slices.SortFunc(candidates, func(a, b candidate) int { return b.created.Compare(a.created) })
-	for i := 100; i < len(candidates); i++ {
-		raw, revision, err := s.private.WorkbenchDocument(ctx, candidates[i].key)
-		if err != nil {
-			return err
-		}
-		if len(raw) == 0 {
-			continue
-		}
-		value, err := decodeRun(raw)
-		if err != nil {
-			return err
-		}
-		value.Public.Revision = revision
-		if err = s.deleteRecord(ctx, &value); err != nil {
-			return err
-		}
-	}
-	return nil
 }

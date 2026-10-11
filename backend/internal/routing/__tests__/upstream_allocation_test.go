@@ -16,6 +16,7 @@ func allocationFixture(t *testing.T, accounts ...business.RoutingAccount) *upstr
 }
 
 func TestSharedAllocationWithScalingDisabledGivesEveryHealthyAccountCapacity(t *testing.T) {
+	t.Parallel()
 	r := allocationFixture(t, upstreamCapacityAccount("41", 1, 10), upstreamCapacityAccount("42", 1, 10), upstreamCapacityAccount("43", 1, 10))
 	result, err := routing.NewService(r).Calculate(t.Context(), routing.Scope{}, true)
 	if err != nil {
@@ -30,6 +31,7 @@ func TestSharedAllocationWithScalingDisabledGivesEveryHealthyAccountCapacity(t *
 }
 
 func TestSharedAllocationReclaimsOversizedAccountBeforeRecoveringWaitingSibling(t *testing.T) {
+	t.Parallel()
 	first, waiting := upstreamCapacityAccount("41", 10, 10), upstreamCapacityAccount("42", 1, 10)
 	inactive := false
 	waiting.Schedulable, waiting.EffectiveState = &inactive, "concurrency_limited"
@@ -56,6 +58,7 @@ func TestSharedAllocationReclaimsOversizedAccountBeforeRecoveringWaitingSibling(
 }
 
 func TestSharedAllocationRespectsGlobalCapacityWithScalingEnabled(t *testing.T) {
+	t.Parallel()
 	r := allocationFixture(t, upstreamCapacityAccount("41", 1, 10), upstreamCapacityAccount("42", 1, 10))
 	r.policy["scaling"].(map[string]any)["enabled"] = true
 	r.policy["scaling"].(map[string]any)["global_max_concurrency"] = 3
@@ -72,6 +75,7 @@ func TestSharedAllocationRespectsGlobalCapacityWithScalingEnabled(t *testing.T) 
 }
 
 func TestSharedAllocationInsufficientQuotaKeepsOneSlotPerSelectedAccount(t *testing.T) {
+	t.Parallel()
 	r := allocationFixture(t, upstreamCapacityAccount("41", 8, 2), upstreamCapacityAccount("42", 8, 2), upstreamCapacityAccount("43", 8, 2))
 	result, err := routing.NewService(r).Calculate(t.Context(), routing.Scope{}, true)
 	if err != nil {
@@ -89,6 +93,7 @@ func TestSharedAllocationInsufficientQuotaKeepsOneSlotPerSelectedAccount(t *test
 }
 
 func TestSharedAllocationStaleCapacityNeverFundsRecoveryOrGrowth(t *testing.T) {
+	t.Parallel()
 	first, waiting := upstreamCapacityAccount("41", 1, 10), upstreamCapacityAccount("42", 1, 10)
 	inactive := false
 	waiting.Schedulable, waiting.EffectiveState = &inactive, "concurrency_limited"
@@ -109,6 +114,7 @@ func TestSharedAllocationStaleCapacityNeverFundsRecoveryOrGrowth(t *testing.T) {
 }
 
 func TestSharedAllocationAdjustsPausedUnlimitedAccountBeforeRecovery(t *testing.T) {
+	t.Parallel()
 	first, waiting := upstreamCapacityAccount("41", 1, 10), upstreamCapacityAccount("42", 0, 10)
 	inactive := false
 	waiting.Schedulable, waiting.EffectiveState = &inactive, "concurrency_limited"
@@ -124,6 +130,7 @@ func TestSharedAllocationAdjustsPausedUnlimitedAccountBeforeRecovery(t *testing.
 }
 
 func TestSharedAllocationDeduplicatesMultiGroupAccount(t *testing.T) {
+	t.Parallel()
 	first, second := upstreamCapacityAccount("41", 1, 10), upstreamCapacityAccount("42", 1, 10)
 	duplicate := first
 	duplicate.GroupName = "second-group"
@@ -149,6 +156,7 @@ func TestSharedAllocationDeduplicatesMultiGroupAccount(t *testing.T) {
 }
 
 func TestNewUnlimitedAccountDoesNotEraseOtherUpstreamGlobalReservation(t *testing.T) {
+	t.Parallel()
 	existing, added, outside := upstreamCapacityAccount("41", 5, 10), upstreamCapacityAccount("42", 0, 10), upstreamCapacityAccount("43", 8, 10)
 	outside.UpstreamID = "other-upstream"
 	priority := int64(1)
@@ -170,6 +178,7 @@ func TestNewUnlimitedAccountDoesNotEraseOtherUpstreamGlobalReservation(t *testin
 }
 
 func TestSharedAllocationIgnoresDisabledGlobalLimitAndOtherUpstreamUsage(t *testing.T) {
+	t.Parallel()
 	for _, scenario := range []string{"finite Sub2API", "unlimited Sub2API", "unlimited NewAPI"} {
 		t.Run(scenario, func(t *testing.T) {
 			first, waiting, outside := upstreamCapacityAccount("41", 1, 10), upstreamCapacityAccount("42", 1, 10), upstreamCapacityAccount("43", 1000, 2000)
@@ -208,6 +217,7 @@ func TestSharedAllocationIgnoresDisabledGlobalLimitAndOtherUpstreamUsage(t *test
 }
 
 func TestSharedAllocationReleasesOnlyConfirmedManagedCostPause(t *testing.T) {
+	t.Parallel()
 	for _, scenario := range []string{"confirmed", "unconfirmed", "manual", "excluded", "outside round", "fused"} {
 		t.Run(scenario, func(t *testing.T) {
 			waiting, blocked := upstreamCapacityAccount("41", 1, 10), upstreamCapacityAccount("42", 10, 10)
@@ -247,6 +257,7 @@ func TestSharedAllocationReleasesOnlyConfirmedManagedCostPause(t *testing.T) {
 }
 
 func TestSharedAllocationHonorsEnabledGroupScalingGlobalBudget(t *testing.T) {
+	t.Parallel()
 	r := allocationFixture(t, upstreamCapacityAccount("41", 1, 10), upstreamCapacityAccount("42", 1, 10))
 	r.policy["scaling"].(map[string]any)["global_max_concurrency"] = 3
 	r.policy["group_policy_bindings"] = map[string]any{"7": map[string]any{"enabled": true, "scaling_enabled": true}}
@@ -260,6 +271,7 @@ func TestSharedAllocationHonorsEnabledGroupScalingGlobalBudget(t *testing.T) {
 }
 
 func TestSharedAllocationWithScalingEnabledUsesConfiguredBoundsStepsAndCooldown(t *testing.T) {
+	t.Parallel()
 	for _, scenario := range []string{"maximum", "step up", "step down", "cooldown"} {
 		t.Run(scenario, func(t *testing.T) {
 			current, want := int64(1), int64(4)

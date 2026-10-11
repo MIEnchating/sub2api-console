@@ -1,3 +1,4 @@
+import { seedDictionaries } from "@/test/dictionary-fixtures";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
@@ -15,6 +16,7 @@ it("账号支持 Astra 且检测能力已加载时可选择模型并开始检测
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false, staleTime: Infinity } },
   });
+  seedDictionaries(client);
   clients.push(client);
   client.setQueryData(
     ["accounts"],

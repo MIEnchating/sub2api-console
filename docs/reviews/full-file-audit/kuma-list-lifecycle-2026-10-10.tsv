@@ -1,0 +1,6 @@
+frontend/src/features/uptime-kuma/components/uptime-kuma-page.tsx	9168ef620678a540a7a403b17f6669b4b42d6ad38ad968b04ee14c7886c3a70a	fixed	全文复核：接入及监控请求传递取消信号；首次失败提供重试，配置刷新失败保留列表并禁用列表操作；已打开编辑窗提交保护未扩大。
+frontend/src/features/uptime-kuma/components/monitor-editor.tsx	6440e5f46dcb865f0f7e472652c5e48cc56d95e586f0425502fb399c3eff7bd0	fixed	全文复核：模板查询观察者随编辑窗挂载和卸载，最后读取者离开取消请求，共享读取仍保留；分组不请求模板。
+frontend/src/features/uptime-kuma/components/resources-page.tsx	f202de83359ab86a630e2fec8cfd4b6ffa31650c0a5ce98db78761d0f5a8a6ea	fixed	全文复核：配置及资源列表传递取消信号，已有任务取消和失败重试保留；公开入口仅状态页，通知及维护历史分支未恢复。
+frontend/src/features/uptime-kuma/components/templates-page.tsx	d0b234b7fe1d4135a8d1494ddbab060697d98feb73ef85a3938226ab516ab540	fixed	全文复核：模板列表传递取消信号，列表失败保护、分页、编辑及删除现有行为保留。
+frontend/src/features/uptime-kuma/components/__tests__/list-request-lifecycle.test.tsx	14d628e4809336f35ccee15838ec814d8b23348b02419e28ebbbaac5e1856285	reviewed	全文复核：9例覆盖最后读取者取消、迟到结果、共享观察者、配置失败禁用和首次失败恢复；无固定等待。
+frontend/e2e/__tests__/uptime-kuma-list-recovery.e2e.ts	6245b32ad76afe20824ee804be952afeb066e88df144e673065e20b02b46022a	reviewed	全文复核：桌面及320px初次读取和刷新失败恢复，API隔离，无写入及脚本错误；按详情按钮可访问名称定位保留行。

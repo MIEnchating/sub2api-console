@@ -14,6 +14,19 @@ function minutes(value: string): number {
   return Number(parts[0]) * 60 + Number(parts[1]);
 }
 
+function timeBoundary(zone: string, value: string, edge: "start" | "end"): string {
+  const totalMinutes = minutes(value);
+  const hour = Math.floor(totalMinutes / 60);
+  const minute = totalMinutes % 60;
+  const hourProbe = `hour(${zone})`;
+  if (edge === "start") {
+    if (minute === 0) return `${hourProbe} >= ${hour}`;
+    return `(${hourProbe} > ${hour} || (${hourProbe} == ${hour} && minute(${zone}) >= ${minute}))`;
+  }
+  if (minute === 0) return `${hourProbe} < ${hour}`;
+  return `(${hourProbe} < ${hour} || (${hourProbe} == ${hour} && minute(${zone}) < ${minute}))`;
+}
+
 function ratesExpression(rates: ModelTimePricing["peak"]): string {
   return `p * ${pricePerMillion(rates.input_price)} + c * ${pricePerMillion(rates.output_price)} + cr * ${pricePerMillion(rates.cache_read_price)}`;
 }
@@ -22,11 +35,10 @@ export function timePricingExpression(price: Sub2APIModelPrice): string {
   const schedule = price.time_pricing;
   if (!schedule) return "";
   const zone = JSON.stringify(schedule.timezone);
-  const clock = `hour(${zone}) * 60 + minute(${zone})`;
   const periods = schedule.periods
     .map(
       (period) =>
-        `(${clock} >= ${minutes(period.start_time)} && ${clock} < ${minutes(period.end_time)})`,
+        `(${timeBoundary(zone, period.start_time, "start")} && ${timeBoundary(zone, period.end_time, "end")})`,
     )
     .join(" || ");
   let condition = `(${periods})`;

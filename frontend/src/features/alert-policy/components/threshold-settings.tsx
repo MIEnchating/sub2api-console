@@ -142,6 +142,7 @@ export function ThresholdSettings(props: {
             name="probe_groups"
             render={({ field }) => (
               <MultiSelect
+                dictionaryKind="group"
                 options={props.groupOptions}
                 selected={field.value}
                 onChange={field.onChange}

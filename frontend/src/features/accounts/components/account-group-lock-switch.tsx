@@ -14,23 +14,24 @@ export function AccountGroupLockSwitch(props: Props): ReactElement {
   const id = useId();
   const client = useQueryClient();
   const mutation = useMutation({
-    mutationFn: (enabled: boolean) => api.setAccountGroupsLocked(props.account.id, enabled),
-    onSuccess: async (result) => {
+    mutationFn: (input: { accountID: string; enabled: boolean }) =>
+      api.setAccountGroupsLocked(input.accountID, input.enabled),
+    onSuccess: async (result, input) => {
       await client.cancelQueries({ queryKey: ["accounts"] });
-      await client.cancelQueries({ queryKey: ["account-detail", props.account.id] });
+      await client.cancelQueries({ queryKey: ["account-detail", input.accountID] });
       client.setQueryData<AccountStatus[]>(["accounts"], (accounts) =>
         accounts?.map((account) =>
-          account.id === props.account.id ? { ...account, ...result } : account,
+          account.id === input.accountID ? { ...account, ...result } : account,
         ),
       );
-      client.setQueryData<AccountStatus>(["account-detail", props.account.id], (account) =>
+      client.setQueryData<AccountStatus>(["account-detail", input.accountID], (account) =>
         account ? { ...account, ...result } : account,
       );
       await Promise.all(
         [
           ["accounts"],
-          ["account-detail", props.account.id],
-          ["account-groups", props.account.id],
+          ["account-detail", input.accountID],
+          ["account-groups", input.accountID],
           ["pricing"],
           ["policy"],
           ["logs"],
@@ -51,7 +52,7 @@ export function AccountGroupLockSwitch(props: Props): ReactElement {
         disabled={
           props.disabled || mutation.isPending || (!locked && props.account.groups.length === 0)
         }
-        onCheckedChange={(enabled) => mutation.mutate(enabled)}
+        onCheckedChange={(enabled) => mutation.mutate({ accountID: props.account.id, enabled })}
       />
       <span id={`${id}-description`} className="sr-only">
         开启后锁定当前全部分组，禁止手动和自动切换；关闭后恢复原有规则。未分组账号需先选择分组。

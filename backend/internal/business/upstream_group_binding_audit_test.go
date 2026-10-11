@@ -6,6 +6,7 @@ import (
 )
 
 func TestUpstreamGroupBindingAuditComparesBindingsWithStableCatalog(t *testing.T) {
+	t.Parallel()
 	store := openReadModelFixture(t)
 	ctx := context.Background()
 	upstreamID, err := store.upstreamIdentityID(ctx, "api.example")
@@ -51,6 +52,7 @@ func TestUpstreamGroupBindingAuditComparesBindingsWithStableCatalog(t *testing.T
 }
 
 func TestUpstreamGroupBindingAuditAggregatesAccountsByGroup(t *testing.T) {
+	t.Parallel()
 	store := openReadModelFixture(t)
 	ctx := context.Background()
 	upstreamID, err := store.upstreamIdentityID(ctx, "api.example")

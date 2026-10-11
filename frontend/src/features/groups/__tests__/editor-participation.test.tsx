@@ -1,3 +1,4 @@
+import { seedDictionaries } from "@/test/dictionary-fixtures";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
@@ -43,6 +44,7 @@ it.each([
   });
   const save = vi.spyOn(api, "updateGroupPolicy").mockResolvedValue(group);
   client = new QueryClient({ defaultOptions: { queries: { enabled: false, retry: false } } });
+  seedDictionaries(client);
   client.setQueryData(["groups"], [group]);
   client.setQueryData(["policy"], {
     ...policy,

@@ -15,12 +15,20 @@ import { TemplateEditor } from "./template-editor";
 import { WorkbenchToolbar, WorkbenchEmptyState } from "./workbench-section";
 import { TemplateDetails } from "./template-details";
 
+type TemplateDraft = { template?: WorkbenchTemplate; revision: number };
+type TemplateDeletion = { template: WorkbenchTemplate; revision: number };
+
 export function TemplateList(): ReactElement {
   const client = useQueryClient();
-  const query = useQuery({ queryKey: templateKeys.library, queryFn: api.workbenchTemplates });
-  const [editor, setEditor] = useState<{ template?: WorkbenchTemplate } | null>(null);
-  const [manual, setManual] = useState<{ template?: WorkbenchTemplate } | null>(null);
-  const [deleting, setDeleting] = useState<WorkbenchTemplate | null>(null);
+  const query = useQuery({
+    queryKey: templateKeys.library,
+    queryFn: ({ signal }) => api.workbenchTemplates(signal),
+  });
+  // Keep the library revision with the content the user opened. A background
+  // refresh must not authorize saving or deleting an older template snapshot.
+  const [editor, setEditor] = useState<TemplateDraft | null>(null);
+  const [manual, setManual] = useState<TemplateDraft | null>(null);
+  const [deleting, setDeleting] = useState<TemplateDeletion | null>(null);
   const select = useMutation({
     mutationFn: (id: string) => api.setWorkbenchTemplate(id, query.data!.revision),
     onSuccess: (result) => {
@@ -29,8 +37,8 @@ export function TemplateList(): ReactElement {
     onError: (error) => notifyOperationError(error, "模板切换失败"),
   });
   const remove = useMutation({
-    mutationFn: (item: WorkbenchTemplate) =>
-      api.deleteWorkbenchTemplate(item.id, query.data!.revision),
+    mutationFn: (draft: TemplateDeletion) =>
+      api.deleteWorkbenchTemplate(draft.template.id, draft.revision),
     onSuccess: (result) => {
       client.setQueryData(templateKeys.library, result);
       setDeleting(null);
@@ -41,6 +49,7 @@ export function TemplateList(): ReactElement {
   return (
     <section aria-label="配置模板" className="grid min-w-0 gap-4">
       <WorkbenchToolbar
+        description="复用账号配置，统一导入时的分组与调度设置。"
         actions={
           <>
             <Button
@@ -54,11 +63,14 @@ export function TemplateList(): ReactElement {
             <Button
               variant="outline"
               disabled={pending || !query.data}
-              onClick={() => setEditor({})}
+              onClick={() => setEditor({ revision: query.data!.revision })}
             >
               从线上账号创建
             </Button>
-            <Button disabled={pending || !query.data} onClick={() => setManual({})}>
+            <Button
+              disabled={pending || !query.data}
+              onClick={() => setManual({ revision: query.data!.revision })}
+            >
               <Plus aria-hidden="true" />
               创建模板
             </Button>
@@ -75,7 +87,7 @@ export function TemplateList(): ReactElement {
         <ContentRetry pending={query.isFetching} onRetry={() => void query.refetch()} />
       )}
       {query.data && (
-        <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border bg-card p-4 text-sm">
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border bg-card p-4 text-sm">
           <span className="min-w-0 flex-1 wrap-anywhere">
             当前模板：
             {query.data.items.find((item) => item.id === query.data.preferred_id)?.name ||
@@ -108,7 +120,7 @@ export function TemplateList(): ReactElement {
             key={item.id}
             aria-label={item.name}
             className={cn(
-              "@container flex min-w-0 flex-col gap-4 rounded-xl border bg-card p-4",
+              "@container flex min-w-0 flex-col gap-4 rounded-lg border bg-card p-4",
               item.id === query.data.preferred_id && "border-primary/40",
             )}
           >
@@ -143,7 +155,7 @@ export function TemplateList(): ReactElement {
               <Button
                 variant="outline"
                 disabled={pending}
-                onClick={() => setManual({ template: item })}
+                onClick={() => setManual({ template: item, revision: query.data!.revision })}
               >
                 <Pencil aria-hidden="true" />
                 编辑配置
@@ -152,7 +164,7 @@ export function TemplateList(): ReactElement {
                 <Button
                   variant="outline"
                   disabled={pending}
-                  onClick={() => setEditor({ template: item })}
+                  onClick={() => setEditor({ template: item, revision: query.data!.revision })}
                 >
                   <RefreshCw aria-hidden="true" />
                   重新同步
@@ -161,7 +173,7 @@ export function TemplateList(): ReactElement {
               <Button
                 variant="ghost"
                 disabled={pending}
-                onClick={() => setDeleting(item)}
+                onClick={() => setDeleting({ template: item, revision: query.data!.revision })}
                 className="ml-auto text-muted-foreground hover:text-destructive"
                 aria-label={`删除模板 ${item.name}`}
               >
@@ -175,14 +187,14 @@ export function TemplateList(): ReactElement {
       {manual && query.data && (
         <ManualTemplateEditor
           template={manual.template}
-          revision={query.data.revision}
+          revision={manual.revision}
           onClose={() => setManual(null)}
         />
       )}
       {editor && query.data && (
         <TemplateEditor
           template={editor.template}
-          revision={query.data.revision}
+          revision={editor.revision}
           onClose={() => setEditor(null)}
         />
       )}
@@ -190,7 +202,7 @@ export function TemplateList(): ReactElement {
         <ConfirmActionDialog
           open
           title="删除配置模板"
-          description={`确定删除“${deleting.name}”吗？线上账号不会被修改。`}
+          description={`确定删除“${deleting.template.name}”吗？线上账号不会被修改。`}
           confirmLabel="删除模板"
           pending={remove.isPending}
           onOpenChange={(open) => {

@@ -62,7 +62,9 @@ function normalizeAccountState(value: string | null | undefined): CanonicalAccou
   return Object.hasOwn(aliases, key) ? aliases[key] : "unknown";
 }
 
-export function effectiveAccountState(account: AccountStatus): CanonicalAccountState {
+export function effectiveAccountState(
+  account: Pick<AccountStatus, "paused" | "health" | "routing_state" | "health_status">,
+): CanonicalAccountState {
   if (account.paused === true) return "paused";
   if (account.health.trim()) return normalizeAccountState(account.health);
   if (account.routing_state?.trim()) return normalizeAccountState(account.routing_state);

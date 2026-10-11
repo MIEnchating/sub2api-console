@@ -144,8 +144,14 @@ func (s *ChannelTasks) run(ctx context.Context, task taskstore.Task, platformID 
 		}
 	}
 	processed := len(items)
+	interrupted := taskstore.Interrupted(ctx)
 	for _, target := range input.Channels[processed:] {
-		items = append(items, ChannelBatchItem{ChannelID: target.ID, Status: "cancelled", Message: "任务已取消，未执行"})
+		item := ChannelBatchItem{ChannelID: target.ID, Status: "cancelled", Message: "任务已取消，未执行"}
+		if interrupted {
+			item.Status = "interrupted"
+			item.Message = "服务停止，未执行"
+		}
+		items = append(items, item)
 	}
 	task.Status = "succeeded"
 	if processed < len(input.Channels) || ctx.Err() != nil {
@@ -159,6 +165,11 @@ func (s *ChannelTasks) run(ctx context.Context, task taskstore.Task, platformID 
 	task.Result["phase"] = "complete"
 	task.Result["succeeded"] = succeeded
 	task.Message = fmt.Sprintf("渠道模型变更结束：%d 成功，%d 失败，%d 未执行", succeeded, processed-succeeded, len(input.Channels)-processed)
+	if interrupted {
+		taskstore.MarkCancelled(ctx, &task, "")
+		task.Result["phase"] = "interrupted"
+		task.Message = "服务停止导致渠道变更中断；已保存已完成结果，请先刷新渠道核对结果后再操作（不会自动重试）"
+	}
 	s.persist(ctx, task)
 }
 

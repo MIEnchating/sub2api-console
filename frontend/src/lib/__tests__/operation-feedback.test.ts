@@ -7,7 +7,7 @@ vi.mock("sonner", () => ({
 }));
 
 import { notifyOperationError, operationErrorMessage } from "../operation-feedback";
-import { SessionExpiredError } from "../session-auth";
+import { SessionExpiredError, SessionChangedError } from "../session-auth";
 
 describe("global operation feedback", () => {
   beforeEach(() => {
@@ -38,6 +38,11 @@ describe("global operation feedback", () => {
   it("does not show a stale-page toast while session expiry redirects to login", () => {
     notifyOperationError(new SessionExpiredError(), "请求失败");
 
+    expect(toastError).not.toHaveBeenCalled();
+  });
+
+  it("切换会话后丢弃旧响应时不向新会话显示错误", () => {
+    notifyOperationError(new SessionChangedError(), "请求失败");
     expect(toastError).not.toHaveBeenCalled();
   });
 

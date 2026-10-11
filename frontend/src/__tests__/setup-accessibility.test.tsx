@@ -1,7 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import { expect, it, vi } from "vitest";
 
-import { SetupPage } from "../App";
+import { SetupTestPage as SetupPage } from "../features/setup/components/__tests__/setup-test-page";
 
 it("初始化表单为每个必填凭据及管理地址提供可访问名称", () => {
   render(

@@ -1,11 +1,28 @@
+import { seedDictionaries, dictionaryItems } from "@/test/dictionary-fixtures";
 import { Fragment, StrictMode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, it, vi } from "vitest";
 import { AccountModelSyncDialog } from "../account-model-sync-dialog";
 
 afterEach(() => vi.unstubAllGlobals());
+
+it("搜索隐藏已选模型后计数保持完整，切换分组不会继承另一组草稿", async () => {
+  await setup();
+  const search = screen.getByRole("textbox", { name: "搜索模型" });
+  await userEvent.type(search, "discovered");
+  expect(screen.queryByRole("checkbox", { name: "同步模型 known" })).not.toBeInTheDocument();
+  expect(screen.getByText("已选 1/2 个模型")).toBeVisible();
+  await userEvent.click(screen.getByRole("checkbox", { name: "同步模型 discovered" }));
+  expect(screen.getByText("已选 2/2 个模型")).toBeVisible();
+  await userEvent.click(screen.getByRole("tab", { name: "B · 1" }));
+  expect(screen.getByRole("checkbox", { name: "同步模型 discovered" })).not.toBeChecked();
+  expect(screen.getByText("已选 1/2 个模型")).toBeVisible();
+  await userEvent.click(screen.getByRole("tab", { name: "A · 1" }));
+  expect(screen.getByRole("checkbox", { name: "同步模型 discovered" })).toBeChecked();
+  expect(screen.getByText("已选 2/2 个模型")).toBeVisible();
+});
 
 async function setup(
   options: {
@@ -17,10 +34,12 @@ async function setup(
     failRefresh?: boolean;
   } = {},
 ): Promise<{
+  client: QueryClient;
   submissions: unknown[];
   settingsWrites: unknown[];
   reopen: () => Promise<void>;
   retry: () => void;
+  refreshMemberships: (groups: Map<string, string[]>, platforms?: Map<string, string>) => void;
 }> {
   vi.stubGlobal("PointerEvent", MouseEvent);
   const submissions: unknown[] = [];
@@ -46,8 +65,8 @@ async function setup(
     vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const path = String(input);
       if (path.includes("dictionaries")) return Response.json({ items: [] });
-      if (path.endsWith("/config/model-sync")) {
-        if (init?.method === "PUT") {
+      if (path.endsWith("/config/model-sync/blocked-models")) {
+        if (init?.method === "POST") {
           settingsWrites.push(JSON.parse(String(init.body)));
           await options.saveGate;
           if (failSave)
@@ -55,8 +74,7 @@ async function setup(
               { error: { message: "配置保存失败", code: "save_failed" } },
               { status: 500 },
             );
-          patterns = (JSON.parse(String(init.body)) as { blocked_patterns: string[] })
-            .blocked_patterns;
+          patterns = [...patterns, (JSON.parse(String(init.body)) as { model: string }).model];
           saved = true;
         }
         return Response.json({ blocked_patterns: patterns });
@@ -103,25 +121,33 @@ async function setup(
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
+  seedDictionaries(client, {
+    group: [
+      { value: "1", name: "A" },
+      { value: "2", name: "B" },
+      { value: "3", name: "C" },
+      { value: "4", name: "默认组" },
+      { value: "5", name: "codex" },
+      { value: "6", name: "claude" },
+    ],
+  });
   const Wrapper = options.strictMode ? StrictMode : Fragment;
+  let accountGroups = new Map([
+    ["41", ["A"]],
+    ["42", [options.sharedGroup ? "A" : "B"]],
+  ]);
+  let accountPlatforms = new Map([
+    ["41", "openai"],
+    ["42", "openai"],
+  ]);
   const view = (open: boolean) => (
     <Wrapper>
       <QueryClientProvider client={client}>
         <AccountModelSyncDialog
           open={open}
           accountIds={["41", "42"]}
-          accountPlatforms={
-            new Map([
-              ["41", "openai"],
-              ["42", "openai"],
-            ])
-          }
-          accountGroups={
-            new Map([
-              ["41", ["A"]],
-              ["42", [options.sharedGroup ? "A" : "B"]],
-            ])
-          }
+          accountPlatforms={accountPlatforms}
+          accountGroups={accountGroups}
           onOpenChange={() => undefined}
           onCompleted={() => undefined}
         />
@@ -136,8 +162,14 @@ async function setup(
   }
   await start();
   return {
+    client,
     submissions,
     settingsWrites,
+    refreshMemberships: (groups, platforms) => {
+      accountGroups = groups;
+      if (platforms) accountPlatforms = platforms;
+      rendered.rerender(view(true));
+    },
     reopen: async () => {
       rendered.rerender(view(false));
       rendered.rerender(view(true));
@@ -149,6 +181,69 @@ async function setup(
     },
   };
 }
+
+it("编辑期间账号移入其他分组时保留原勾选范围并禁止提交，重开后使用新归属", async () => {
+  const state = await setup();
+  await userEvent.click(screen.getByRole("checkbox", { name: "同步模型 discovered" }));
+  state.refreshMemberships(
+    new Map([
+      ["41", ["A"]],
+      ["42", ["A"]],
+    ]),
+  );
+  expect(screen.getByRole("button", { name: "同步 2 个账号" })).toBeDisabled();
+  expect(screen.getByRole("tab", { name: "B · 1" })).toBeVisible();
+  expect(screen.getByRole("checkbox", { name: "同步模型 discovered" })).toBeChecked();
+  expect(screen.getByText("账号的平台或分组已变化，请关闭后重新选择同步范围。")).toBeVisible();
+  await userEvent.click(screen.getByRole("button", { name: "同步 2 个账号" }));
+  expect(state.submissions).toEqual([]);
+  await state.reopen();
+  expect(screen.getByRole("tab", { name: "A · 2" })).toBeVisible();
+  expect(screen.getByRole("checkbox", { name: "同步模型 discovered" })).not.toBeChecked();
+  expect(screen.getByRole("button", { name: "同步 2 个账号" })).toBeEnabled();
+});
+
+it("编辑期间账号平台变化时保留原平台草稿并禁止提交", async () => {
+  const state = await setup();
+  await userEvent.click(screen.getByRole("checkbox", { name: "同步模型 discovered" }));
+  state.refreshMemberships(
+    new Map([
+      ["41", ["A"]],
+      ["42", ["B"]],
+    ]),
+    new Map([
+      ["41", "anthropic"],
+      ["42", "openai"],
+    ]),
+  );
+  expect(screen.getByRole("button", { name: "同步 2 个账号" })).toBeDisabled();
+  expect(screen.getByRole("checkbox", { name: "同步模型 discovered" })).toBeChecked();
+  expect(state.submissions).toEqual([]);
+});
+
+it("目录仅替换引用或更新范围外账号时保留草稿且正常提交原账号选择", async () => {
+  const state = await setup();
+  await userEvent.click(screen.getByRole("checkbox", { name: "同步模型 discovered" }));
+  state.refreshMemberships(
+    new Map([
+      ["41", ["A", "A"]],
+      ["42", ["B"]],
+      ["99", ["C"]],
+    ]),
+  );
+  expect(screen.getByRole("button", { name: "同步 2 个账号" })).toBeEnabled();
+  await userEvent.click(screen.getByRole("button", { name: "同步 2 个账号" }));
+  await waitFor(() =>
+    expect(state.submissions).toEqual([
+      expect.objectContaining({
+        accounts: [
+          { account_id: "41", models: ["known", "discovered"] },
+          { account_id: "42", models: ["known"] },
+        ],
+      }),
+    ]),
+  );
+});
 
 it("手动添加模型仅写入当前分组，默认空探活不会被补选", async () => {
   const { submissions } = await setup();
@@ -179,9 +274,7 @@ it("右键排除保存到全局规则，跨分组和重新打开同步均不再�
   const { settingsWrites, reopen } = await setup();
   fireEvent.contextMenu(screen.getByRole("group", { name: "模型 known" }), { button: 2 });
   await userEvent.click(await screen.findByRole("menuitem", { name: /^排除此模型/ }));
-  await waitFor(() =>
-    expect(settingsWrites).toEqual([{ blocked_patterns: ["legacy-*", "known"] }]),
-  );
+  await waitFor(() => expect(settingsWrites).toEqual([{ model: "known" }]));
   await waitFor(() =>
     expect(screen.queryByRole("checkbox", { name: "同步模型 known" })).not.toBeInTheDocument(),
   );
@@ -390,4 +483,42 @@ it("严格模式下模型发现已完成时移除启动提示，并允许关闭�
   ).not.toBeInTheDocument();
   for (const button of screen.getAllByRole("button", { name: "关闭" }))
     expect(button).toBeEnabled();
+});
+
+it("预览后字典移除分组时禁止提交不可见账号，字典恢复后保留原选择", async () => {
+  const state = await setup();
+  act(() =>
+    state.client.setQueryData(["dictionaries", "group"], {
+      items: dictionaryItems("group", [{ value: "1", name: "A" }]),
+    }),
+  );
+  await waitFor(() => expect(screen.queryByRole("tab", { name: "B · 1" })).not.toBeInTheDocument());
+  const submit = screen.getByRole("button", { name: "同步 2 个账号" });
+  expect(submit).toBeDisabled();
+  expect(screen.getByText(/部分账号的平台或分组已不在可选字典中/)).toBeVisible();
+  await userEvent.click(submit);
+  expect(state.submissions).toEqual([]);
+  act(() =>
+    state.client.setQueryData(["dictionaries", "group"], {
+      items: dictionaryItems("group", [
+        { value: "1", name: "A" },
+        { value: "2", name: "B" },
+      ]),
+    }),
+  );
+  await waitFor(() => expect(submit).toBeEnabled());
+  await userEvent.click(submit);
+  await waitFor(() =>
+    expect(state.submissions).toEqual([
+      {
+        accounts: [
+          { account_id: "41", models: ["known"] },
+          { account_id: "42", models: ["known"] },
+        ],
+        catalog_fingerprint: "catalog",
+        probe_models: [],
+      },
+    ]),
+  );
+  state.client.clear();
 });

@@ -3,13 +3,14 @@ import { useQuery } from "@tanstack/react-query";
 import { api, ApiError, type Task } from "@/api";
 import { operationErrorMessage } from "@/lib/operation-feedback";
 import { isSessionExpiredError } from "@/lib/session-auth";
+import { kumaTaskCancellationError } from "../lib/task-cancellation";
 
 const terminalStatuses = new Set(["succeeded", "failed", "cancelled", "partial"]);
 const pageClosedMessage = "页面已关闭，后台任务仍可在日志中心查看";
 
-async function readTaskProgress(taskID: string): Promise<Task> {
+async function readTaskProgress(taskID: string, signal: AbortSignal): Promise<Task> {
   try {
-    return await api.task(taskID);
+    return await api.task(taskID, signal);
   } catch (error) {
     if (isSessionExpiredError(error)) throw error;
     throw new Error(
@@ -22,7 +23,9 @@ async function readTaskProgress(taskID: string): Promise<Task> {
 // The mutation remains pending while React Query follows the persisted backend
 // task. Neither a failed poll nor a disconnected page resubmits the operation.
 export function useTaskCompletion() {
+  const [result, setResult] = useState<Task | null>(null);
   const [task, setTask] = useState<Task | null>(null);
+  const [starting, setStarting] = useState(false);
   const mounted = useRef(true);
   const completion = useRef<{
     resolve: (task: Task) => void;
@@ -30,7 +33,7 @@ export function useTaskCompletion() {
   } | null>(null);
   const query = useQuery({
     queryKey: ["tasks", task?.id],
-    queryFn: () => readTaskProgress(task!.id),
+    queryFn: ({ signal }) => readTaskProgress(task!.id, signal),
     enabled: !!task,
     retry: false,
     refetchInterval: (query) =>
@@ -41,7 +44,10 @@ export function useTaskCompletion() {
     if (query.error) {
       completion.current.reject(query.error);
     } else if (query.data && terminalStatuses.has(query.data.status)) {
+      setResult(query.data);
       if (query.data.status === "succeeded") completion.current.resolve(query.data);
+      else if (query.data.status === "cancelled")
+        completion.current.reject(kumaTaskCancellationError(query.data));
       else
         completion.current.reject(
           new ApiError(
@@ -69,7 +75,12 @@ export function useTaskCompletion() {
         return;
       }
       completion.current = { resolve, reject };
+      setStarting(false);
       setTask(task);
     });
-  return { wait, task: query.data ?? task };
+  const prepare = (): void => {
+    setResult(null);
+    setStarting(true);
+  };
+  return { wait, prepare, starting, result, task: query.data ?? task };
 }

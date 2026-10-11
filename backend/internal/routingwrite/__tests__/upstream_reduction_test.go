@@ -45,6 +45,7 @@ func setReductionWritePolicy(t *testing.T, fixture *upstreamCapacityFixture, ena
 }
 
 func TestUpstreamReductionEnabledWithGenericWritesDisabledLowersConcurrency(t *testing.T) {
+	t.Parallel()
 	service, fixture := newUpstreamCapacityWriteFixture(t, writeCapacityPointer(10), 8, 8, true)
 	setReductionWritePolicy(t, fixture, true)
 	target := reductionWriteTarget(t, fixture, "41", 2)
@@ -60,6 +61,7 @@ func TestUpstreamReductionEnabledWithGenericWritesDisabledLowersConcurrency(t *t
 }
 
 func TestUpstreamReductionCapacityPausePreservesPositiveConcurrencyAndRecoverableState(t *testing.T) {
+	t.Parallel()
 	service, fixture := newUpstreamCapacityWriteFixture(t, writeCapacityPointer(1), 1, 1, true)
 	setReductionWritePolicy(t, fixture, true)
 	target := reductionWriteTarget(t, fixture, "41", 1)
@@ -86,6 +88,7 @@ func TestUpstreamReductionCapacityPausePreservesPositiveConcurrencyAndRecoverabl
 }
 
 func TestUpstreamReductionStaleFiniteLimitStillPermitsConfirmedReduction(t *testing.T) {
+	t.Parallel()
 	service, fixture := newUpstreamCapacityWriteFixture(t, writeCapacityPointer(10), 8, 8, true)
 	setReductionWritePolicy(t, fixture, true)
 	target := reductionWriteTarget(t, fixture, "41", 2)
@@ -106,6 +109,7 @@ func TestUpstreamReductionStaleFiniteLimitStillPermitsConfirmedReduction(t *test
 }
 
 func TestUpstreamReductionUnsafeOrNoLongerNeededTargetNeverWrites(t *testing.T) {
+	t.Parallel()
 	for _, scenario := range []struct {
 		name   string
 		adjust func(*testing.T, *upstreamCapacityFixture, *business.AccountRoutingTarget)
@@ -205,6 +209,7 @@ func reductionSetScopeProtection(t *testing.T, fixture *upstreamCapacityFixture,
 }
 
 func TestUpstreamReductionRechecksPolicyAndIdentityAfterAcquiringLeases(t *testing.T) {
+	t.Parallel()
 	for _, scenario := range []struct {
 		name          string
 		policyChanged bool
@@ -268,6 +273,7 @@ func reductionSyncLimit(t *testing.T, fixture *upstreamCapacityFixture, limit *i
 }
 
 func TestUpstreamReductionMarkerNeverAuthorizesGrowthRecoveryOrZero(t *testing.T) {
+	t.Parallel()
 	for _, scenario := range []struct {
 		name   string
 		active bool
@@ -307,6 +313,7 @@ func TestUpstreamReductionMarkerNeverAuthorizesGrowthRecoveryOrZero(t *testing.T
 }
 
 func TestUpstreamReductionDoesNotOverridePriorityOrLoadFactorSwitches(t *testing.T) {
+	t.Parallel()
 	service, fixture := newUpstreamCapacityWriteFixture(t, writeCapacityPointer(10), 8, 8, true)
 	setReductionWritePolicy(t, fixture, true)
 	target := reductionWriteTarget(t, fixture, "41", 2)
@@ -327,6 +334,7 @@ func TestUpstreamReductionDoesNotOverridePriorityOrLoadFactorSwitches(t *testing
 }
 
 func TestUpstreamReductionBatchUsesOneInitialCapacitySnapshotForEveryTarget(t *testing.T) {
+	t.Parallel()
 	_, fixture := newUpstreamCapacityWriteFixture(t, writeCapacityPointer(10), 8, 8, true)
 	setReductionWritePolicy(t, fixture, true)
 	var mu sync.Mutex
@@ -365,6 +373,7 @@ func TestUpstreamReductionBatchUsesOneInitialCapacitySnapshotForEveryTarget(t *t
 }
 
 func TestUpstreamReductionForcesReadbackWhenGenericVerificationIsDisabled(t *testing.T) {
+	t.Parallel()
 	_, fixture := newUpstreamCapacityWriteFixture(t, writeCapacityPointer(10), 8, 8, true)
 	setReductionWritePolicy(t, fixture, true)
 	var mu sync.Mutex

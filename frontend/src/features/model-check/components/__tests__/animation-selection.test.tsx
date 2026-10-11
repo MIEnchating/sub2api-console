@@ -1,3 +1,4 @@
+import { seedDictionaries } from "@/test/dictionary-fixtures";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -18,6 +19,7 @@ function setup(): {
   close: ReturnType<typeof vi.fn>;
 } {
   const client = createConsoleQueryClient();
+  seedDictionaries(client);
   client.setDefaultOptions({ queries: { retry: false, staleTime: Infinity } });
   client.setQueryData(
     ["accounts"],
@@ -123,6 +125,14 @@ it("默认模型无需读取上游模型列表，选择账号后可直接检测"
   view.client.clear();
 });
 
+it("前置检测不展示动画提示词输入", async () => {
+  const user = userEvent.setup();
+  const view = setup();
+  await user.click(screen.getByRole("tab", { name: "前置检测" }));
+  expect(screen.queryByRole("textbox", { name: "动画提示词" })).not.toBeInTheDocument();
+  view.client.clear();
+});
+
 it("仅选择账号即可提交默认模型，无需填写模型", async () => {
   const posts: unknown[] = [];
   vi.stubGlobal(
@@ -139,7 +149,10 @@ it("仅选择账号即可提交默认模型，无需填写模型", async () => {
   fireEvent.click(screen.getByRole("button", { name: "开始检测（1 个账号）" }));
   await waitFor(() =>
     expect(posts).toEqual([
-      { targets: [{ account_id: "41", model: "gpt-6-astra" }], timeout_seconds: 120 },
+      {
+        targets: [{ account_id: "41", model: "gpt-6-astra" }],
+        timeout_seconds: 120,
+      },
     ]),
   );
   view.client.clear();
@@ -151,6 +164,7 @@ it("首次读取账号时展示骨架屏并禁止提交", async () => {
     vi.fn(() => new Promise<Response>(() => {})),
   );
   const client = createConsoleQueryClient();
+  seedDictionaries(client);
   client.setDefaultOptions({ queries: { retry: false } });
   render(
     <QueryClientProvider client={client}>

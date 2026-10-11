@@ -7,6 +7,7 @@ import (
 )
 
 func TestTrafficRankingIncludesSubsecondRequestsAtWindowStart(t *testing.T) {
+	t.Parallel()
 	store := openPolicyStore(t)
 	ctx := context.Background()
 	start := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
@@ -26,6 +27,7 @@ func TestTrafficRankingIncludesSubsecondRequestsAtWindowStart(t *testing.T) {
 }
 
 func TestTrafficRankingFiltersNanosecondBoundaryBeforeDeduplicatingRequest(t *testing.T) {
+	t.Parallel()
 	store := openPolicyStore(t)
 	ctx := context.Background()
 	start := time.Date(2026, 9, 1, 12, 0, 0, 100, time.UTC)

@@ -31,6 +31,7 @@ func (store *manualCostChangingLeaseStore) AcquireMutationLease(ctx context.Cont
 }
 
 func TestManualCostWallRecalculatesCurrentDataAfterWaitingForLease(t *testing.T) {
+	t.Parallel()
 	for _, scenario := range []struct {
 		name        string
 		change      func(*upstreamCapacityFixture)
@@ -64,6 +65,7 @@ func TestManualCostWallRecalculatesCurrentDataAfterWaitingForLease(t *testing.T)
 }
 
 func TestManualCostWallReacquiresExpandedScopeAndPreservesExplicitSelection(t *testing.T) {
+	t.Parallel()
 	for _, selectedOnly := range []bool{false, true} {
 		name := "new manual account is locked before recalculation"
 		if selectedOnly {
@@ -117,6 +119,7 @@ func TestManualCostWallReacquiresExpandedScopeAndPreservesExplicitSelection(t *t
 }
 
 func TestManualCostWallStopsWithoutWritingWhenScopeKeepsExpanding(t *testing.T) {
+	t.Parallel()
 	_, fixture := newUpstreamCapacityWriteFixture(t, nil, 20, 30, true)
 	prepareManualCost(t, fixture)
 	repository := &manualCostChangingLeaseStore{Store: fixture.store}

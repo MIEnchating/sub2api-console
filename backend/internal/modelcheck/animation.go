@@ -19,6 +19,7 @@ import (
 
 const animationSkill = "sub2api-model-animation"
 const animationPrompt = `请生成可直接运行的单文件HTML，使用内联SVG绘制鹈鹕骑自行车的二维循环动画。画面以鹈鹕和自行车为主体，展示清晰的身体结构、踩踏动作和车轮转动，配合协调的背景、配色与层次。动画应流畅自然、衔接连续，并适配不同屏幕尺寸。可使用内联JavaScript脚本实现动画，但不得发送网络请求、加载外部脚本或引用外部资源，只输出完整HTML，不要代码围栏或解释文字。`
+const maximumAnimationPromptLength = 10000
 
 type AnimationTarget struct {
 	AccountID string `json:"account_id"`
@@ -28,6 +29,7 @@ type AnimationTarget struct {
 }
 
 type AnimationRequest struct {
+	Prompt            string                   `json:"prompt,omitempty"`
 	PrecheckQuestions []string                 `json:"precheck_questions,omitempty"`
 	Mode              string                   `json:"mode,omitempty"`
 	Targets           []AnimationTarget        `json:"targets"`
@@ -36,29 +38,30 @@ type AnimationRequest struct {
 }
 
 type AnimationResult struct {
-	Mode                 string          `json:"mode,omitempty"`
-	Precheck             *PrecheckResult `json:"precheck,omitempty"`
-	AccountID            string          `json:"account_id"`
-	AccountName          string          `json:"account_name"`
-	Endpoint             string          `json:"endpoint,omitempty"`
-	Platform             string          `json:"platform,omitempty"`
-	Model                string          `json:"model"`
-	ResponseModel        string          `json:"response_model,omitempty"`
-	RequestID            string          `json:"request_id"`
-	Status               string          `json:"status"`
-	Phase                string          `json:"phase,omitempty"`
-	HTML                 string          `json:"html,omitempty"`
-	Source               string          `json:"source,omitempty"`
-	SourceTruncated      bool            `json:"source_truncated,omitempty"`
-	Prompt               string          `json:"prompt,omitempty"`
-	ReasoningEffort      string          `json:"reasoning_effort,omitempty"`
-	Usage                *AnimationUsage `json:"usage,omitempty"`
-	GenerationDurationMS int64           `json:"generation_duration_ms,omitempty"`
-	SVG                  string          `json:"svg,omitempty"`
-	Error                string          `json:"error,omitempty"`
-	RetryCount           int             `json:"retry_count,omitempty"`
-	DurationMS           int64           `json:"duration_ms"`
-	CompletedAt          string          `json:"completed_at"`
+	ManualVerdict        *AnimationManualVerdict `json:"manual_verdict,omitempty"`
+	Mode                 string                  `json:"mode,omitempty"`
+	Precheck             *PrecheckResult         `json:"precheck,omitempty"`
+	AccountID            string                  `json:"account_id"`
+	AccountName          string                  `json:"account_name"`
+	Endpoint             string                  `json:"endpoint,omitempty"`
+	Platform             string                  `json:"platform,omitempty"`
+	Model                string                  `json:"model"`
+	ResponseModel        string                  `json:"response_model,omitempty"`
+	RequestID            string                  `json:"request_id"`
+	Status               string                  `json:"status"`
+	Phase                string                  `json:"phase,omitempty"`
+	HTML                 string                  `json:"html,omitempty"`
+	Source               string                  `json:"source,omitempty"`
+	SourceTruncated      bool                    `json:"source_truncated,omitempty"`
+	Prompt               string                  `json:"prompt,omitempty"`
+	ReasoningEffort      string                  `json:"reasoning_effort,omitempty"`
+	Usage                *AnimationUsage         `json:"usage,omitempty"`
+	GenerationDurationMS int64                   `json:"generation_duration_ms,omitempty"`
+	SVG                  string                  `json:"svg,omitempty"`
+	Error                string                  `json:"error,omitempty"`
+	RetryCount           int                     `json:"retry_count,omitempty"`
+	DurationMS           int64                   `json:"duration_ms"`
+	CompletedAt          string                  `json:"completed_at"`
 }
 
 // cloneAnimationResult publishes an immutable task snapshot while a worker may
@@ -78,6 +81,10 @@ func (s *Service) prepareAnimation(ctx context.Context, request AnimationRequest
 		return request, nil, err
 	}
 	request.PrecheckQuestions = questions
+	request.Prompt = strings.TrimSpace(request.Prompt)
+	if utf8.RuneCountInString(request.Prompt) > maximumAnimationPromptLength || strings.ContainsFunc(request.Prompt, func(r rune) bool { return unicode.IsControl(r) && r != '\n' && r != '\r' && r != '\t' }) {
+		return request, nil, errors.New("动画提示词不能超过 10000 个字符或包含控制字符")
+	}
 	if request.TimeoutSeconds == 0 {
 		request.TimeoutSeconds = 120
 	}
@@ -132,6 +139,7 @@ func (s *Service) prepareAnimation(ctx context.Context, request AnimationRequest
 }
 
 func (s *Service) EnqueueAnimation(ctx context.Context, request AnimationRequest) (taskstore.Task, error) {
+	request.Prompt = s.AnimationPromptSettings().Prompt
 	request, accounts, err := s.prepareAnimation(ctx, request)
 	if err != nil {
 		return taskstore.Task{}, err
@@ -211,14 +219,7 @@ func (s *Service) EnqueueAnimation(ctx context.Context, request AnimationRequest
 }
 
 func (s *Service) AnimationHistory(ctx context.Context) ([]taskstore.Task, error) {
-	tasks, err := s.tasks.ListBySkill(ctx, animationSkill, 20)
-	if err != nil {
-		return nil, err
-	}
-	for i := range tasks {
-		tasks[i].Result = map[string]any{}
-	}
-	return tasks, nil
+	return s.tasks.AnimationHistory(ctx)
 }
 
 func (s *Service) executeAnimation(parent context.Context, task taskstore.Task, request AnimationRequest, accounts []selectedAccount) {
@@ -287,6 +288,9 @@ func (s *Service) executeAnimation(parent context.Context, task taskstore.Task, 
 					result.Platform = request.Custom.Platform
 				}
 				result.Mode = mode
+				if mode != precheckMode {
+					result.Prompt = request.Prompt
+				}
 				if request.Mode == combinedMode {
 					result.RequestID += "-" + mode
 				}
@@ -400,7 +404,7 @@ func (s *Service) runAnimationTarget(ctx context.Context, account selectedAccoun
 	requestCtx, cancel, firstOutputTimedOut, markFirstOutput := firstOutputTimeout(guarded, timeout)
 	defer cancel()
 	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-	text, model, err := sendAnimation(requestCtx, client, credential, result.Model, result.RequestID, result.Usage, func() {
+	text, model, err := sendAnimation(requestCtx, client, credential, result.Model, result.Prompt, result.RequestID, result.Usage, func() {
 		markFirstOutput()
 		result.Phase = "generating"
 		for _, notify := range onPhase {

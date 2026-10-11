@@ -3,7 +3,7 @@ import { toast } from "sonner";
 
 import { OperationErrorDetails } from "@/components/operation-error-details";
 
-import { isSessionExpiredError } from "./session-auth";
+import { isSessionExpiredError, SessionChangedError } from "./session-auth";
 
 const notifiedErrorObjects = new WeakSet<object>();
 
@@ -18,7 +18,7 @@ export function notifyOperationError(
   fallback: string,
   options?: { context: string },
 ): void {
-  if (isSessionExpiredError(error)) return;
+  if (isSessionExpiredError(error) || error instanceof SessionChangedError) return;
   if ((typeof error === "object" && error !== null) || typeof error === "function") {
     if (notifiedErrorObjects.has(error)) return;
     notifiedErrorObjects.add(error);

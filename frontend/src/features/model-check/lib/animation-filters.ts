@@ -1,4 +1,5 @@
 import type { AccountStatus } from "@/api";
+import type { AnimationAccountSort } from "../constants";
 
 export const priorityOptions = ["manual", "automatic"] as const;
 export type PriorityFilter = (typeof priorityOptions)[number];
@@ -7,12 +8,14 @@ export const priorityLabels: Record<PriorityFilter, string> = {
   automatic: "自动调度",
 };
 export type AnimationFilters = {
+  sort: AnimationAccountSort;
   query: string;
   group: string | null;
   platform: string | null;
   priority: PriorityFilter | null;
 };
 export const defaultAnimationFilters: AnimationFilters = {
+  sort: "default",
   query: "",
   group: null,
   platform: null,

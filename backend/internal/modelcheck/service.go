@@ -3,11 +3,15 @@ package modelcheck
 import (
 	"context"
 	"crypto/rand"
+	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net/http"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -29,6 +33,7 @@ import (
 type TaskStore interface {
 	Save(context.Context, taskstore.Task) error
 	ListBySkill(context.Context, string, int) ([]taskstore.Task, error)
+	AnimationHistory(context.Context) ([]taskstore.Task, error)
 	ModelCheckHistory(context.Context, time.Time) ([]taskstore.Task, error)
 }
 
@@ -99,6 +104,7 @@ type preparedRun struct {
 }
 
 type Service struct {
+	animationPrompt   animationPromptState
 	tasks             TaskStore
 	credentials       CredentialStore
 	accounts          AccountCatalog
@@ -156,6 +162,9 @@ func New(tasks TaskStore, credentials CredentialStore, accounts AccountCatalog, 
 			service.claudeProfiles, service.solProfile = activeClaude, activeSol
 		}
 	}
+	if err := service.loadAnimationPrompt(context.Background()); err != nil {
+		return nil, err
+	}
 	if err := service.loadAnimationConfiguration(context.Background()); err != nil {
 		return nil, err
 	}
@@ -202,14 +211,22 @@ func (s *Service) AccountStatuses(ctx context.Context) ([]AccountCheckStatus, er
 		if task.Status == "queued" || task.Status == "running" || task.Status == "waiting_input" {
 			continue
 		}
+		var taskStatuses map[string]string
 		for _, accountID := range taskAccountIDs(task) {
 			if seen[accountID] {
 				continue
 			}
 			seen[accountID] = true
+			if taskStatuses == nil {
+				taskStatuses = accountTaskStatuses(task)
+			}
+			status := taskStatuses[accountID]
+			if status == "" {
+				status = "inconclusive"
+			}
 			statuses = append(statuses, AccountCheckStatus{
 				AccountID:  accountID,
-				Status:     accountTaskStatus(task, accountID),
+				Status:     status,
 				CheckedAt:  task.UpdatedAt,
 				TaskID:     task.ID,
 				Confidence: confidence[accountID],
@@ -306,25 +323,19 @@ func (s *Service) prepare(ctx context.Context, request Request) (preparedRun, er
 }
 
 func (s *Service) selectCheckAccounts(ctx context.Context, accountIDs []string) ([]selectedAccount, error) {
-	rows, err := s.accounts.Accounts(ctx)
-	if err != nil {
-		return nil, errors.New("账号列表读取失败")
-	}
-	byID := make(map[string]business.AccountStatus, len(rows))
-	for _, row := range rows {
-		byID[row.ID] = row
-	}
 	selected := make([]selectedAccount, 0, len(accountIDs))
 	for _, accountID := range accountIDs {
-		row, found := byID[accountID]
-		if !found {
-			return nil, fmt.Errorf("账号 %s 不存在", accountID)
+		detail, err := s.accounts.Account(ctx, accountID)
+		if errors.Is(err, sql.ErrNoRows) || err == nil && detail == nil {
+			return nil, fmt.Errorf("账号 %s 不存在，请刷新账号列表后重试", accountID)
 		}
-		detail, detailErr := s.accounts.Account(ctx, accountID)
-		if detailErr != nil {
+		if err != nil {
 			return nil, fmt.Errorf("账号 %s 详情读取失败", accountID)
 		}
-		selected = append(selected, directAccountSelection(row, detail))
+		if detail.ID != accountID {
+			return nil, fmt.Errorf("账号 %s 详情的稳定 ID 不匹配", accountID)
+		}
+		selected = append(selected, directAccountSelection(detail.AccountStatus, detail))
 	}
 	return selected, nil
 }
@@ -419,18 +430,16 @@ func (s *Service) execute(parent context.Context, task taskstore.Task, prepared 
 			combinations = append(combinations, combination{account: account, model: model})
 		}
 	}
-	type outcome struct {
-		index  int
-		result map[string]any
-	}
-	type activeCombination struct {
-		index int
-		value map[string]any
+	type combinationEvent struct {
+		index   int
+		started bool
+		result  map[string]any
 	}
 	jobs := make(chan int)
-	outcomes := make(chan outcome, len(combinations))
-	activeEvents := make(chan activeCombination, len(combinations))
 	workers := min(2, len(combinations))
+	// A single ordered stream prevents a late start event from reviving a
+	// completed combination. Buffer only in proportion to active workers.
+	events := make(chan combinationEvent, workers)
 	var workerGroup sync.WaitGroup
 	for worker := 0; worker < workers; worker++ {
 		workerGroup.Add(1)
@@ -441,7 +450,7 @@ func (s *Service) execute(parent context.Context, task taskstore.Task, prepared 
 					return
 				}
 				current := combinations[index]
-				activeEvents <- activeCombination{index: index, value: map[string]any{
+				events <- combinationEvent{index: index, started: true, result: map[string]any{
 					"account_id": current.account.ID, "account_name": current.account.Name,
 					"claimed_model": current.model,
 					"mode":          checkerForModel(current.model, prepared.claudeProfiles, prepared.solProfile),
@@ -460,7 +469,7 @@ func (s *Service) execute(parent context.Context, task taskstore.Task, prepared 
 					}
 				}
 				result["credentials_persisted"] = credential.err == nil && credential.oauth == nil
-				outcomes <- outcome{index: index, result: result}
+				events <- combinationEvent{index: index, result: result}
 			}
 		}()
 	}
@@ -476,45 +485,33 @@ func (s *Service) execute(parent context.Context, task taskstore.Task, prepared 
 	}()
 	go func() {
 		workerGroup.Wait()
-		close(outcomes)
-		close(activeEvents)
+		close(events)
 	}()
 	results := make([]map[string]any, len(combinations))
 	completedResults := make([]map[string]any, 0, len(combinations))
 	completed := 0
 	active := map[int]map[string]any{}
-	for outcomes != nil {
-		select {
-		case current, ok := <-activeEvents:
-			if !ok {
-				activeEvents = nil
-				continue
-			}
-			active[current.index] = current.value
-		case outcome, ok := <-outcomes:
-			if !ok {
-				outcomes = nil
-				continue
-			}
-			if outcome.result == nil {
-				continue
-			}
-			delete(active, outcome.index)
-			results[outcome.index] = outcome.result
-			completedResults = append(completedResults, outcome.result)
+	for event := range events {
+		if event.started {
+			active[event.index] = event.result
+			task.Message = fmt.Sprintf("正在检测账号 %s 的模型 %s；已完成 %d/%d 个组合", event.result["account_name"], event.result["claimed_model"], completed, len(combinations))
+		} else {
+			delete(active, event.index)
+			results[event.index] = event.result
+			completedResults = append(completedResults, event.result)
 			completed++
-			task.Progress = 5 + completed*90/len(combinations)
 			task.Message = fmt.Sprintf("已完成 %d/%d 个账号模型组合", completed, len(combinations))
-			task.Result = map[string]any{
-				"account_ids": prepared.request.AccountIDs, "completed": completed, "total": len(combinations),
-				"phase": "testing", "tests": completedResults, "system_info": true,
-				"active":          active,
-				"profile_version": prepared.profileVersion, "profile_fingerprint": prepared.profileFingerprint,
-				"credentials_persisted": credentialsPersisted,
-			}
-			task.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
-			taskstore.PersistProgress(s.tasks, task)
 		}
+		task.Progress = 5 + completed*90/len(combinations)
+		task.Result = map[string]any{
+			"account_ids": prepared.request.AccountIDs, "completed": completed, "total": len(combinations),
+			"phase": "testing", "tests": slices.Clone(completedResults), "system_info": true,
+			"active":          maps.Clone(active),
+			"profile_version": prepared.profileVersion, "profile_fingerprint": prepared.profileFingerprint,
+			"credentials_persisted": credentialsPersisted,
+		}
+		task.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+		taskstore.PersistProgress(s.tasks, task)
 	}
 	if completed != len(combinations) {
 		s.finishFailed(ctx, task, prepared.request.AccountIDs, errors.New("账号模型检测被中断"))
@@ -577,17 +574,21 @@ func (s *Service) acquirePreparedAccounts(
 }
 
 func (s *Service) finishFailed(ctx context.Context, task taskstore.Task, accountIDs []string, err error) {
-	profileVersion := task.Result["profile_version"]
-	profileFingerprint := task.Result["profile_fingerprint"]
 	task.Status, task.Progress = "failed", 100
 	task.Message = "账号模型检测失败：" + err.Error()
-	task.Result = map[string]any{
-		"account_ids": accountIDs,
-		"error":       err.Error(), "credentials_persisted": false,
-		"profile_version": profileVersion, "profile_fingerprint": profileFingerprint,
+	task.Result = maps.Clone(task.Result)
+	if task.Result == nil {
+		task.Result = map[string]any{}
 	}
+	task.Result["account_ids"] = accountIDs
+	task.Result["error"] = err.Error()
+	if _, ok := task.Result["credentials_persisted"]; !ok {
+		task.Result["credentials_persisted"] = false
+	}
+	delete(task.Result, "active")
 	task.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
 	taskstore.MarkCancelled(ctx, &task, "账号模型检测已取消")
+	task.Result["phase"] = task.Status
 	taskstore.PersistFinal(s.tasks, task)
 }
 
@@ -766,33 +767,39 @@ func taskAccountIDs(task taskstore.Task) []string {
 	return normalizedUnique(values)
 }
 
-func accountTaskStatus(task taskstore.Task, accountID string) string {
+func accountTaskStatuses(task taskstore.Task) map[string]string {
+	statuses := map[string]string{}
 	if task.Status != "succeeded" {
-		return "inconclusive"
+		return statuses
 	}
-	matched, consistent, inconsistent := 0, 0, 0
+	type counts struct{ matched, consistent, inconsistent int }
+	byAccount := map[string]counts{}
 	for _, result := range taskResultRows(task.Result["tests"]) {
-		if resultAccountID, _ := result["account_id"].(string); resultAccountID != accountID {
+		accountID, ok := result["account_id"].(string)
+		if !ok || accountID == "" {
 			continue
 		}
-		matched++
-		if modelCheckRequestFailed(result) {
-			continue
+		count := byAccount[accountID]
+		count.matched++
+		switch modelCheckOutcome(result) {
+		case "passed":
+			count.consistent++
+		case "failed":
+			count.inconsistent++
 		}
-		switch verdict, _ := result["verdict"].(string); verdict {
-		case "MATCH", "GROUP_MATCH", "SOL_CONSISTENT":
-			consistent++
-		case "MISMATCH", "LUNA_LIKE", "TERRA_LIKE":
-			inconsistent++
+		byAccount[accountID] = count
+	}
+	for id, count := range byAccount {
+		switch {
+		case count.inconsistent > 0:
+			statuses[id] = "inconsistent"
+		case count.matched > 0 && count.consistent == count.matched:
+			statuses[id] = "consistent"
+		default:
+			statuses[id] = "inconclusive"
 		}
 	}
-	if inconsistent > 0 {
-		return "inconsistent"
-	}
-	if matched > 0 && consistent == matched {
-		return "consistent"
-	}
-	return "inconclusive"
+	return statuses
 }
 
 func modelCheckRequestFailed(result map[string]any) bool {
@@ -838,6 +845,9 @@ func stringValues(value any) []string {
 
 func numericValue(value any) (float64, bool) {
 	switch number := value.(type) {
+	case json.Number:
+		value, err := number.Float64()
+		return value, err == nil
 	case float64:
 		return number, true
 	case int:

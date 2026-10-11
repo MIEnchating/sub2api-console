@@ -10,6 +10,7 @@ import (
 )
 
 func TestSafetyWindowsRemainIndependentOfScoringSampleLimit(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		name, result, state string
 		policy              map[string]any
@@ -72,6 +73,7 @@ func TestSafetyWindowsRemainIndependentOfScoringSampleLimit(t *testing.T) {
 }
 
 func TestRecoverySuccessCountCanExceedScoringSampleLimit(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	store, db := healthEvidenceStore(t)
 	_, err := store.UpdatePolicy(ctx, map[string]any{"advanced_policy": map[string]any{
@@ -101,6 +103,7 @@ func TestRecoverySuccessCountCanExceedScoringSampleLimit(t *testing.T) {
 }
 
 func TestLargerSafetyWindowKeepsPerformanceWithinScoringWindow(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	store, _ := healthEvidenceStore(t)
 	_, err := store.UpdatePolicy(ctx, map[string]any{"advanced_policy": map[string]any{

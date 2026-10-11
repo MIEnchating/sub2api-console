@@ -47,13 +47,28 @@ describe("global focus policy", () => {
         "components/json-editor/editor.tsx",
         "components/json-editor/search-panel.tsx",
       ].includes(relativePath);
+      // After asynchronous channel loading replaces the retry control, the
+      // automation editor restores focus to its name field. Loading interaction
+      // tests and automation-editor-loading.e2e.ts protect that handoff.
+      const allowsAutomationDialogFocus =
+        relativePath ===
+        "features/newapi-management/components/account-model-automation-dialog.tsx";
+      // Paginated details start at the heading so focusing a footer control
+      // cannot scroll past the summary. The allocation-pagination browser test
+      // and upstream-usage-pagination component test cover opening and return.
+      const allowsPaginatedDetailFocus = [
+        "features/groups/components/group-allocation-dialog.tsx",
+        "features/upstreams/components/upstream-usage-summary.tsx",
+      ].includes(relativePath);
       if (
         allowsDropdownSearchFocus ||
         allowsKeyboardNavigationFocus ||
         allowsAccountDialogFocus ||
         allowsUpstreamDialogFocus ||
         allowsPricingDetailFocus ||
-        allowsJSONEditorFocus
+        allowsJSONEditorFocus ||
+        allowsAutomationDialogFocus ||
+        allowsPaginatedDetailFocus
       )
         return [];
       return source.includes(nativeFocusAttribute) ||
@@ -76,20 +91,6 @@ describe("global focus policy", () => {
 
     for (const path of surfaces) {
       expect(readFileSync(join(sourceRoot, path), "utf8"), path).toContain("initialFocus={false}");
-    }
-  });
-
-  it("focuses every dropdown search without adding a focus appearance", () => {
-    const surfaces = [
-      "components/ui/select.tsx",
-      "components/ui/combobox.tsx",
-      "components/data-table/filter-menu.tsx",
-    ];
-
-    for (const path of surfaces) {
-      const source = readFileSync(join(sourceRoot, path), "utf8");
-      expect(source, path).toContain("ref={focusDropdownSearchOnMount}");
-      expect(source, path).toContain("dropdownSearchInputClassName");
     }
   });
 

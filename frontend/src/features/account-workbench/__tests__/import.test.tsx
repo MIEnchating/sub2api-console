@@ -5,6 +5,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { ImportPanel } from "../components/import-panel";
 import { templateKeys } from "../constants";
 import type { WorkbenchPreview } from "../types";
+import { importPreviewFixture } from "./import-preview-fixture";
 
 let client: QueryClient;
 afterEach(() => {
@@ -93,6 +94,31 @@ it("预览含无效项时显示行号且禁止启动任务", async () => {
   expect(dialog.getByRole("button", { name: "确认并开始" })).toBeDisabled();
   await user.click(dialog.getByRole("button", { name: "返回修改" }));
   expect(screen.getByRole("textbox", { name: "账号资料" })).toHaveValue("rt_input\ninvalid");
+});
+
+it("500 项预览翻页后确认仍只提交整批预览 ID 和版本", async () => {
+  const requests: Array<{ path: string; body: unknown }> = [];
+  const onStarted = vi.fn();
+  mount(
+    vi.fn(async (input, init) => {
+      requests.push({ path: String(input), body: JSON.parse(String(init?.body)) });
+      if (String(input).endsWith("/preview")) return Response.json(importPreviewFixture(500));
+      return Response.json({ id: "run-batch" });
+    }),
+    onStarted,
+  );
+  const user = userEvent.setup();
+  await user.type(screen.getByRole("textbox", { name: "账号资料" }), "rt_batch-fixture");
+  await user.click(screen.getByRole("button", { name: "解析并预览" }));
+  const dialog = within(await screen.findByRole("dialog"));
+  await user.click(dialog.getByRole("button", { name: "转到下一页" }));
+  expect(dialog.getByText("account-21@example.test")).toBeVisible();
+  await user.click(dialog.getByRole("button", { name: "确认并开始" }));
+  await waitFor(() => expect(onStarted).toHaveBeenCalledOnce());
+  expect(requests[1]).toEqual({
+    path: "/api/account-workbench/runs",
+    body: { id: "preview-one", revision: 1 },
+  });
 });
 it("关闭代理保留表单地址但预览请求不携带代理凭据", async () => {
   let body: Record<string, unknown> | undefined;

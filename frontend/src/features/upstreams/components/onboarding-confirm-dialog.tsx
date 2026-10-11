@@ -52,6 +52,12 @@ type ContentProps = {
   ) => void;
 };
 
+function schedulingLabel(item: OnboardingBindingPreview): string {
+  if (item.status === "待更新") return "保持原值";
+  if (item.waitingForCapacity) return "停用等待";
+  return "开启";
+}
+
 function OnboardingConfirmContent(props: ContentProps): ReactElement {
   const form = useForm<OnboardingConfirmationForm>({
     resolver: zodResolver(onboardingConfirmationSchema),
@@ -119,7 +125,7 @@ function OnboardingConfirmContent(props: ContentProps): ReactElement {
                     {item.status}
                   </Badge>
                 </div>
-                <dl className="text-muted-foreground bg-muted/40 grid grid-cols-2 gap-x-4 gap-y-2 rounded-md p-3 text-xs tabular-nums sm:grid-cols-4">
+                <dl className="text-muted-foreground bg-muted/40 grid grid-cols-2 gap-x-4 gap-y-2 rounded-md p-3 text-xs tabular-nums sm:grid-cols-5">
                   <div className="flex gap-1.5">
                     <dt>账号协议</dt>
                     <dd className="text-foreground">{item.platform}</dd>
@@ -139,6 +145,10 @@ function OnboardingConfirmContent(props: ContentProps): ReactElement {
                     <dd className="text-foreground">
                       {item.status === "待更新" ? "保持原值" : item.priority}
                     </dd>
+                  </div>
+                  <div className="flex gap-1.5">
+                    <dt>调度状态</dt>
+                    <dd className="text-foreground">{schedulingLabel(item)}</dd>
                   </div>
                 </dl>
                 {item.status === "待添加" && item.allocationOverride !== undefined ? (

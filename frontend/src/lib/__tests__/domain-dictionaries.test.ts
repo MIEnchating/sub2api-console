@@ -45,21 +45,12 @@ describe("领域字典", () => {
     expect(accountTypeValue(value)).toBe(value);
   });
 
-  it("按字典顺序返回启用项并追加未登记值", () => {
+  it("按字典顺序返回启用项且不追加未登记值", () => {
     expect(
-      orderedDictionaryOptions(
-        [
-          { value: "openai", name: "OpenAI", enabled: true },
-          { value: "anthropic", name: "Anthropic", enabled: false },
-        ],
-        [
-          { value: "anthropic", label: "Anthropic" },
-          { value: "custom", label: "Custom" },
-        ],
-      ),
-    ).toEqual([
-      { value: "openai", label: "OpenAI" },
-      { value: "custom", label: "Custom" },
-    ]);
+      orderedDictionaryOptions([
+        { value: "openai", name: "OpenAI", enabled: true },
+        { value: "anthropic", name: "Anthropic", enabled: false },
+      ]),
+    ).toEqual([{ value: "openai", label: "OpenAI" }]);
   });
 });

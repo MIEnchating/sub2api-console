@@ -3,7 +3,24 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="theme-color" content="#0b1117" />
+    <meta name="theme-color" content="#1e1e1e" />
+    <script>
+      // Apply before application bundles load; keep in sync with theme-preference.ts.
+      (function () {
+        var theme = "dark";
+        try {
+          if (localStorage.getItem("sub2api-console-theme") === "light") theme = "light";
+        } catch {
+          // Restricted storage must not block startup.
+        }
+        var root = document.documentElement;
+        root.dataset.theme = theme;
+        root.classList.toggle("dark", theme === "dark");
+        root.style.colorScheme = theme;
+        document.querySelector('meta[name="theme-color"]').content =
+          theme === "light" ? "#ffffff" : "#1e1e1e";
+      })();
+    </script>
     <meta
       name="description"
       content="Sub2API 自动化控制台，统一接管账号分组、健康监测、倍率同步与调度。"

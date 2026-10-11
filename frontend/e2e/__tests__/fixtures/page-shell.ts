@@ -34,6 +34,9 @@ export const workspace: NewAPIWorkspace = {
 };
 
 export const pageFixtures: Record<string, unknown> = {
+  "/api/newapi/platforms/layout/groups": {
+    groups: [{ id: "default", name: "默认", ratio: "1" }],
+  },
   "/api/preferences/navigation": { hidden_item_ids: [], version: "test" },
   "/api/newapi/platforms/layout/channels": { items: [], total: 0 },
   "/api/newapi/platforms/layout/channel-groups": { version: "1", groups: [] },

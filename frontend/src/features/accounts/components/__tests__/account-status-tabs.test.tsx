@@ -1,3 +1,4 @@
+import userEvent from "@testing-library/user-event";
 import { renderToStaticMarkup } from "react-dom/server";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -326,7 +327,9 @@ describe("AccountStatusFilter", () => {
       const row = within(screen.getByRole("row", { name: /选择账号 示例账号 11/ }));
       const buttonCount = row.getAllByRole("button").length;
       fireEvent.click(row.getByRole("button", { name: action }));
-      await waitFor(() => expect(readTask).toHaveBeenCalledWith(running.id));
+      await waitFor(() =>
+        expect(readTask).toHaveBeenCalledWith(running.id, expect.any(AbortSignal)),
+      );
       expect(row.getByRole("button", { name: "同步账号倍率" })).toBeDisabled();
       expect(row.queryByRole("button", { name: /取消任务|取消操作/ })).not.toBeInTheDocument();
       expect(row.getAllByRole("button")).toHaveLength(buttonCount);
@@ -339,4 +342,37 @@ describe("AccountStatusFilter", () => {
       queryClient.clear();
     },
   );
+});
+
+it("状态筛选按字典顺序展示人工熔断并支持键盘选择与清除", async () => {
+  const user = userEvent.setup();
+  const client = new QueryClient();
+  client.setQueryData(["dictionaries", "account_status"], {
+    items: [
+      { value: "manual_fused", enabled: true, sort_order: 0 },
+      { value: "fused", enabled: true, sort_order: 1 },
+    ],
+  });
+  const onValueChange = vi.fn();
+  const view = render(
+    <QueryClientProvider client={client}>
+      <AccountStatusFilter value="all" onValueChange={onValueChange} />
+    </QueryClientProvider>,
+  );
+  await user.click(screen.getByRole("button", { name: "状态筛选" }));
+  const options = await screen.findAllByRole("option");
+  expect(options[0]).toHaveTextContent("人工熔断");
+  expect(options[1]).toHaveTextContent("已熔断");
+  await user.keyboard("{Home}{Enter}");
+  expect(onValueChange).toHaveBeenLastCalledWith("manual_fused");
+  view.rerender(
+    <QueryClientProvider client={client}>
+      <AccountStatusFilter value="manual_fused" onValueChange={onValueChange} />
+    </QueryClientProvider>,
+  );
+  const selected = await screen.findByRole("option", { name: "人工熔断" });
+  expect(selected).toHaveAttribute("aria-selected", "true");
+  await user.click(selected);
+  expect(onValueChange).toHaveBeenLastCalledWith("all");
+  client.clear();
 });

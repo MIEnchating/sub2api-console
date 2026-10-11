@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/MIEnchating/sub2api-console/backend/internal/modelcheck"
 )
@@ -22,7 +23,7 @@ func TestAnimationAllSelectedAccountsExceedTwenty(t *testing.T) {
 	if _, err := f.service.EnqueueAnimation(context.Background(), request(ids...)); err != nil {
 		t.Fatal(err)
 	}
-	task := finished(t, f)
+	task := finishedWithin(t, f, 20*time.Second)
 	results := task.Result["animations"].([]modelcheck.AnimationResult)
 	if task.Status != "succeeded" || len(results) != 25 {
 		t.Fatalf("incomplete all-account task: status=%s results=%d", task.Status, len(results))

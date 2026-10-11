@@ -1,3 +1,4 @@
+import { dictionaryResponse } from "./fixtures/dictionaries";
 import { expect, test } from "@playwright/test";
 
 import { pageFixtures } from "./fixtures/page-shell";
@@ -58,7 +59,9 @@ test.beforeEach(async ({ page, colorScheme }) => {
       },
       "/api/setup/status": { initialized: true, configuration_errors: [] },
       "/api/auth/session": { authenticated: true, username: "移动端布局回归" },
-      "/api/dictionaries": { items: [] },
+      "/api/dictionaries": dictionaryResponse(route.request().url(), [
+        { value: "3", name: "本地 OpenAI" },
+      ]),
       "/api/upstreams/mobile.example.test/configuration": upstream,
       "/api/groups": [{ id: "3", name: "本地 OpenAI", platform: "openai", account_count: 0 }],
       "/api/onboarding/prepare": {

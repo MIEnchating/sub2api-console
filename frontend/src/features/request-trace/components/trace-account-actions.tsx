@@ -7,7 +7,7 @@ import { Ban, LoaderCircle, RefreshCw } from "lucide-react";
 import { api, type AccountControlAction } from "@/api";
 import { ConfirmActionDialog } from "@/components/confirm-action-dialog";
 import { Button } from "@/components/ui/button";
-import { accountPoolState } from "@/features/accounts/lib/account-pool";
+import { effectiveAccountState } from "@/features/accounts/lib/account-state";
 import { accountConcurrencyLimitedHelp } from "@/features/accounts/constants";
 import { notifyOperationError } from "@/lib/operation-feedback";
 import { notifyTaskResult } from "@/lib/task-result-feedback";
@@ -29,14 +29,14 @@ export function TraceAccountActions(props: { accountId: string }): React.ReactEl
   const refreshedTask = useRef<string | null>(null);
   const validId = /^[1-9]\d*$/.test(props.accountId);
   const account = useQuery({
-    queryKey: ["account-detail", props.accountId],
-    queryFn: () => api.account(props.accountId),
+    queryKey: ["account-detail", props.accountId, "control-state"],
+    queryFn: (context) => api.accountControlState(props.accountId, context.signal),
     enabled: validId,
     retry: false,
   });
   const task = useQuery({
     queryKey: ["account-scheduling", props.accountId, taskId],
-    queryFn: () => api.task(taskId!),
+    queryFn: (context) => api.task(taskId!, context.signal),
     enabled: taskId !== null,
     refetchInterval: taskPollInterval,
   });
@@ -68,7 +68,7 @@ export function TraceAccountActions(props: { accountId: string }): React.ReactEl
   }
 
   const current = account.data;
-  const state = current ? accountPoolState(current).value : null;
+  const state = current ? effectiveAccountState(current) : null;
   const fused = state === "fused";
   const paused = state === "paused";
   const concurrencyLimited = state === "concurrency_limited";
@@ -79,7 +79,6 @@ export function TraceAccountActions(props: { accountId: string }): React.ReactEl
     account.isError ||
     !current ||
     current.id !== props.accountId ||
-    current.manual_priority != null ||
     state === "excluded";
   const recoverAction = fused || state === "cost_blocked" ? "recover" : "resume";
   const label = confirmation ? actionLabels[confirmation] : "账号处置";
@@ -129,9 +128,6 @@ export function TraceAccountActions(props: { accountId: string }): React.ReactEl
             重试
           </Button>
         </div>
-      ) : null}
-      {current?.manual_priority != null ? (
-        <p className="text-muted-foreground text-xs">请先取消手动控制</p>
       ) : null}
       {state === "excluded" ? (
         <p className="text-muted-foreground text-xs">请先在账号管理恢复管控</p>

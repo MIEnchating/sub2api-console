@@ -65,7 +65,11 @@ func TestManagedDetectionRestartKeepsCompletedAccountAndOriginalTaskID(t *testin
 	if err != nil || len(pending) != 1 {
 		t.Fatalf("pending: %#v %v", pending, err)
 	}
-	if err := restarted.ResumeTask(context.Background(), pending[0]); err != nil {
+	recoveryTask, err := f.tasks.RecoveryTask(context.Background(), pending[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := restarted.ResumeTask(context.Background(), recoveryTask); err != nil {
 		t.Fatal(err)
 	}
 	resumed.runs[0](context.Background())
@@ -75,48 +79,6 @@ func TestManagedDetectionRestartKeepsCompletedAccountAndOriginalTaskID(t *testin
 	}
 	if len(final.Result["animations"].([]modelcheck.AnimationResult)) != 2 {
 		t.Fatal("final result missing an account")
-	}
-}
-
-func TestTerminalRestartContinuesAtFirstUnfinishedRound(t *testing.T) {
-	ctx, cancel := context.WithCancelCause(context.Background())
-	defer cancel(nil)
-	var calls atomic.Int32
-	f := setup(t, 1, "openai", func(w http.ResponseWriter, r *http.Request) {
-		if calls.Add(1) == 2 {
-			cancel(taskcontext.ErrInterrupted)
-			return
-		}
-		json.NewEncoder(w).Encode(map[string]any{"output_text": `{"tool":"exec_command","command":"git status --short"}`})
-	})
-	runner := &deferredRunner{}
-	f.service.UseTaskRunner(runner)
-	task, err := f.service.EnqueueTerminalContinuity(context.Background(), modelcheck.TerminalContinuityRequest{Targets: request("1").Targets, TimeoutSeconds: 5, Rounds: 3})
-	if err != nil {
-		t.Fatal(err)
-	}
-	runner.runs[0](ctx)
-	pending, err := f.tasks.PendingRecovery(context.Background())
-	if err != nil || len(pending) != 1 {
-		t.Fatalf("pending: %#v %v", pending, err)
-	}
-	restarted, err := modelcheck.New(f.tasks, credentials{}, f.catalog, credentials{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	resumed := &deferredRunner{}
-	restarted.UseTaskRunner(resumed)
-	if err := restarted.ResumeTask(context.Background(), pending[0]); err != nil {
-		t.Fatal(err)
-	}
-	resumed.runs[0](context.Background())
-	final := finished(t, f)
-	if final.ID != task.ID || final.Status != "succeeded" || calls.Load() != 4 {
-		t.Fatalf("completed terminal round replayed: %s calls=%d", final.Status, calls.Load())
-	}
-	checks := final.Result["checks"].([]modelcheck.TerminalContinuityResult)
-	if len(checks) != 1 || len(checks[0].RoundResults) != 3 {
-		t.Fatalf("rounds lost: %#v", checks)
 	}
 }
 
@@ -147,7 +109,11 @@ func TestDetectionConfigurationChangeRefusesOldTaskRecovery(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := restarted.ResumeTask(context.Background(), pending[0]); err == nil {
+	recoveryTask, err := f.tasks.RecoveryTask(context.Background(), pending[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := restarted.ResumeTask(context.Background(), recoveryTask); err == nil {
 		t.Fatal("changed configuration was resumed")
 	}
 }

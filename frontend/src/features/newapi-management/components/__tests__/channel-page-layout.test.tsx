@@ -1,8 +1,9 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { NewAPIManagementPage } from "../newapi-management-page";
+import { renderWithRouter } from "./render-with-router";
 
 let client: QueryClient;
 const longName = "超长渠道名称".repeat(30);
@@ -21,14 +22,7 @@ const workspace = {
   bindings: [],
   sub2api_base_url: "https://sub.example.test",
 };
-const snapshot = {
-  groups: [],
-  models: [],
-  unset_models: [],
-  tool_prices: [],
-  references: [],
-  differences: [],
-};
+const remoteGroups = { groups: [] };
 beforeEach(() => vi.stubGlobal("PointerEvent", MouseEvent));
 afterEach(() => {
   cleanup();
@@ -37,7 +31,7 @@ afterEach(() => {
 });
 function mount(): void {
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  render(
+  renderWithRouter(
     <QueryClientProvider client={client}>
       <NewAPIManagementPage view="channels" />
     </QueryClientProvider>,
@@ -61,7 +55,7 @@ it("渠道页以可滚动表格展示长文本，新增表单按需打开且关�
         ],
         total: 1,
       });
-    if (String(url).includes("/refresh")) return Response.json(snapshot);
+    if (String(url).endsWith("/groups")) return Response.json(remoteGroups);
     if (String(url).includes("/auth-recovery/config")) return Response.json({ vault_entries: [] });
     if (String(url).includes("/dictionaries")) return Response.json({ items: [] });
     return Response.json(workspace);
@@ -101,10 +95,10 @@ it("新增弹窗配置读取失败提供重试和取消，已有渠道仍可浏�
     "fetch",
     vi.fn(async (url: RequestInfo | URL) => {
       if (String(url).includes("/channels?")) return Response.json({ items: [], total: 0 });
-      if (String(url).includes("/refresh"))
+      if (String(url).endsWith("/groups"))
         return failed
           ? Response.json({ detail: "分组暂时不可用" }, { status: 503 })
-          : Response.json(snapshot);
+          : Response.json(remoteGroups);
       if (String(url).includes("/auth-recovery/config"))
         return Response.json({ vault_entries: [] });
       if (String(url).includes("/dictionaries")) return Response.json({ items: [] });

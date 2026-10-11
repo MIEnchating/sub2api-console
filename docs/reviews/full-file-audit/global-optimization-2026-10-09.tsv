@@ -1,0 +1,25 @@
+backend/internal/business/__tests__/account_ownership_test.go	cccc5fb2735f7a10588b453b2bc05e4490852a278ffe39dace31b53ce7fee443	reviewed	阅读全文；临时数据库覆盖单一/多身份、不存在账号及 5000 无关绑定基准；测试不访问外部端点。
+backend/internal/business/log_cleanup.go	96e19adc67d174e248909b9e5815f0231995967d90e8435af7bcfbdf952ff80b	reviewed	阅读全文；三类记录按时间索引选取500条分批提交，保护活动运行记录，传播取消及部分完成计数。
+backend/internal/business/readmodels.go	fa6b3da22775fe72a708488ddfd1349105576bb10099e5649dea8803096834ad	fixed	阅读全文；单账号归属聚合按稳定 ID 下推过滤，保留多身份保护和列表范围；隔离基准与 27 个相关包竞态检查通过。
+backend/internal/logs/cleanup_execution.go	99af4a9fbd0416d38df943f5e1c0ecbee9c120a9528bc344d286421e068846ce	reviewed	阅读全文；执行前互斥预约和持久任务，固定截止时间，分批进度节流，失败/取消保留已提交计数并失效日志缓存。
+backend/internal/logs/maintenance.go	964eee41577c1aaa410fec0cbb8d95d06fb7531e1c5e1cdf2a0aaec1c2084e20	reviewed	阅读全文；自动/手动清理共享互斥与保留期限校验，当前任务状态受锁保护，停止调度支持取消上下文。
+backend/internal/sqliteutil/database.go	86ca70639ec921bca9bb3bc30f19beca8ff682bc131738f2449a7889b9e6a021	reviewed	阅读全文；单写连接和8只读连接，读事务显式走只读池，空闲一分钟回收，不中断活动快照。
+backend/internal/taskstore/log_cleanup.go	cf82de5c40b8d135baff56d031048bc886d2fe4e9221afb576d22e9302e34ba8	reviewed	阅读全文；事务内选取200条终态任务，墓碑及恢复/互斥记录一并删除，写锁之间释放，保护活动任务。
+frontend/e2e/__tests__/route-transition.e2e.ts	19eb314be85cecfc30c359020c4805b1e3e2323b25dcc682ba1ff951db240e99	reviewed	阅读全文；拦截全部 API，暂停真实 CSS 动画检查起点和结束状态，验证动态偏好切换及溢出；4 浏览器场景通过。
+frontend/rsbuild.config.ts	259413477171495002b5ca425720b68451c7fcd8364e22706057bd0b6bd819ab	reviewed	阅读全文；开发代理与生产路由自动分割，独立临时目录构建通过；正在评估首屏动画依赖。
+frontend/src/app-routes/__root.tsx	78bb6564f6abd383344363e3e144e74fd82cc0d12e731aa0c112f0eeaac9a975	reviewed	阅读全文；独立应用壳为唯一根路由，不直接导入业务页面。
+frontend/src/app-shell.tsx	d7b45d7d2ce087a0f3baf61869f79bf518c561486fc464bd4f86b6112fd7081f	fixed	阅读全文；有效 SSE 才停止轮询，坏载荷恢复轮询，取消旧查询防迟到覆盖；CSS 替代首屏 Motion，应用壳及浏览器回归通过。
+frontend/src/components/form-field.tsx	327d1ad4dd9e6362bcaa31c81f8cb49189a141068fd8256bb61528910587f313	reviewed	阅读全文；显式 htmlFor 或共享控件自动 label，已带 aria 名称时不重复，错误与说明复用共享组件。
+frontend/src/components/sortable-list.tsx	6c88d4d558c11de5c05c1cfffc40f50779548064cf79771801fcf40af08a74ca	reviewed	阅读全文；稳定 ID 排序、禁用/越界取消、键盘公告、减少动态效果及 portal 拖拽层边界；本轮无修改。
+frontend/src/components/startup-loading.tsx	68d79167b2448451b098ec3c8d25e05081a05d93e333fe922e9686c3ad83259b	reviewed	阅读全文；初始化/登录检查为带可访问状态的启动界面，遵循减少动态效果偏好。
+frontend/src/features/auth/components/login-page.tsx	2df8998f3cca7f19457dfba216b33d4324ce149189777873ec972cf3e9fb6e81	reviewed	阅读全文；密码仅表单内存，成功重置、mutation gcTime=0/retry=false，表单状态与可访问名称一致。
+frontend/src/features/auto-inspection/__tests__/status-stream.test.tsx	3301a51f2f19f93657d22c6c51a9bae8df79c9117dfc9980aaa4ed3d7f27ec4f	reviewed	阅读全文；补齐合法 index 测试路由，真实 App/Query/Router 验证推送、坏数据/断线轮询、迟到 HTTP 与关闭；最终7用例通过。
+frontend/src/features/auto-inspection/lib/status-schema.ts	a858ee1e5901ccf7f1dd7eac732c907e6f7599d7fce166dae39b485bea94506c	reviewed	阅读全文并对照 Go 状态结构；严格布尔/枚举及嵌套校验，空切片转空数组，保留扩展字段；SSE 回归通过。
+frontend/src/features/config/components/log-cleanup-action.tsx	3c4753dca0343e999e31ef2dfedd40d0e3a2230aebf7e192e15aa51c96f638f3	reviewed	阅读全文；有效期限与二次确认、后台任务轮询/取消/关闭继续执行，终态提示及日志/设置/概览精确失效。
+frontend/src/lib/__tests__/date-format.bench.ts	9a77c04292dcaeeb9e4348d646583630b05335c9845aa1663c33b5d8d588aa8c	reviewed	阅读全文；真实日期函数处理 5000 个固定时间，报告单路径耗时，不推断整页性能。
+frontend/src/lib/__tests__/date-format.test.ts	5312550eada7dbf2149f56c0c496631ca00ffa0fb1c68d825c27bc2f779859e5	reviewed	阅读全文；固定本地时间覆盖 ISO、秒/毫秒、缺失与非法历史值，优化前后均通过。
+frontend/src/lib/date-format.ts	24e10c798bf68d69bcb22ec872237f1851b7fb223334a373f210fb3920b4cbd1	fixed	阅读全文；复用分钟/秒 Intl 格式器，保留本地时区和历史输入；7 用例及日期调用方回归通过。
+frontend/src/lib/utils.ts	520ef9b69532310d14b392b124b3f1af0a2b8acdf41e5c20c3d04c33296a61ec	reviewed	阅读全文；cn 使用 clsx/tailwind-merge，分页端点与省略号逻辑；本轮无修改。
+frontend/src/main.tsx	471a43d5b5ff7073f5647e904d6dac942ca7f3769e0a5fd7fab8dc2d8411873b	reviewed	阅读全文；统一 QueryClient/Tooltip/Router/Toaster，单一挂载入口，无敏感状态持久化。
+frontend/src/router.tsx	f2b6fbf4af0bec22d6d5613ab3fdc9051eaf0d62597a83f9065dbc8ccb6af3fd	reviewed	阅读全文；类型化路由及搜索参数编解码、意图预加载；构建成功。
+frontend/src/styles.css	41ca35fc9725051445950c5ddfa00f2fb4f469bb20ed883881214e678a8e13ab	fixed	阅读全文；短入场 CSS 动画仅在允许动态效果时执行；减少动态效果切换及桌面/手机布局回归通过。

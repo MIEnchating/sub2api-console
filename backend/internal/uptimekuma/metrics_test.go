@@ -14,7 +14,7 @@ monitor_response_time{monitor_id="19",monitor_name="智谱\"主线",monitor_type
 # TYPE monitor_uptime_ratio gauge
 monitor_uptime_ratio{monitor_id="19",monitor_name="智谱\"主线",monitor_type="http",window="1d"} 0.98
 `
-	got, err := parseMetrics([]byte(input))
+	got, err := parseMetrics(strings.NewReader(input))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -26,7 +26,7 @@ monitor_uptime_ratio{monitor_id="19",monitor_name="智谱\"主线",monitor_type=
 	}
 }
 func TestLegacyMetricsNeverInventManagementIDs(t *testing.T) {
-	got, err := parseMetrics([]byte("# TYPE monitor_status gauge\nmonitor_status{monitor_name=\"same\",monitor_type=\"http\",monitor_url=\"https://a.example\"} 1\nmonitor_status{monitor_name=\"same\",monitor_type=\"http\",monitor_url=\"https://b.example\"} 0\n"))
+	got, err := parseMetrics(strings.NewReader("# TYPE monitor_status gauge\nmonitor_status{monitor_name=\"same\",monitor_type=\"http\",monitor_url=\"https://a.example\"} 1\nmonitor_status{monitor_name=\"same\",monitor_type=\"http\",monitor_url=\"https://b.example\"} 0\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -46,7 +46,7 @@ func TestMetricsEmptyAndInvalidResponses(t *testing.T) {
 		{"invalid ID", "# TYPE monitor_status gauge\nmonitor_status{monitor_id=\"bad\",monitor_name=\"test\",monitor_type=\"http\"} 1\n", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := parseMetrics([]byte(tc.body))
+			got, err := parseMetrics(strings.NewReader(tc.body))
 			if (err == nil) != tc.valid {
 				t.Fatalf("unexpected parse result: %v %#v", err, got)
 			}

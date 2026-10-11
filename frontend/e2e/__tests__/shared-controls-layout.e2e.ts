@@ -9,7 +9,14 @@ test.beforeAll(() => {
   bundleDirectory = mkdtempSync(join(tmpdir(), "console-shared-controls-"));
   execFileSync(
     "bun",
-    ["build", "e2e/__tests__/fixtures/shared-controls-layout.tsx", "--outdir", bundleDirectory],
+    [
+      "build",
+      "e2e/__tests__/fixtures/shared-controls-layout.tsx",
+      "--outdir",
+      bundleDirectory,
+      "--define",
+      "import.meta.env={}",
+    ],
     { cwd: process.cwd(), stdio: "pipe" },
   );
 });

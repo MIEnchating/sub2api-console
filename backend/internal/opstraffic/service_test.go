@@ -23,15 +23,10 @@ func (target staticTarget) TargetSettings(context.Context) (configstore.TargetSe
 
 type staticAccounts struct{}
 
-func (staticAccounts) Accounts(context.Context) ([]business.AccountStatus, error) {
-	return []business.AccountStatus{{ID: "42", Name: "账号 A"}}, nil
-}
-
-func (staticAccounts) Account(context.Context, string) (*business.AccountDetail, error) {
+func (staticAccounts) AccountLogLabels(context.Context, []string) (map[string]*business.AccountLogLabel, error) {
 	groupID := "7"
-	return &business.AccountDetail{
-		AccountStatus: business.AccountStatus{ID: "42", Name: "账号 A"},
-		GroupIDs:      map[string]*string{"默认分组": &groupID},
+	return map[string]*business.AccountLogLabel{
+		"42": {Name: "账号 A", GroupIDs: map[string]*string{"默认分组": &groupID}},
 	}, nil
 }
 

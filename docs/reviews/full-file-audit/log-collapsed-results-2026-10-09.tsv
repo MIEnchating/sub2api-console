@@ -1,0 +1,5 @@
+frontend/src/features/logs/components/log-details-dialog.tsx	07927737203fd8f3129e109e03735777d7c8de7592436e0e0a7a824dbb9ca1fb	fixed	完整复审；大集合首次展开前不渲染明细，展开后保留子树与分页，刷新读取当前数据。小集合及items/results保持直接展示。
+frontend/src/features/logs/components/__tests__/collapsed-results.test.tsx	6acf58108220da500add464c126ae1f1e697e5a0ee42152e70b6ad68c0f653d9	reviewed	完整阅读；首次展开、完整翻页、收起再开保留页码、刷新及小集合兼容。旧实现两项先失败，修复后四项通过。
+frontend/src/features/logs/components/__tests__/collapsed-results.bench.ts	6c2f1245e5dd74b99415c4b51f9eba6b29c63cc22eb0e96cdd908c91c4166227	reviewed	完整阅读；真实组件5000目标静态渲染基准，校验摘要。仅测SSR渲染CPU耗时，不代表浏览器绘制或数据库清理吞吐。
+frontend/src/features/logs/__tests__/inspection-details.test.tsx	9f904213dfa43041538b82b7902359f08c7d300fd2d759901f1c4e7593963e3c	fixed	完整复审；更新默认折叠只渲染摘要的契约；既有即时执行明细分页、操作耗时、关联事件与中文字段回归全部保留。
+frontend/e2e/__tests__/logs-center-layout.e2e.ts	b27c9545103fb1700e740a765406e116f3e2118b2df1ed408da328b50242e80a	fixed	完整复审；隔离所有API，新增真实浏览器Enter/Space展开收起与分页保留；桌面及移动端共14项通过。

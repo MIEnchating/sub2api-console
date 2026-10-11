@@ -9,6 +9,7 @@ import (
 )
 
 func TestRoutingSamplesLimitsCombinedSourcesPerAccount(t *testing.T) {
+	t.Parallel()
 	store := openPolicyStore(t)
 	ctx := context.Background()
 	base := time.Date(2026, 8, 28, 0, 0, 0, 0, time.UTC)
@@ -51,6 +52,7 @@ func TestRoutingSamplesLimitsCombinedSourcesPerAccount(t *testing.T) {
 }
 
 func TestRoutingSamplesPreservesIndependentTrafficAndProbeWindows(t *testing.T) {
+	t.Parallel()
 	store := openPolicyStore(t)
 	ctx := context.Background()
 	base := time.Date(2026, 9, 4, 0, 0, 0, 0, time.UTC)
@@ -77,6 +79,7 @@ func TestRoutingSamplesPreservesIndependentTrafficAndProbeWindows(t *testing.T) 
 }
 
 func TestRoutingSamplesFiltersPureProbeBeforeApplyingAccountWindow(t *testing.T) {
+	t.Parallel()
 	store := openPolicyStore(t)
 	ctx := context.Background()
 	base := time.Date(2026, 8, 28, 0, 0, 0, 0, time.UTC)
@@ -111,6 +114,7 @@ func TestRoutingSamplesFiltersPureProbeBeforeApplyingAccountWindow(t *testing.T)
 }
 
 func TestRoutingSamplesForSecondaryGroupUsesAccountEvidence(t *testing.T) {
+	t.Parallel()
 	store := openPolicyStore(t)
 	ctx := context.Background()
 	if _, err := store.db.ExecContext(ctx, `INSERT INTO accounts(id,name,metadata_json,updated_at)
@@ -139,6 +143,7 @@ func TestRoutingSamplesForSecondaryGroupUsesAccountEvidence(t *testing.T) {
 }
 
 func TestRoutingSamplesSelectNewestPerAccountWithoutDependingOnImplicitIndexOrder(t *testing.T) {
+	t.Parallel()
 	store := openPolicyStore(t)
 	ctx := context.Background()
 	if _, err := store.db.ExecContext(ctx, `INSERT INTO health_samples(
@@ -178,6 +183,7 @@ func TestRoutingSamplesSelectNewestPerAccountWithoutDependingOnImplicitIndexOrde
 }
 
 func TestPreviousRoutingDecisionUsesAnySuccessfulWriteForSharedCooldown(t *testing.T) {
+	t.Parallel()
 	store := openPolicyStore(t)
 	ctx := context.Background()
 	now := time.Date(2026, 8, 28, 1, 2, 3, 0, time.UTC).Format(time.RFC3339Nano)
@@ -204,6 +210,7 @@ func TestPreviousRoutingDecisionUsesAnySuccessfulWriteForSharedCooldown(t *testi
 }
 
 func TestPreviousRoutingDecisionQueryUsesIndexedAccountAuditLookups(t *testing.T) {
+	t.Parallel()
 	store := openPolicyStore(t)
 	query, arguments := previousRoutingDecisionsQuery(nil, nil)
 	rows, err := store.db.Query("EXPLAIN QUERY PLAN "+query, arguments...)
@@ -232,6 +239,7 @@ func TestPreviousRoutingDecisionQueryUsesIndexedAccountAuditLookups(t *testing.T
 }
 
 func TestRoutingWritebackPendingUsesOrderedAuditIndex(t *testing.T) {
+	t.Parallel()
 	store := openPolicyStore(t)
 	rows, err := store.db.Query("EXPLAIN QUERY PLAN "+routingWritebackPendingSQL, routingCalculationKey)
 	if err != nil {

@@ -6,6 +6,7 @@ import (
 )
 
 func TestRecoveryOutsideCapacityScopeIgnoresUnconfirmedUpstream(t *testing.T) {
+	t.Parallel()
 	for _, status := range []string{"unknown", "stale"} {
 		t.Run(status, func(t *testing.T) {
 			account := upstreamCapacityAccount("41", 3, 10)
@@ -36,6 +37,7 @@ func TestRecoveryOutsideCapacityScopeIgnoresUnconfirmedUpstream(t *testing.T) {
 }
 
 func TestActiveAccountWithMissingConcurrencyDoesNotGenerateUnverifiableWrite(t *testing.T) {
+	t.Parallel()
 	account := upstreamCapacityAccount("41", 3, 10)
 	account.Concurrency = nil
 	repository := upstreamCapacityFixture(t, account)
@@ -49,6 +51,7 @@ func TestActiveAccountWithMissingConcurrencyDoesNotGenerateUnverifiableWrite(t *
 }
 
 func TestRecoveryWithScalingDisabledResumesAfterUpstreamIsConfirmed(t *testing.T) {
+	t.Parallel()
 	account := upstreamCapacityAccount("41", 3, 10)
 	paused := false
 	account.Schedulable = &paused

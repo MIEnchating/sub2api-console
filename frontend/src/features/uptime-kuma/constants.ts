@@ -46,3 +46,10 @@ export const resourceActionLabels = {
   resume: "恢复",
 } as const;
 export const kumaResourcesKey = [...kumaQueryKey, "resources"] as const;
+
+export const templateDistributionStatusLabels: Record<string, string> = {
+  succeeded: "下发成功",
+  failed: "下发失败，请核对远端状态",
+  skipped: "已跳过",
+  not_run: "未执行",
+};

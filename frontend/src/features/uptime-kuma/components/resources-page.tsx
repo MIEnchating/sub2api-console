@@ -41,6 +41,8 @@ import {
 import { useTaskCompletion } from "../hooks/use-task-completion";
 import type { ResourceValues } from "../lib/resource-schemas";
 import { ResourceDialog } from "./resource-dialog";
+import { KumaTaskProgress } from "./kuma-task-progress";
+import { isKumaTaskCancellation } from "../lib/task-cancellation";
 
 type ConfirmedAction = "delete" | "test" | "pause" | "resume";
 function confirmationDescription(
@@ -56,15 +58,22 @@ export function KumaResourcesPage(props: { kind: KumaResourceKind }) {
   const client = useQueryClient();
   const task = useTaskCompletion();
   const [search, setSearch] = useState("");
-  const [editor, setEditor] = useState<{ item?: KumaResource } | null>(null);
+  const [editor, setEditor] = useState<{ item?: KumaResource; configRevision: number } | null>(
+    null,
+  );
   const [confirmation, setConfirmation] = useState<{
     item: KumaResource;
     action: ConfirmedAction;
+    configRevision: number;
   } | null>(null);
-  const config = useQuery({ queryKey: kumaConfigKey, queryFn: api.kumaConfig, retry: false });
+  const config = useQuery({
+    queryKey: kumaConfigKey,
+    queryFn: ({ signal }) => api.kumaConfig(signal),
+    retry: false,
+  });
   const query = useQuery({
     queryKey: [...kumaResourcesKey, props.kind, config.data?.revision],
-    queryFn: () => api.kumaResources(props.kind),
+    queryFn: ({ signal }) => api.kumaResources(props.kind, signal),
     enabled: !!config.data?.management_configured,
     retry: false,
     refetchOnWindowFocus: false,
@@ -85,8 +94,10 @@ export function KumaResourcesPage(props: { kind: KumaResourceKind }) {
     refetchOnReconnect: false,
   });
   const save = useMutation({
-    mutationFn: (value: { id: number; input: KumaResourceWrite }) =>
-      api.writeKumaResource(props.kind, value.id, value.input).then(task.wait),
+    mutationFn: (value: { id: number; input: KumaResourceWrite }) => {
+      task.prepare();
+      return api.writeKumaResource(props.kind, value.id, value.input).then(task.wait);
+    },
     onSuccess: async () => {
       setEditor(null);
       setConfirmation(null);
@@ -94,12 +105,22 @@ export function KumaResourcesPage(props: { kind: KumaResourceKind }) {
       await refresh();
     },
     onError: async (error) => {
-      if (!editor) notifyOperationError(error, "管理操作失败");
+      if (isKumaTaskCancellation(error)) {
+        setEditor(null);
+        setConfirmation(null);
+        toast.info(error.message);
+      } else if (!editor) notifyOperationError(error, "管理操作失败");
       await refresh();
     },
   });
   const pending = save.isPending;
-  const disabled = pending || query.isFetching || query.isError || !query.data || config.isError;
+  const disabled =
+    pending ||
+    query.isFetching ||
+    query.isError ||
+    !query.data ||
+    config.isError ||
+    query.data.config.revision !== config.data?.revision;
   const items = (query.data?.items ?? []).filter((item) =>
     `${item.name} ${item.type}`.toLowerCase().includes(search.trim().toLowerCase()),
   );
@@ -107,9 +128,10 @@ export function KumaResourcesPage(props: { kind: KumaResourceKind }) {
   const submit = (values: ResourceValues): void => {
     if (!config.data) return;
     if (!editor || (editor.item && !detail.data)) return;
+    if (!canSubmit(editor.configRevision)) return;
     const item = detail.data;
     const input: KumaResourceWrite = {
-      config_revision: config.data.revision,
+      config_revision: editor.configRevision,
       revision: item?.revision ?? "",
       association_revision: item?.association_revision ?? "",
       action: item ? "edit" : "create",
@@ -119,6 +141,17 @@ export function KumaResourcesPage(props: { kind: KumaResourceKind }) {
     if (props.kind === "status-pages") input.status_page = values.status_page;
     save.mutate({ id: item?.id ?? 0, input });
   };
+  function canSubmit(configRevision: number): boolean {
+    if (configRevision !== config.data?.revision) {
+      notifyOperationError("监控平台配置已更改，请关闭窗口并重新打开后操作", "管理操作未提交");
+      return false;
+    }
+    if (disabled || config.isFetching) {
+      notifyOperationError("管理数据尚未读取完成，请刷新后重试", "管理操作未提交");
+      return false;
+    }
+    return true;
+  }
   return (
     <PageLayout fixedContent>
       <PageHeading
@@ -136,7 +169,7 @@ export function KumaResourcesPage(props: { kind: KumaResourceKind }) {
               disabled={disabled}
               onClick={() => {
                 save.reset();
-                setEditor({});
+                if (config.data) setEditor({ configRevision: config.data.revision });
               }}
             >
               <CirclePlus aria-hidden="true" />
@@ -227,7 +260,8 @@ export function KumaResourcesPage(props: { kind: KumaResourceKind }) {
                                 }
                                 onClick={() => {
                                   save.reset();
-                                  setEditor({ item });
+                                  if (config.data)
+                                    setEditor({ item, configRevision: config.data.revision });
                                 }}
                               >
                                 <Pencil aria-hidden="true" />
@@ -236,7 +270,13 @@ export function KumaResourcesPage(props: { kind: KumaResourceKind }) {
                                 <TableActionButton
                                   label="发送测试通知"
                                   disabled={disabled}
-                                  onClick={() => setConfirmation({ item, action: "test" })}
+                                  onClick={() =>
+                                    setConfirmation({
+                                      item,
+                                      action: "test",
+                                      configRevision: config.data!.revision,
+                                    })
+                                  }
                                 >
                                   <Send aria-hidden="true" />
                                 </TableActionButton>
@@ -249,6 +289,7 @@ export function KumaResourcesPage(props: { kind: KumaResourceKind }) {
                                     setConfirmation({
                                       item,
                                       action: item.active ? "pause" : "resume",
+                                      configRevision: config.data!.revision,
                                     })
                                   }
                                 >
@@ -280,7 +321,13 @@ export function KumaResourcesPage(props: { kind: KumaResourceKind }) {
                                 label="删除"
                                 tone="danger"
                                 disabled={disabled}
-                                onClick={() => setConfirmation({ item, action: "delete" })}
+                                onClick={() =>
+                                  setConfirmation({
+                                    item,
+                                    action: "delete",
+                                    configRevision: config.data!.revision,
+                                  })
+                                }
                               >
                                 <Trash2 aria-hidden="true" />
                               </TableActionButton>
@@ -320,6 +367,7 @@ export function KumaResourcesPage(props: { kind: KumaResourceKind }) {
           options={query.data}
           pending={save.isPending}
           task={task.task}
+          starting={task.starting}
           error={save.error}
           onClose={() => setEditor(null)}
           onSubmit={submit}
@@ -331,15 +379,16 @@ export function KumaResourcesPage(props: { kind: KumaResourceKind }) {
         description={confirmationDescription(confirmation)}
         confirmLabel={confirmation ? resourceActionLabels[confirmation.action] : "确认"}
         pending={save.isPending}
+        pendingContent={<KumaTaskProgress task={task.task} starting={task.starting} />}
         onOpenChange={(open) => {
           if (!open) setConfirmation(null);
         }}
         onConfirm={() => {
-          if (confirmation && config.data)
+          if (confirmation && config.data && canSubmit(confirmation.configRevision))
             save.mutate({
               id: confirmation.item.id,
               input: {
-                config_revision: config.data.revision,
+                config_revision: confirmation.configRevision,
                 revision: confirmation.item.revision,
                 association_revision: "",
                 action: confirmation.action,

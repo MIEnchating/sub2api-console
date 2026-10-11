@@ -1586,9 +1586,12 @@ func TestRestoreAccountDoesNotReportProtectedSkipAsRestored(t *testing.T) {
 	service := newTestService(protectedRestoreRepository{}, admin)
 	coordinator := newBatchWriteCoordinator(context.Background(), admin, 1, true)
 
-	item := service.restoreAccount(context.Background(), admin, business.RoutingBaseline{
+	item, finish := service.prepareRestoration(context.Background(), admin, business.RoutingBaseline{
 		AccountID: "41", TargetFingerprint: routingTargetFingerprint(testRoutingTarget),
 	}, "operator", routingTargetFingerprint(testRoutingTarget), coordinator)
+	if finish != nil {
+		item = finish()
+	}
 
 	if !item.Skipped || item.Restored || item.Error != nil {
 		t.Fatalf("protected restore result=%#v", item)
@@ -1673,9 +1676,13 @@ func (s *Service) applyAccount(
 	actor string,
 ) AccountResult {
 	coordinator := newBatchWriteCoordinator(ctx, admin, 1, policy.verifyAfterWrite)
-	return s.applyAccountCoordinated(
+	item, finish := s.prepareAccount(
 		ctx, admin, target, policy, actor, routingTargetFingerprint(testRoutingTarget), coordinator,
 	)
+	if finish != nil {
+		return finish()
+	}
+	return item
 }
 
 func TestReleaseControlReportsExternallyChangedFieldsWithoutRemoteWrite(t *testing.T) {

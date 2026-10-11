@@ -1,3 +1,4 @@
+import { seedDictionaries } from "@/test/dictionary-fixtures";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
@@ -14,6 +15,7 @@ afterEach(() => {
 
 function renderPage(): void {
   client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
+  seedDictionaries(client);
   client.setQueryData(["pricing-backups"], []);
   render(
     <QueryClientProvider client={client}>

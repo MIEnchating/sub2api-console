@@ -1,0 +1,1 @@
+backend/internal/pricing/service_test.go	df8fd7af654415ce600d75216ac5b1667bf9c70f4004efc5bc22ebe265a713bb	reviewed	匹配基线审 fixture 平台更新、人工控制/忽略成本墙字段和断言文案、用例命名；核对生产手动保护规则及后续独立 ManualPriority 分组保留场景。仅补读已有测试变化，不重做价格模块。 基线 c57e626bff3546eea8d67ffaf40cc6889d96d389 / b557b35e39cf5121cd78ab5e4f2860939703d0f0ecea892e4e7d5d79032e0b6a，原记录 backend-domains.tsv。 本轮未确认新增缺陷，无业务/测试修改，未重复执行检查。

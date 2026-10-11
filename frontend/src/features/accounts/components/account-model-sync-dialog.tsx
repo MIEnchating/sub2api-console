@@ -1,3 +1,5 @@
+import { DictionaryReadState } from "@/components/dictionary-read-state";
+import { useDictionary } from "@/hooks/use-dictionary-order";
 import { QueryErrorToast } from "@/components/query-error-toast";
 import { orderByDictionary } from "@/lib/dictionary-order";
 import { ContentLoading } from "@/components/content-loading";
@@ -60,6 +62,7 @@ import { ManualSyncModelForm } from "./manual-sync-model-form";
 import { ModelSyncScopeDialog } from "./model-sync-scope-dialog";
 import { useModelSyncBlocking } from "../hooks/use-model-sync-blocking";
 import { modelMatchesBlockPatterns } from "../lib/model-block-patterns";
+import { includedGroupModelKeys } from "../lib/model-sync-selection";
 import {
   type ModelSyncModel,
   type ModelSyncPlatformGroup,
@@ -71,6 +74,18 @@ type ModelSyncTaskItem = {
   accountName: string;
   status: string;
   error: string;
+};
+
+type ModelSyncUpstream = {
+  upstreamId: string | null;
+  upstreamHost: string | null;
+};
+
+type ModelSyncFailureGroup = {
+  key: string;
+  label: string;
+  items: ModelSyncTaskItem[];
+  errors: Array<{ message: string; items: ModelSyncTaskItem[] }>;
 };
 
 type ModelSyncProbeItem = {
@@ -187,6 +202,38 @@ export function modelSyncTaskItems(task: Task | undefined): ModelSyncTaskItem[] 
   });
 }
 
+export function groupModelSyncFailures(
+  items: ModelSyncTaskItem[],
+  accountUpstreams: ReadonlyMap<string, ModelSyncUpstream>,
+): ModelSyncFailureGroup[] {
+  const groups = new Map<string, ModelSyncFailureGroup>();
+  for (const item of items) {
+    const upstream = accountUpstreams.get(item.accountId);
+    const upstreamId = upstream?.upstreamId?.trim();
+    const upstreamHost = upstream?.upstreamHost?.trim();
+    const key = upstreamId || upstreamHost || `account:${item.accountId}`;
+    const label =
+      upstreamHost ||
+      (upstreamId ? `上游 ${upstreamId}` : item.accountName || `账号 #${item.accountId}`);
+    const group = groups.get(key);
+    if (group) {
+      group.items.push(item);
+      const message = item.error || "模型发现失败";
+      const matchingError = group.errors.find((error) => error.message === message);
+      if (matchingError) matchingError.items.push(item);
+      else group.errors.push({ message, items: [item] });
+    } else {
+      groups.set(key, {
+        key,
+        label,
+        items: [item],
+        errors: [{ message: item.error || "模型发现失败", items: [item] }],
+      });
+    }
+  }
+  return Array.from(groups.values());
+}
+
 export function modelSyncProbeItems(task: Task | undefined): ModelSyncProbeItem[] {
   const probe = task?.result.probe;
   if (typeof probe !== "object" || probe === null || Array.isArray(probe)) return [];
@@ -212,6 +259,7 @@ type AccountModelSyncDialogProps = {
   accountIds: string[];
   accountPlatforms: ReadonlyMap<string, string | null>;
   accountGroups: ReadonlyMap<string, string[]>;
+  accountUpstreams?: ReadonlyMap<string, ModelSyncUpstream>;
   onOpenChange: (open: boolean) => void;
   onCompleted: () => void;
 };
@@ -222,8 +270,18 @@ export function AccountModelSyncDialog(props: AccountModelSyncDialogProps) {
 }
 
 function AccountModelSyncSession(props: AccountModelSyncDialogProps) {
+  const queryClient = useQueryClient();
   const [accountIds, setAccountIds] = useState<string[] | null>(null);
-  const discovery = useMutation({ mutationFn: api.discoverAccountModels });
+  const starting = useRef(false);
+  const discovery = useMutation({
+    mutationFn: api.discoverAccountModels,
+    retry: false,
+    networkMode: "always",
+    onSuccess: (task) => {
+      queryClient.setQueryData(["account-model-discovery", task.id], task);
+      void queryClient.invalidateQueries({ queryKey: ["tasks"] });
+    },
+  });
   if (accountIds === null)
     return (
       <ModelSyncScopeDialog
@@ -231,6 +289,8 @@ function AccountModelSyncSession(props: AccountModelSyncDialogProps) {
         accountGroups={props.accountGroups}
         onOpenChange={props.onOpenChange}
         onStart={(ids) => {
+          if (starting.current) return;
+          starting.current = true;
           discovery.mutate(ids);
           setAccountIds(ids);
         }}
@@ -254,19 +314,29 @@ function AccountModelSyncRunDialog(
     discoveryError: unknown;
   },
 ) {
+  // Keep draft scopes stable when the account directory refreshes.
+  const [membership] = useState(() => ({
+    platforms: new Map(props.accountIds.map((id) => [id, props.accountPlatforms.get(id) ?? null])),
+    groups: new Map(props.accountIds.map((id) => [id, [...(props.accountGroups.get(id) ?? [])]])),
+  }));
+  const membershipChanged = props.accountIds.some((id) => {
+    const initialPlatform = (membership.platforms.get(id) ?? "").trim().toLocaleLowerCase();
+    const currentPlatform = (props.accountPlatforms.get(id) ?? "").trim().toLocaleLowerCase();
+    const initialGroups = uniqueAccountGroups(membership.groups.get(id)).map((group) =>
+      group.toLocaleLowerCase(),
+    );
+    const currentGroups = new Set(
+      uniqueAccountGroups(props.accountGroups.get(id)).map((group) => group.toLocaleLowerCase()),
+    );
+    return (
+      initialPlatform !== currentPlatform ||
+      initialGroups.length !== currentGroups.size ||
+      initialGroups.some((group) => !currentGroups.has(group))
+    );
+  });
   const queryClient = useQueryClient();
-  const platformDictionary = useQuery({
-    queryKey: ["dictionaries", "platform"],
-    queryFn: () => api.dictionaries("platform"),
-    staleTime: 60_000,
-    refetchOnWindowFocus: false,
-  });
-  const groupDictionary = useQuery({
-    queryKey: ["dictionaries", "group"],
-    queryFn: () => api.dictionaries("group"),
-    staleTime: 60_000,
-    refetchOnWindowFocus: false,
-  });
+  const platformDictionary = useDictionary("platform");
+  const groupDictionary = useDictionary("group");
   const discoveryTaskId = props.discoveryTaskId;
   const [applyTaskId, setApplyTaskId] = useState<string | null>(null);
   const [scopeExclusions, setScopeExclusions] = useState<Map<string, Set<string>>>(() => new Map());
@@ -276,9 +346,17 @@ function AccountModelSyncRunDialog(
   const [catalogRefreshMessage, setCatalogRefreshMessage] = useState<string | null>(null);
   const initializedFingerprint = useRef<string | null>(null);
   const completedTask = useRef<string | null>(null);
+  const mounted = useRef(false);
+  const submitting = useRef(false);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
   const discoveryTask = useQuery({
     queryKey: ["account-model-discovery", discoveryTaskId],
-    queryFn: () => api.task(discoveryTaskId!),
+    queryFn: ({ signal }) => api.task(discoveryTaskId!, signal),
     enabled: Boolean(discoveryTaskId),
     refetchInterval: taskPollInterval,
   });
@@ -299,7 +377,7 @@ function AccountModelSyncRunDialog(
   });
   const preview = useQuery({
     queryKey: ["account-model-sync-preview", discoveredAccountIDs],
-    queryFn: () => api.previewAccountModels(discoveredAccountIDs),
+    queryFn: ({ signal }) => api.previewAccountModels(discoveredAccountIDs, signal),
     enabled:
       discoveryStopped &&
       discoveredAccountIDs.length > 0 &&
@@ -310,7 +388,13 @@ function AccountModelSyncRunDialog(
     refetchOnWindowFocus: false,
   });
   const apply = useMutation({
+    retry: false,
+    networkMode: "always",
     mutationFn: () => {
+      if (membershipChanged) throw new Error("账号的平台或分组已变化，请关闭后重新选择同步范围。");
+      if (!dictionariesReady || hasHiddenSelections) {
+        throw new Error("部分账号的平台或分组已不在可选字典中，请刷新字典并重新预览");
+      }
       return api.applyAccountModels(
         accountSelections.map((selection) => {
           const manual = manualModels.get(selection.account_id);
@@ -325,21 +409,29 @@ function AccountModelSyncRunDialog(
       );
     },
     onMutate: () => setCatalogRefreshMessage(null),
-    onSuccess: (task) => setApplyTaskId(task.id),
+    onSuccess: (task) => {
+      queryClient.setQueryData(["account-model-apply", task.id], task);
+      void queryClient.invalidateQueries({ queryKey: ["tasks"] });
+      if (mounted.current) setApplyTaskId(task.id);
+    },
     onError: async (error) => {
-      if (!isModelCatalogChangedError(error)) return;
+      if (!mounted.current || !isModelCatalogChangedError(error)) return;
       setCatalogRefreshMessage("检测到模型目录更新，正在载入最新结果...");
       const refreshed = await preview.refetch();
+      if (!mounted.current) return;
       if (refreshed.isSuccess) {
         setCatalogRefreshMessage("模型目录刚刚更新，已载入最新结果，请确认后再次同步。");
         return;
       }
       setCatalogRefreshMessage("模型目录已更新，但最新结果载入失败，请稍后重试。");
     },
+    onSettled: () => {
+      submitting.current = false;
+    },
   });
   const applyTask = useQuery({
     queryKey: ["account-model-apply", applyTaskId],
-    queryFn: () => api.task(applyTaskId!),
+    queryFn: ({ signal }) => api.task(applyTaskId!, signal),
     enabled: Boolean(applyTaskId),
     refetchInterval: taskPollInterval,
   });
@@ -364,7 +456,7 @@ function AccountModelSyncRunDialog(
     setScopeInclusions(new Map());
     setProbeModels([]);
     setManualModels(new Map());
-  }, [preview.data, props.accountPlatforms, props.accountGroups]);
+  }, [preview.data]);
 
   useEffect(() => {
     if (!applyTask.data || !taskStopsPolling(applyTask.data)) return;
@@ -400,8 +492,8 @@ function AccountModelSyncRunDialog(
     if (!editorPreview) return;
     const selections = selectedAccountModels(
       editorPreview,
-      props.accountPlatforms,
-      props.accountGroups,
+      membership.platforms,
+      membership.groups,
       next,
       nextInclusions,
     );
@@ -413,27 +505,49 @@ function AccountModelSyncRunDialog(
     setProbeModels(nextProbeModels);
   }
 
-  const editorPreview = preview.data
-    ? {
-        ...preview.data,
-        blocked_patterns: blocking.savedSettings?.blocked_patterns ?? preview.data.blocked_patterns,
-        accounts: preview.data.accounts.map((account) => ({
-          ...account,
-          models: [
-            ...new Set([...account.models, ...(manualModels.get(account.account_id) ?? [])]),
-          ],
-        })),
-      }
-    : undefined;
-  const accountSelections = editorPreview
-    ? selectedAccountModels(
-        editorPreview,
-        props.accountPlatforms,
-        props.accountGroups,
-        scopeExclusions,
-        scopeInclusions,
-      )
-    : [];
+  const editorPreview = useMemo(
+    () =>
+      preview.data
+        ? {
+            ...preview.data,
+            blocked_patterns:
+              blocking.savedSettings?.blocked_patterns ?? preview.data.blocked_patterns,
+            accounts: preview.data.accounts.map((account) => ({
+              ...account,
+              models: [
+                ...new Set([...account.models, ...(manualModels.get(account.account_id) ?? [])]),
+              ],
+            })),
+          }
+        : undefined,
+    [preview.data, blocking.savedSettings, manualModels],
+  );
+  const accountSelections = useMemo(
+    () =>
+      editorPreview
+        ? selectedAccountModels(
+            editorPreview,
+            membership.platforms,
+            membership.groups,
+            scopeExclusions,
+            scopeInclusions,
+          )
+        : [],
+    [editorPreview, membership, scopeExclusions, scopeInclusions],
+  );
+  const platforms = useMemo(
+    () =>
+      editorPreview
+        ? modelSyncPlatformGroups(
+            editorPreview,
+            membership.platforms,
+            membership.groups,
+            platformDictionary.data?.items,
+            groupDictionary.data?.items,
+          )
+        : [],
+    [editorPreview, membership, platformDictionary.data?.items, groupDictionary.data?.items],
+  );
   const probeModelOptions = availableUnifiedProbeModels(accountSelections);
   const includedModelCount = accountSelections.reduce(
     (total, selection) => total + selection.models.length,
@@ -445,7 +559,25 @@ function AccountModelSyncRunDialog(
   const missingProbeModel = probeModels.some(
     (model) => !probeModelOptionKeys.has(model.toLocaleLowerCase()),
   );
-  const editorDisabled = apply.isPending || blocking.pending || blocking.savedSettings !== null;
+  const dictionariesReady = Boolean(platformDictionary.data && groupDictionary.data);
+  const visibleAccountIDs = useMemo(
+    () =>
+      new Set(
+        platforms.flatMap((platform) => platform.groups.flatMap((group) => group.accountIds)),
+      ),
+    [platforms],
+  );
+  const hasHiddenSelections = accountSelections.some(
+    (selection) => !visibleAccountIDs.has(selection.account_id),
+  );
+  const editorDisabled =
+    membershipChanged ||
+    apply.isPending ||
+    blocking.pending ||
+    blocking.savedSettings !== null ||
+    !dictionariesReady ||
+    preview.isFetching ||
+    preview.isError;
   const hasCompletedApply = Boolean(applyTask.data && taskStopsPolling(applyTask.data));
   let dialogStage: ModelSyncDialogStage = "pending";
   if (hasCompletedApply) dialogStage = "result";
@@ -480,6 +612,7 @@ function AccountModelSyncRunDialog(
             mutationError={props.discoveryError}
             queryError={discoveryTask.error}
             task={discoveryTask.data}
+            accountUpstreams={props.accountUpstreams ?? new Map()}
           />
           {discoveryTask.isError ? (
             <ContentRetry
@@ -489,42 +622,56 @@ function AccountModelSyncRunDialog(
           ) : null}
           {preview.isLoading ? <ContentLoading label="正在生成模型同步预览" /> : null}
           {preview.error ? (
-            <ModelSyncError error={preview.error} fallback="模型预览读取失败" />
+            <>
+              <ModelSyncError error={preview.error} fallback="模型预览读取失败" />
+              <ContentRetry onRetry={() => void preview.refetch()} pending={preview.isFetching} />
+            </>
+          ) : null}
+          {editorPreview && !applyTaskId && dictionariesReady && hasHiddenSelections ? (
+            <p className="text-sm text-muted-foreground" role="status">
+              部分账号的平台或分组已不在可选字典中，请刷新字典并重新预览后再同步。
+            </p>
+          ) : null}
+          {editorPreview && !applyTaskId && membershipChanged ? (
+            <p className="text-sm text-muted-foreground" role="status">
+              账号的平台或分组已变化，请关闭后重新选择同步范围。
+            </p>
           ) : null}
           {editorPreview && !applyTaskId ? (
-            <SyncModelEditor
-              preview={editorPreview}
-              accountPlatforms={props.accountPlatforms}
-              accountGroups={props.accountGroups}
-              dictionaryEntries={platformDictionary.data?.items}
-              groupDictionaryEntries={groupDictionary.data?.items}
-              scopeExclusions={scopeExclusions}
-              scopeInclusions={scopeInclusions}
-              probeModels={probeModels}
-              probeModelOptions={probeModelOptions}
-              disabled={editorDisabled}
-              onProbeModelsChange={setProbeModels}
-              onModelExcluded={setModelExcluded}
-              onModelBlocked={blocking.block}
-              onAddModel={(ids, model) => {
-                setManualModels((current) => {
-                  const next = new Map(current);
-                  for (const id of ids) {
-                    const models = next.get(id) ?? [];
-                    if (
-                      ![
-                        ...models,
-                        ...(preview.data?.accounts.find((account) => account.account_id === id)
-                          ?.models ?? []),
-                      ].some((value) => value.toLocaleLowerCase() === model.toLocaleLowerCase())
-                    ) {
-                      next.set(id, [...models, model]);
-                    }
-                  }
-                  return next;
-                });
-              }}
-            />
+            <DictionaryReadState kind="platform">
+              <DictionaryReadState kind="group">
+                <SyncModelEditor
+                  preview={editorPreview}
+                  platforms={platforms}
+                  scopeExclusions={scopeExclusions}
+                  scopeInclusions={scopeInclusions}
+                  probeModels={probeModels}
+                  probeModelOptions={probeModelOptions}
+                  disabled={editorDisabled}
+                  onProbeModelsChange={setProbeModels}
+                  onModelExcluded={setModelExcluded}
+                  onModelBlocked={blocking.block}
+                  onAddModel={(ids, model) => {
+                    setManualModels((current) => {
+                      const next = new Map(current);
+                      for (const id of ids) {
+                        const models = next.get(id) ?? [];
+                        if (
+                          ![
+                            ...models,
+                            ...(preview.data?.accounts.find((account) => account.account_id === id)
+                              ?.models ?? []),
+                          ].some((value) => value.toLocaleLowerCase() === model.toLocaleLowerCase())
+                        ) {
+                          next.set(id, [...models, model]);
+                        }
+                      }
+                      return next;
+                    });
+                  }}
+                />
+              </DictionaryReadState>
+            </DictionaryReadState>
           ) : null}
           {blocking.pending ? (
             <ContentLoading compact label="正在保存全局屏蔽并更新模型列表" />
@@ -562,8 +709,17 @@ function AccountModelSyncRunDialog(
           </Button>
           {preview.data && !applyTaskId ? (
             <Button
-              disabled={includedModelCount === 0 || missingProbeModel || editorDisabled}
-              onClick={() => apply.mutate()}
+              disabled={
+                includedModelCount === 0 ||
+                missingProbeModel ||
+                editorDisabled ||
+                hasHiddenSelections
+              }
+              onClick={() => {
+                if (submitting.current) return;
+                submitting.current = true;
+                apply.mutate();
+              }}
               aria-label={`同步 ${discoveredAccountIDs.length} 个账号`}
             >
               <CheckCheck aria-hidden="true" />
@@ -582,6 +738,7 @@ function ModelSyncDiscoveryState(props: {
   mutationError: unknown;
   queryError: unknown;
   task: Task | undefined;
+  accountUpstreams: ReadonlyMap<string, ModelSyncUpstream>;
 }) {
   if (props.mutationPending) return <TaskStartupState message="正在创建账号模型发现任务" />;
   if (props.mutationError)
@@ -602,21 +759,40 @@ function ModelSyncDiscoveryState(props: {
   }
   const failed = modelSyncTaskItems(props.task).filter((item) => item.status !== "succeeded");
   if (failed.length === 0) return null;
+  const groups = groupModelSyncFailures(failed, props.accountUpstreams);
   return (
     <details
       className="rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm"
       aria-live="polite"
     >
       <summary className="cursor-pointer text-destructive">
-        <strong>{failed.length} 个账号获取模型失败，已跳过</strong>
+        <strong>
+          {groups.length} 个上游获取模型失败，涉及 {failed.length} 个账号
+        </strong>
         <span className="ml-2 text-xs">展开详情</span>
       </summary>
       <div className="mt-2 grid max-h-40 gap-1 overflow-y-auto border-t border-destructive/20 pt-2 text-xs text-destructive">
-        {failed.map((item) => (
-          <span className="break-words" key={item.accountId}>
-            {item.accountName || `账号 #${item.accountId}`}：{item.error || "模型发现失败"}
-          </span>
-        ))}
+        {groups.map((group) => {
+          return (
+            <div className="grid gap-1 break-words" key={group.key}>
+              <strong>
+                {group.label} · {group.items.length} 个账号
+              </strong>
+              {group.errors.map((error) => (
+                <span key={error.message}>
+                  {error.message}
+                  <span className="ml-1 opacity-80">
+                    （
+                    {error.items
+                      .map((item) => item.accountName || `账号 #${item.accountId}`)
+                      .join("、")}
+                    ）
+                  </span>
+                </span>
+              ))}
+            </div>
+          );
+        })}
       </div>
     </details>
   );
@@ -624,10 +800,7 @@ function ModelSyncDiscoveryState(props: {
 
 function SyncModelEditor(props: {
   preview: AccountModelSyncPreview;
-  accountPlatforms: ReadonlyMap<string, string | null>;
-  accountGroups: ReadonlyMap<string, string[]>;
-  dictionaryEntries?: readonly DictionaryEntry[];
-  groupDictionaryEntries?: readonly DictionaryEntry[];
+  platforms: ModelSyncPlatformGroup[];
   scopeExclusions: ScopeModelExclusions;
   scopeInclusions: ScopeModelExclusions;
   probeModels: string[];
@@ -638,23 +811,7 @@ function SyncModelEditor(props: {
   onModelBlocked: (model: string) => void;
   onAddModel: (ids: string[], model: string) => void;
 }) {
-  const platforms = useMemo(
-    () =>
-      modelSyncPlatformGroups(
-        props.preview,
-        props.accountPlatforms,
-        props.accountGroups,
-        props.dictionaryEntries,
-        props.groupDictionaryEntries,
-      ),
-    [
-      props.preview,
-      props.accountPlatforms,
-      props.accountGroups,
-      props.dictionaryEntries,
-      props.groupDictionaryEntries,
-    ],
-  );
+  const platforms = props.platforms;
   const [activePlatform, setActivePlatform] = useState(platforms[0]?.key ?? "");
   const [activeGroup, setActiveGroup] = useState(platforms[0]?.groups[0]?.key ?? "");
   const [modelSearch, setModelSearch] = useState("");
@@ -676,17 +833,19 @@ function SyncModelEditor(props: {
   const visibleModels = selectableModels.filter((item) =>
     item.model.toLocaleLowerCase().includes(modelSearch.trim().toLocaleLowerCase()),
   );
-  function isIncluded(model: string): boolean {
-    const key = model.toLocaleLowerCase();
-    if (!currentGroup || props.scopeExclusions.get(currentGroup.scopeKey)?.has(key)) return false;
-    if (props.scopeInclusions.get(currentGroup.scopeKey)?.has(key)) return true;
-    return props.preview.accounts.some(
-      (account) =>
-        currentGroup.accountIds.includes(account.account_id) &&
-        account.enabled_models?.some((enabled) => enabled.toLocaleLowerCase() === key),
-    );
-  }
-  const selectedInGroup = selectableModels.filter((item) => isIncluded(item.model)).length;
+  const includedModels = useMemo(
+    () =>
+      includedGroupModelKeys(
+        props.preview.accounts,
+        currentGroup,
+        currentGroup ? props.scopeExclusions.get(currentGroup.scopeKey) : undefined,
+        currentGroup ? props.scopeInclusions.get(currentGroup.scopeKey) : undefined,
+      ),
+    [props.preview.accounts, currentGroup, props.scopeExclusions, props.scopeInclusions],
+  );
+  const selectedInGroup = selectableModels.filter((item) =>
+    includedModels.has(item.model.toLocaleLowerCase()),
+  ).length;
 
   useEffect(() => {
     if (platforms.some((platform) => platform.key === activePlatform)) return;
@@ -802,7 +961,7 @@ function SyncModelEditor(props: {
                   data-testid="account-sync-models"
                 >
                   {visibleModels.map((item) => {
-                    const included = isIncluded(item.model);
+                    const included = includedModels.has(item.model.toLocaleLowerCase());
                     const showsSupportingAccounts = shouldShowModelSupportingAccounts(
                       item.supportingAccounts.length,
                     );
@@ -983,27 +1142,23 @@ export function modelSyncPlatformGroups(
       ),
     })).sort((left, right) => left.label.localeCompare(right.label)),
   }));
-  const ordered = orderedDictionaryOptions(
-    dictionaryEntries,
-    result.map((item) => ({ value: item.key, label: item.label })),
-  );
-  const groupIDs = new Map(groupDictionaryEntries?.map((entry) => [entry.name, entry.value]));
+  const ordered = orderedDictionaryOptions(dictionaryEntries);
   for (const platform of result) {
-    platform.groups = orderByDictionary(
-      platform.groups,
-      groupDictionaryEntries,
-      (group) => groupIDs.get(group.label) ?? "",
+    const ungrouped = platform.groups.filter((group) => group.label === "未分组");
+    platform.groups = ungrouped.concat(
+      orderByDictionary(
+        platform.groups.filter((group) => group.label !== "未分组"),
+        groupDictionaryEntries,
+        (group) => group.label,
+        "name",
+      ),
     );
   }
-  const rank = new Map(ordered.map((item, index) => [item.value, index]));
-  return result.sort((left, right) => {
-    const leftRank = rank.get(left.key);
-    const rightRank = rank.get(right.key);
-    if (leftRank !== undefined && rightRank !== undefined) return leftRank - rightRank;
-    if (leftRank !== undefined) return -1;
-    if (rightRank !== undefined) return 1;
-    return left.label.localeCompare(right.label);
+  const registered = ordered.flatMap((entry) => {
+    const platform = result.find((item) => item.key === entry.value);
+    return platform ? [{ ...platform, label: entry.label }] : [];
   });
+  return registered.concat(result.filter((item) => item.key === "unclassified"));
 }
 
 function uniqueAccountGroups(groups: string[] | undefined): string[] {

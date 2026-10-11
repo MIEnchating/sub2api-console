@@ -1,0 +1,138 @@
+frontend/src/features/model-check/components/animation-check-panel.tsx	4d4d3d5eea5b981151398d9b710582f74fac8a2bc6136a78aeb0fa7ea132644b	reviewed	账号、自定义与前置入口状态、稳定账号范围和任务提交；与轮询 hook 配合核对。
+frontend/src/features/model-check/components/animation-selection.tsx	579cd41f6c588bfc40281cd6a2687246bddffe8b2fa205213db08f09cf2a3eed	fixed	账号 ID Set 复用；取消入口放在选择与提示词旁，防止窄屏启动后操作栏增高；跨页选择和任务取消保留。
+frontend/src/features/model-check/hooks/use-animation-tasks.ts	b9e65f8e37bf9793042a226ddb83c369a7b6b1fb73e3ad898562c8e278f458ce	reviewed	历史及活动任务读取、取消信号、创建任务保留与派生状态；结果按任务更新计算。
+frontend/src/features/model-check/lib/animation-task-reader.ts	ae3ea94b68b4b6cd0137a7e9f3023b89a711c4aa95a2bc98c5140dc07dc36fdd	fixed	复用四槽读取队列并保留活动任务优先于历史请求。
+frontend/src/features/model-check/lib/queued-read.ts	97cd7533db7f80bd39c7dd4eee0932806225d3650e7051511e6d745cd08d85c3	fixed	四槽 FIFO/优先队列覆盖响应体解码；取消移除排队项，失败释放位置，同步异常和启动前取消均传播。
+frontend/src/features/model-check/components/animation-model-settings.tsx	0053ff3d395c161cdaf83d749ea7873491a49e5903d96362f811b4b10a5f936b	fixed	共同模型读取接入四槽队列；全部账号参与交集，失败不放开不完整模型，保留手动模型输入。
+frontend/src/features/model-check/components/regular-check-panel.tsx	728f713fcd3f3a67a382a148ffa451b431497b463b447ebcf599e76a2c3f1de9	fixed	常规模型读取接入相同队列；核对已选模型保留、刷新失败、SSE 校验及 HTTP 迟到响应保护。
+frontend/src/features/model-check/components/model-check-page.tsx	6a4495d127b53c0a7b6d713ae6e8b64915d2a58f547a41579e666ff00ce7d2ad	reviewed	页面账号范围及规则入口、任务状态和标签页保留；路由按账号 ID 重建页面。
+frontend/src/features/model-check/components/animation-check-page.tsx	5ca004fc2fbe0e59e9b23d70e4e9015214626182191794429fc56f530dcd7b26	reviewed	动画页面账号范围和返回入口；路由按稳定账号 ID 建立组件身份。
+frontend/src/features/model-check/components/animation-preview.tsx	42a62124efa7fb4956d27ce5744b6da988adad07e32c42df6426b9572fd6acea	reviewed	放大入口、焦点恢复及隔离预览；缩略图和详情分别渲染。
+frontend/src/features/model-check/components/animation-canvas.tsx	06117bf3bc162f62f46fb0bc1f88852bb61634d8e9a0266130a628ba47055136	fixed	HTML/SVG 可访问名称去除旧题目；保留 sandbox、CSP 和 ResizeObserver 释放。
+frontend/src/features/model-check/lib/animation-preview-document.ts	28718fe50d9032df50f6128247e2a2a28f9ba9597ccd2f2377755c0058271377	reviewed	预览 CSP、内联脚本及适配脚本；DOM/style 观察有合并但复杂动画开销尚未测量，不声称绝对断网。
+frontend/src/features/model-check/components/detection-task-panel.tsx	5e85c1e4555294d790a1c836f7cfd6ffa2d3407ec75706312590741c666df617	reviewed	任务列表、取消/删除确认、配置读取和运行状态；错误使用现有统一路径。
+frontend/src/features/model-check/components/detection-task-editor.tsx	4222fe42c9cab6d21afa8dee2f5bca8b4093eb3149f4bb1e2b892bfb4d6e0963	reviewed	编辑按版本提交、加载禁用和关闭清理；任务范围及计划字段交由 schema 校验。
+frontend/src/features/model-check/components/custom-animation-panel.tsx	19fa2289c872c22cbd687701ea8303c4ccd94fbc6773149626930e172bd7da8c	reviewed	自定义任务提交、凭据仅表单内存、确认范围和历史目标展示；无凭据历史不可自动恢复。
+frontend/src/features/model-check/components/custom-animation-model-field.tsx	2468fab015b4d51699b339de16818d6d56fbe5ecc3259ea8deba21036934c138	reviewed	随机查询身份隔离连接及凭据、取消读取和 gcTime 0；异步成功后的焦点归属列为后续复核项。
+frontend/src/features/model-check/components/custom-animation-fields.tsx	69653959e34fd09a318c1c8abe21c7d68b8c04ea1906f985b985a78a7ff51721	reviewed	接口地址、凭据与字典平台输入；字段错误和禁用状态。
+frontend/src/features/model-check/components/custom-animation-parameters.tsx	82986115f94dd6d1c18a2d6c56b0e8d23d56a26edd5dbf64a029134ba7f46b4d	reviewed	自定义检测参数、模型和阶段交互，依赖受控表单。
+frontend/src/features/model-check/components/animation-result-details.tsx	e114ae13ef8ebb99c8a85483071affbfd2437bdadedd4422ea10eeac8ade2549	reviewed	只读原文、提示词、模型及用量历史展示，不用当前表单补造旧结果。
+frontend/src/features/model-check/components/precheck-result-details.tsx	64dd4bce8e756360141abebeef93d00292b25f2bab089a23c1a18853b94fbf18	reviewed	前置题目结论和错误按结果展开，保留缺失用量说明。
+frontend/src/features/model-check/components/animation-schedule-dialog.tsx	f3d8114f293a1b25944a0957e90bcc5f64f4786b1d7f54bbe4034a7115f08c24	reviewed	单项/批量计划影响范围、版本与关闭草稿；保存保留稳定账号 ID。
+frontend/src/features/model-check/components/animation-card-result.tsx	2c5c78e0fcd0e6fc8ca258142b56dd01b8b82afe3476cd329868beb271c85de7	reviewed	重测沿用历史模型、活动期间隐藏上轮统计；完成日期已由结果 schema 校验。
+frontend/src/features/model-check/components/precheck-account-result.tsx	c5b2a83380b0592a459f57aaf47b58ce49c64036758005138fcca0814b4b3ff5	reviewed	前置阶段结果与缺失/活动状态、详情入口分离。
+frontend/src/features/model-check/components/detection-result-summary.tsx	51bf230eb6d8bee93a398c12945b774af0e1903ce2148a56197dd418aff68861	reviewed	按任务选中阶段汇总结果，缺失不冒充成功。
+frontend/src/features/model-check/lib/animation-filters.ts	76d60a36f7646b1c9d686b3b2f880a0bd04e462a9f663e6d532c402550c5efa7	reviewed	账号筛选、优先状态与可选 ID；不借显示名称改变业务绑定。
+frontend/src/features/model-check/components/animation-account-card.tsx	0a6d9bdd20039dea214dbeadcfcf155a83755e36c28b733256bc9750a2e77420	reviewed	账号稳定 ID、忙碌状态、计划与人工控制入口及结果展示；分页限制卡片规模。
+frontend/src/features/model-check/components/detection-task-fields.tsx	8b872ff9b4ae2a52cbcc72de43fdd2f22f970d4151405f1d4fb755cd8ff7d164	reviewed	稳定分组多选、中文字段错误、请求超时及计划参数；字典入口交由共享选择控件。
+frontend/src/features/model-check/components/daily-detection-times.tsx	d9c9b9c9530fd72fb4ab10e9c72d0897a59e6b86785e9fa6134c049d41b37b41	reviewed	1 至 24 个时点编辑、删除保护和字段无效状态；时区按北京时间显示。
+frontend/src/features/model-check/components/animation-schedule-timing.tsx	d425a16ad962f8ea746dfea619b8111f0b6c71a9c8c1a2c81ce1935f6cebbddf	reviewed	每日/间隔切换与间隔默认值恢复，不改变后端协议时区。
+frontend/src/features/model-check/components/animation-schedule-confirmation.tsx	175996acc6c3943f00c159fdf16c0d4729d2758b9c66d060d10a2f50adc49508	reviewed	列出完整影响账号和确认文案，写入期间禁用重复确认。
+frontend/src/features/model-check/components/animation-account-filters.tsx	3e8e3f94fe1972664eed9b8dcef66885ef705b8d93f38c0cde5c821aa6f967de	reviewed	分组/平台消费字典，固定业务排序与优先状态保留，筛选重置统一。
+frontend/src/features/model-check/components/animation-accounts-skeleton.tsx	8ead870a0e5e7688ab561b77fc21b893783f097a483727fd9e58c91d37b526fa	reviewed	首次账号及自定义历史读取显示对应骨架，保留可访问忙碌名称。
+frontend/src/features/model-check/components/animation-endpoint-details.tsx	234005ff55faee246789893a7b109b6df1f6a09c6a8f0cad6f0aecc63f12a16b	reviewed	仅自定义结果展示已记录接口元数据；旧记录明确缺失不补造。
+frontend/src/features/model-check/components/animation-prompt-dialog.tsx	fa37fb7d39ac15db210ca4b134628bc27d1434fb2acfea586a9669cad26c58b1	fixed	提示词 Query 向统一 API 传递 AbortSignal，关闭弹窗取消读取；保存版本校验保留。
+frontend/src/features/model-check/components/model-check-selection.tsx	98cf6a4144f647cc2f3f5ba959c8a3e43aa58a235cb6d088963542a6a9aa18b7	reviewed	账号分页、20 项选择限制、共同模型加载/错误、刷新和提交禁用；模型 checkbox 可访问名称由标签提供。
+frontend/src/features/model-check/components/detection-account-controls.tsx	4b2119d6ac6c16f5d9ff7f32041d348794dc2f453d188fb200da5ceed286cef9	reviewed	处置按钮绑定稳定 ID，按保护状态禁用并解释原因。
+frontend/src/features/model-check/components/detection-result-card.tsx	08569d08f725fc05c23de454ac3ac03034ffc5a972d8deee2f5e0dd0bf0f4601	fixed	按账号结果展示并向旧终端明细传递轮次校验标记。
+frontend/src/features/model-check/components/model-check-rule-browser.tsx	4cb29a67048f753cdc45a932e122110aef8ccbfcff46cd5346fed8c36f398c27	reviewed	规则派生 memo、版本与模型导航，窄屏选择和桌面导航保留。
+frontend/src/features/model-check/components/model-check-rule-detail.tsx	648367866916791276e369a2e271e372c36784d805fbda218b23fb1a8cce4c29	fixed	移除容差嵌套三元，保留相对百分比、绝对值、未配置分支及既有题目展示。
+frontend/src/features/model-check/constants.ts	0da163b22a8a3b019e0a4320944274bc0b22b2d521345fd092043830c30cf256	reviewed	检测模型默认值、阶段文案、结果色彩和排序选项集中定义。
+frontend/src/features/model-check/lib/account-control.ts	032fe497e2bb23f9a119e7a73148054c403eace1788ae4d4b209f55cfba978f8	reviewed	人工保护、熔断/恢复及并发限制原因，防止状态变化后使用过期操作。
+frontend/src/features/model-check/lib/account-link.ts	3bb3bed3c33463014f74ea5c438a126840d42b7dc0179b1d25b28d0c41107f19	reviewed	路由账号 ID 正整数收窄及检测状态中文映射。
+frontend/src/features/model-check/lib/animation-prompt-schema.ts	308f2f1ca46af11114618bc11d9b8f87baf1c68a4b580a9683a8763140ae8945	reviewed	提示词 trim、长度和控制字符校验，允许换行/制表。
+frontend/src/features/model-check/lib/animation-schema.ts	539a001db4e54c257b794ee0a19d60652acf4050f98fd4290187d230ac07d162	reviewed	模型、账号、接口凭据、时间范围和每日去重校验；关闭计划保留历史模型兼容。
+frontend/src/features/model-check/lib/detection-task-schema.ts	a56a364fa7c9c8f1382c5147769da232a7fe0954b61c9da9ac2b241a5c8e4bc7	reviewed	分组/并发/阶段参数校验并明确清除旧终端执行开关。
+frontend/src/features/model-check/lib/manual-priority-task.ts	616a63a2f59c061ff6d06d7c9e090381989a92fdf39d36e21dbeab29d4f6d9e8	reviewed	仅应用读回确认及匹配账号结果，取消旧查询后按确认字段更新缓存。
+frontend/src/features/model-check/lib/register-background-task.ts	636f958660a5dc2a8a265c62f74f0e8f835e56d135c4265369ebb3781ba720f1	reviewed	任务摘要不包含结果或凭据，任务列表有界保留并失效刷新。
+frontend/src/features/model-check/lib/animation-task-results.ts	f010f51170bac2b13be0074d2961db71303915fb826acba9a01a4dfa15cf7456	reviewed	按账号及时间合并动画/前置结果，终态兼容旧 phase，日期/用量校验和批次互斥。
+frontend/src/features/model-check/lib/detection-task-outcome.ts	f7afd472bcb830a652559261da7aaca2ace8b19a32f18eabac698a205700a371	reviewed	超时、取消、失败及缺失阶段分别说明，不补造已执行或已成功。
+frontend/src/features/model-check/lib/detection-task-results.ts	1994c3b353221789d9afe6e5446d1fbe2007e047a4ad6e87a5773bb33ee644a2	fixed	账号和分组历史结果聚合保留逐轮无效标记。
+frontend/src/features/model-check/lib/terminal-continuity.ts	c2a3b5921f62ee576052fc3749c130bdcffa4f78b295da990d93874ba3487a18	fixed	分别校验账号与轮次 schema，过滤坏轮次，保留顶层结论和可读取结果。
+frontend/src/features/model-check/components/terminal-round-results.tsx	477fe27014304ba04afb4d32a69a7ab56619fba80b975e461e383c82e3010cc5	fixed	显示合法历史轮次及部分无效记录说明，缺失或空数组不补造错误。
+frontend/src/features/model-check/components/precheck-question-selector.tsx	ec67702b13bbe75569c0b0a0acf4ff15363839a6a359a195e48d3bdcbd16bb1d	reviewed	题目多选/全选和禁用状态，固定支持题目不改变返回顺序。
+frontend/src/features/model-check/components/detection-stage-status.tsx	b4da246e5a752737c4a1610d89a2ec1d366320ff7fc9e53a2c479ee5c0b0101c	reviewed	四种结论通过文字、图标和颜色同时表达，保留可访问分组名称。
+frontend/src/features/model-check/components/result-token-metrics.tsx	531ddb5c5294e8b54f967c68ed02fd80d34816239d58015830ea334262f72c4b	reviewed	缺失不补零；TPS 按本次生成耗时计算，推理 Token 不重复计入总计。
+frontend/src/features/model-check/components/precheck-result-metrics.tsx	116185b451c04226e0b05add2fad5b2723b9d83298c35795f0ee682faf1ed24e	reviewed	前置模型、思考等级、耗时和日期展示，非法日期有缺失占位。
+frontend/src/features/model-check/components/animation-result-metrics.tsx	961484cfe6991b2379479f651c01e03f224a40263f1d36ad89f91d3772710b43	reviewed	身份和用量展示可独立控制，避免重复统计。
+frontend/src/features/model-check/lib/model-check-rules.ts	f87d00f5d6daf4c97d39b0268a5a7b5f02d6327deb0d044e49e7372a8c0607b3	reviewed	Claude/Sol/Astra 规则映射及判定阈值，原始阈值用于精确提示。
+frontend/src/features/model-check/components/model-check-result.tsx	0598993c6aa94454abec8c46b16d3a606c872a268f638287eec213caa99158f0	reviewed	有限数值及对象字段校验、实时阶段和终态明细、移动端/桌面分页；无结果与请求失败分开。
+frontend/src/features/model-check/components/__tests__/account-linkage.test.tsx	be7b645f2aaf5c7fe305e1f0e33c05cf7b1332e4a2561d557ffa89065c4a0b9a	reviewed	按路由账号范围关联检测入口与历史结果。
+frontend/src/features/model-check/components/__tests__/animation-selection.test.tsx	c6b157c3a0859ebe115c7d765a5933784b8d82d3c79d1d0e78f37081ea5e2b9f	reviewed	全选完整筛选范围、忙碌排除和跨页选择；保护 ID 索引优化行为。
+frontend/src/features/model-check/components/__tests__/catalog-request-lifecycle.test.tsx	fec318e3476bf09ab1e3dbad9bee330202aac260917df297587c2d2e225f7a79	reviewed	目录读取取消和迟到响应隔离。
+frontend/src/features/model-check/components/__tests__/animation-model-refresh.test.tsx	241cc1f13096d2d60f8f6e70dedf9feed5a221377e8dea3c172617f3e5070115	reviewed	模型手动刷新、既有输入与缓存/失败行为。
+frontend/src/features/model-check/components/__tests__/animation-model-suggestions.test.tsx	de129bbe0dde057ce043b675c8223e3c15a1ce767b63b729fad899bd85c4988a	reviewed	共同模型建议及手动输入选择。
+frontend/src/features/model-check/components/__tests__/animation-html-preview.test.tsx	1e3406badece1c3e9ca3121744c972603e96d7b1cec65452d890ff2c25e9bc5b	fixed	不同提示词下预览名称正确，HTML/SVG 隔离及缩略图可访问边界保留。
+frontend/src/features/model-check/components/__tests__/animation-preview.test.tsx	18f2948c74b31544a71df77748a2f40fd03e561d85438247e83477a7591768e1	reviewed	键盘放大、关闭焦点返回、失败不可预览及 CSP 边界。
+frontend/src/features/model-check/components/__tests__/animation-pagination.test.tsx	6f083f422b0f665cc798a44ecdf31963df95acd47a33798c73b4fd5f1ca5702e	reviewed	分页全选、忙碌排除、排序及滚动容器行为。
+frontend/src/features/model-check/components/__tests__/custom-model-input.test.tsx	ab8636050149a745aea0e6c63ba47f02c9f7b0d18fcac5c970b2b0eae7ff1559	reviewed	自定义模型自由输入与建议查询行为。
+frontend/src/features/model-check/components/__tests__/detection-request-lifecycle.test.tsx	94c6846c7297b68cd439c6e754a94a2b7883502b5f0c9ebb2c1986d1e39f74eb	reviewed	检测配置/详情请求在切换关闭时中止，避免迟到状态污染。
+frontend/src/features/model-check/components/__tests__/animation-manual-verdict.bench.tsx	d72d1e4fc1151eda76655a361ffabca1a3b2cf328f828e088054ca6534dbb956	reviewed	真实渲染路径的人工判定基准，未将本轮测试当作基准结果。
+frontend/src/features/model-check/hooks/__tests__/history-concurrency.test.tsx	f19b0280b492f709afd31874ff9fe47ecd418adc3de9eeaa48b9dfe318cea401	reviewed	历史读取四并发、活动优先、取消排队和响应体解码占槽。
+frontend/src/features/model-check/components/__tests__/model-read-concurrency.test.tsx	a42148c571c8d6611c710fb7c968cd1a8c34ac74d61d63f58c070d72479e5b1f	fixed	先复现六请求无界；覆盖四并发、慢请求补位、响应体占槽、卸载取消及失败重取。
+frontend/src/features/model-check/components/__tests__/regular-model-concurrency.test.tsx	2aef9a1f2415dff02b465362d5ca838e0be83810e1b61167faf7d7171b3f9ef5	fixed	先复现常规六请求突发；四并发且等待全部交集，清空选择取消在途和排队。
+frontend/src/features/model-check/components/__tests__/model-selection.test.tsx	024e1b8b90c2f738f3da0e23ebea4d2ac6bfcd7283ad7e6a757123a6a4d3e1e6	fixed	保留/清除共同模型选择；补字典 fixture，等待确切请求和无共同模型状态，消除异步提前断言。
+frontend/src/features/model-check/components/__tests__/regular-request-lifecycle.test.tsx	aa0d5d3a9b7ac1b528f54e8d21ae41f20b4f2554c2b24538d4eba0c48394cc87	reviewed	取消账号选择中止请求，迟到响应不恢复模型。
+frontend/src/features/model-check/components/__tests__/regular-query-state.test.tsx	03e70b86e7b84e2a909476355a24ea8cce7242860ee211956b7895ee9d7852d8	reviewed	账号缓存刷新失败、首次重试及能力重新读取；旧 API 边界 mock 保留。
+frontend/src/features/model-check/components/__tests__/model-refresh.test.tsx	de84e12035f78d4ca3e20a35f5537796355dc52c6543b8bc5ff9f161187e189a	reviewed	刷新保留模型节点/选择，失败禁止提交且仅悬浮提示。
+frontend/src/features/model-check/components/__tests__/animation-card-results.test.tsx	74102ac2385cf602eeb9a0948026e328c9ec54a29dc61cadd3869cfce97033f0	reviewed	按 ID 对应卡片、历史合并、活动阶段、取消和失败重读；旧 API fixture 保留。
+frontend/src/features/model-check/components/__tests__/regular-task-stream.test.tsx	772a91a7fbd19eb634a8286e6eb8abbfaf296322068e863845af1e65256a77ff	reviewed	SSE/HTTP 顺序、纳秒比较、无效事件、恢复轮询与卸载不取消业务任务。
+frontend/src/features/model-check/components/__tests__/astra-selection.test.tsx	647526660670f927f11e3a9fa7158b4e4a8741bbb2669b62a03f4e94dff5716d	reviewed	Astra 能力及支持账号可选择并启用检测。
+frontend/src/app-routes/animation-check.tsx	bba4dacc85ca95ae6351884cbd2e93c9fee30ea4a46c1af47df97c67365718b8	reviewed	搜索参数收窄后按账号 ID key 重建页面，避免跨账号表单继承；本轮未修改。
+frontend/src/app-routes/model-check.tsx	74c7c323a140793a20e8fa5d7b6bc32ed8efb78153ef854446e0de23abef1bdd	reviewed	搜索参数收窄后按账号 ID key 重建页面，避免跨账号表单继承；本轮未修改。
+docs/reviews/modelcheck-frontend-2026-10-11.md	c3d24e371e8961f0f3af7b6303f8f91c54c377b751902a5964c09faca7ed525f	reviewed	模块收口、逐项修复、失败与通过证据、测试复用及未测量性能边界。
+frontend/src/features/model-check/components/__tests__/account-control.test.tsx	45fc44fa10e1aa3223dc8a0bb5ebcec6bba3d47bb99f6e65d026706456b12691	reviewed	完整补审：账号控制提交范围、手动操作反馈及任务结果回读。
+frontend/src/features/model-check/components/__tests__/account-search.test.tsx	afb7dcfa37aa213650498d8522849b72a58bcb376bd3d18c3852acdbb6569920	reviewed	完整补审：账号搜索保留选择范围并排除不匹配记录。
+frontend/src/features/model-check/components/__tests__/account-sorting.test.tsx	f07d1fed79fa83f53ee66c94aa640c93933a24c91c6fe07b8459670cde465388	reviewed	完整补审：排序选项、缺失数据及稳定顺序。
+frontend/src/features/model-check/components/__tests__/animation-concurrency.test.tsx	43134678a02e2bd1864ccc8b5da3ea9fa693c173fb3b94324cf4ba852855b6cc	reviewed	完整补审：动画任务并发状态和账号互斥范围。
+frontend/src/features/model-check/components/__tests__/animation-detail-actions.test.tsx	3e13747b9c708e09e9662cc2e85ea95991c3a1093b8c19829ad632995023b15f	reviewed	完整补审：动画详情操作入口及结果关联。
+frontend/src/features/model-check/components/__tests__/animation-failed-source.test.tsx	a5515a59ef12461aa9a53b41e49eabcf84d03f699aa19a4512daca4826efa372	reviewed	完整补审：失败结果的来源信息与错误保留。
+frontend/src/features/model-check/components/__tests__/animation-filter-order.test.tsx	2acf6c81fa3da69f8bb2abc29a6a0b1cd76fbb191ad156dda6686f411883194f	reviewed	完整补审：分组平台字典顺序与筛选展示。
+frontend/src/features/model-check/components/__tests__/animation-loading-layout.test.tsx	b7ecbea5b403ce3ae9c96bd5c53fd9af742a7e4960e24ecc7ac5fb12b83b8d65	reviewed	完整补审：首屏骨架、后台读取保留内容及布局边界。
+frontend/src/features/model-check/components/__tests__/animation-prompt.test.tsx	092b01609e043afe9f59ec09d30e23816e533b1e1a51aa1f61634894b85cc9d7	reviewed	完整补审：提示词加载、保存版本及取消读取；AbortSignal 回归已通过。
+frontend/src/features/model-check/components/__tests__/animation-results.test.tsx	86ff267c9dc1073ae19b40164aab1552b56858663707aa79d0833b979287a733	reviewed	完整补审：成功失败动画及预览可访问名称；不绑定旧提示词。
+frontend/src/features/model-check/components/__tests__/animation-retest.test.tsx	d356a6afe2c9013e2034560f536afb02d1c691d5ce042c007b6de2f451b21805	reviewed	完整补审：重测保留原请求模型及目标范围。
+frontend/src/features/model-check/components/__tests__/animation-schedule-draft.test.tsx	6346d13130a39e1b557cdb30d8224e3677a23448bd7ed6d990796fb146cb0c8b	reviewed	完整补审：自动计划草稿与保存状态。
+frontend/src/features/model-check/components/__tests__/animation-schedule.test.tsx	0583a856daf19e49279db5ef8cf745d1dacd68e220eb8694c0a7079e5c4abd75	reviewed	完整补审：自动计划开关、参数和保存请求。
+frontend/src/features/model-check/components/__tests__/animation-settings-errors.test.tsx	d73eb18e961e807522cd059c8a39cc381b564fb5304f6740a5a77380804e6c8a	reviewed	完整补审：设置读取失败与重试边界。
+frontend/src/features/model-check/components/__tests__/animation-toolbar-layout.test.tsx	3d95d9c35743b06c2d78b2f6afd41bfaaa04aa65640ff85c7894947a3cdcebe1	reviewed	完整补审：批量设置和开始检测相邻、操作栏控件尺寸。
+frontend/src/features/model-check/components/__tests__/astra-result.test.tsx	f784d799b0001836a7163f7a50e8d851a109ef818295756714ea9269091edf6b	reviewed	完整补审：Astra 结果、来源及判定信息。
+frontend/src/features/model-check/components/__tests__/astra-rules.test.tsx	ee19891f7d258a8d9e9477c1817193af530c49d6b6072d70e17b71920fe563eb	reviewed	完整补审：Astra 规则阈值、题目切换与预期回答展示。
+frontend/src/features/model-check/components/__tests__/card-preview-layout.test.tsx	842bc39b8240b5eb6df2b0960df284dc41832180a2ed9e07f2f19ba8e5c3720e	reviewed	完整补审：账号卡片预览区域与尺寸约束。
+frontend/src/features/model-check/components/__tests__/custom-animation-records.test.tsx	7170906e2a509c96941332182a4e69d3b27fd858bfe418deda4446e78f1b5c7e	reviewed	完整补审：自定义动画历史和记录来源隔离。
+frontend/src/features/model-check/components/__tests__/custom-animation.test.tsx	501e612b7a5ef2071f8a9e1bddd87a351bb257137bab0c76e4759b00c4b3bce6	reviewed	完整补审：自定义连接表单、校验及任务提交。
+frontend/src/features/model-check/components/__tests__/custom-platform-order.test.tsx	68e0c217a0a382a1ed4f3bf079b1fa8e94d2b56e852de10d12eebefd5c62b3f7	reviewed	完整补审：自定义平台选项使用字典顺序。
+frontend/src/features/model-check/components/__tests__/detection-details-layout.test.tsx	f17dc6692192a31e1e759879216833a8cc1342e97e834702e6a0ced9c09456c1	reviewed	完整补审：任务详情结果区域和滚动约束。
+frontend/src/features/model-check/components/__tests__/detection-filters.test.tsx	6a5a00e497165a75bec8cea38333c401438e9be81059e04e1f43bfd61364f243	reviewed	完整补审：检测任务筛选条件和匹配范围。
+frontend/src/features/model-check/components/__tests__/detection-result-colors.test.tsx	a7f82a1d7ac69fc521723a6a2b3ac6046b36c155c2bd6da3f828e670ac2e90ac	reviewed	完整补审：结果颜色、图标及文本语义一致。
+frontend/src/features/model-check/components/__tests__/detection-task-details.test.tsx	97aa0f8352bdba2c35212e998b4bb0abd6642e6088e11b88c5ac394a27b86c58	reviewed	完整补审：分组任务详情的账号状态与结果回读。
+frontend/src/features/model-check/components/__tests__/detection-tasks.test.tsx	6157eaace2264f69ef9896ec21974ca3bcf853138f2e1a2761a0149f5472af0b	reviewed	完整补审：组合检测任务管理、配置和操作；旧 fixture 存在重复字典初始化，未影响行为。
+frontend/src/features/model-check/components/__tests__/group-order.test.tsx	459d84ee23d725b222ad5fb166a212f60f750b0d0b110c5cf6a2580b0c59fd38	reviewed	完整补审：分组选择遵循字典顺序。
+frontend/src/features/model-check/components/__tests__/layout.test.tsx	249ffad85c3251c7d2fcf77d2b0d82d44bc35eaaddec60e66a218f62cab50463	reviewed	完整补审：规则和面板布局回归；旧静态 markup/class 断言存在维护成本，保留有效保护。
+frontend/src/features/model-check/components/__tests__/manual-priority-refresh.test.tsx	32e48dc87ec4fff23f6bb3950baca3087d8f580ba9dbd8f9a8a0213e6771aef1	reviewed	完整补审：手动优先级结束后刷新相关账号状态。
+frontend/src/features/model-check/components/__tests__/model-list-scrolling.test.tsx	08706fc851cde1ec75fa3557ffcd989f5d23a4f775556f6fc1c418887e949d84	reviewed	完整补审：模型列表高度、溢出和滚动边界。
+frontend/src/features/model-check/components/__tests__/oauth-animation.test.tsx	787ae335efdefb66954a22f9efb154f246607a7d770ed4e4de6952e4c8ea1186	reviewed	完整补审：OAuth 动画及前置提交只使用稳定账号 ID，无前端凭据要求。
+frontend/src/features/model-check/components/__tests__/oauth-submission.test.tsx	550ef9b067e7fbc1bc056bf735cd243dde64556fdbdf93bf41d84244c75c91c6	reviewed	完整补审：OAuth 常规检测的稳定账号与所选模型提交。
+frontend/src/features/model-check/components/__tests__/precheck-question-selector.test.tsx	c3f8816f6e794284c13902c58496d06975bfd76a2245e5090ef0a497a96e0d85	reviewed	完整补审：前置检测题目选择和可用范围。
+frontend/src/features/model-check/components/__tests__/precheck-result.test.tsx	d48ddbda02e3eda1a4dc0a176710d9de8c578ddedb89a27eed298f56a181ab10	reviewed	完整补审：前置检测结果与问题答案展示。
+frontend/src/features/model-check/components/__tests__/precheck-schedule.test.tsx	bd8a915c3aa154b12ee8db6394194049388b39963596aa55d396c270bc4cbfce	reviewed	完整补审：前置计划参数及模式隔离。
+frontend/src/features/model-check/components/__tests__/precheck-workflow.test.tsx	7122e4a1d537bc46b0b7c148b3363217e611e006ae94a57ebd59ae46f8e06537	reviewed	完整补审：前置检测流程、选择和提交边界。
+frontend/src/features/model-check/components/__tests__/result-metrics-visibility.test.tsx	d983d891346cf60509e3deabd2d69ad6698e438cda793bd70e1e57f0536bcd4d	reviewed	完整补审：不同检测结果的指标可见性。
+frontend/src/features/model-check/components/__tests__/result-token-metrics.test.tsx	52d3bf2e373ffb9666dd796cee8f5fb4d54d08e9e80e3e75231bf51179f84405	reviewed	完整补审：缺失与已记录 Token 用量的显示区别。
+frontend/src/features/model-check/components/__tests__/schedule-selection.test.tsx	6f8e11d200919f9b3426c3eb50e3d917cfa3e680aaf8c6b824d12f7f80cdbff0	reviewed	完整补审：计划选择范围及稳定账号身份。
+frontend/src/features/model-check/components/__tests__/schedule-times.test.tsx	dd9339e4d3a1aa0c69680515294e5bfa9d2983bcb56cb31d99e9eb12839812e6	reviewed	完整补审：计划运行时刻和展示时间。
+frontend/src/features/model-check/components/__tests__/tabs.test.tsx	3a5790ff3ae1912548ccee77568b9e23ba35dfcd6f19bfc8e85e87099a9a0e8c	reviewed	完整补审：入口标签切换与状态保留。
+frontend/src/features/model-check/hooks/__tests__/created-task-retention.test.tsx	c31f73d9252c1804caf6eca9b502c8cae06f878eb7f4217cb385394039549d54	reviewed	完整补审：新任务在列表刷新前保留，避免历史查询覆盖。
+frontend/src/features/model-check/lib/__tests__/account-link.test.ts	b91b745d1ece085a8b83d1f0f6fe1c062f1a528fa1b64ec0f5cd555d85f2a82d	reviewed	完整补审：账号详情链接与稳定 ID 编码。
+frontend/src/features/model-check/lib/__tests__/animation-filters.test.ts	ccb784f7e99f1bc895da6f4ea06e4720f766bc3a0314c6c19a5630935bc1e61e	reviewed	完整补审：账号过滤、忙碌排除与选择范围。
+frontend/src/features/model-check/lib/__tests__/animation-task-results.test.ts	3949fb09350fc37b06ce3ce54b1cf209812ca514ac331f08f35f39f77b9cfe74	reviewed	完整补审：任务历史合并、活动状态与结果归属。
+frontend/src/features/model-check/lib/__tests__/animation-validation.test.ts	c27ecca7afeb85a330badc8dff44a489674d46640bd2e1d3aca57ff979e023f9	reviewed	完整补审：动画请求校验及无效输入边界。
+frontend/src/features/model-check/lib/__tests__/detection-task-outcome.test.ts	f3985726bcf17917babe518420f468bafcc3d507c41e337fa77109d0ecc0b814	reviewed	完整补审：任务最终结果及成功异常汇总。
+frontend/src/features/model-check/lib/__tests__/detection-task-schema.test.ts	34c098b109959cd9a98391b78ba5f9a0ec9f626d795a44c145f576d9e8579a4d	reviewed	完整补审：组合任务 schema 和异常字段拒绝。
+frontend/src/features/model-check/lib/__tests__/manual-priority-task.test.ts	35a1a1bb0d9b6afc50feb25586927c4190d925be90f1e0965d06d0055a4b6c67	reviewed	完整补审：手动优先级任务关联和完成条件。
+frontend/src/features/model-check/lib/__tests__/precheck-task-results.test.ts	7f64d1e44d6c77f599d38a5bfcf2c9873ba6c85d27c10cafbb9c7e09fca3f94d	reviewed	完整补审：前置结果汇总、状态与账号归属。
+frontend/src/features/model-check/lib/__tests__/terminal-continuity.test.ts	f3b7a12211809cd25287faa20fab3b4b394c9ef69ce42e6d070988cdc9ed12ef	reviewed	完整补审：旧终端结果解析与忙碌范围；仅历史兼容，不恢复执行。
+frontend/src/features/model-check/components/__tests__/terminal-history.test.tsx	aa37c9f841aa4d0bee26ac68b6eb4845edea6b9082bd62d190adb697f0133a52	fixed	真实任务详情覆盖混合坏轮次、非数组、对象回答、缺失及空轮次；显式对象参数避免 it.each 展开数组误测。
+frontend/src/features/model-check/components/__tests__/custom-model-lifecycle.test.tsx	f4237cd40579cc54c8882512867a2facd3049d5c9fbfe0e839bd909c0a54fabf	fixed	切换连接与卸载取消读取；迟到结果不抢焦点、不成为新连接选项，缓存键无凭据。
+frontend/src/features/model-check/components/__tests__/rule-tolerance.test.tsx	7198e6e7fff18299b6bf5bd743a0e95e09d9dfa5114cce8a0b4d7ba9a948cc1c	fixed	数值题相对百分比、零绝对值和缺失容差的用户可见行为。
+frontend/e2e/__tests__/model-animation.e2e.ts	b619d6e806831a19fd3459218ac4d9e6e717d10fec96fabffd20d70af126b809	fixed	桌面/窄屏预览、启动前后操作栏、240 账号分页与跨页选择；补齐字典 fixture 保留筛选断言。

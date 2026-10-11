@@ -74,11 +74,27 @@ const HEALTH_SCORES: Record<string, number> = {
   failed: 0,
 };
 
+const HEALTHY_STATES = new Set([
+  "healthy",
+  "active",
+  "available",
+  "succeeded",
+  "passed",
+  "pass",
+  "normal",
+]);
+
 function accountHealthScore(account: AccountStatus): number | null {
+  return accountHealthScoreForState(account, effectiveAccountState(account));
+}
+
+function accountHealthScoreForState(
+  account: AccountStatus,
+  state: ReturnType<typeof effectiveAccountState>,
+): number | null {
   if (account.health_score !== null && Number.isFinite(account.health_score)) {
     return account.health_score;
   }
-  const state = effectiveAccountState(account);
   return HEALTH_SCORES[state] ?? null;
 }
 
@@ -91,14 +107,45 @@ function accountBelongsToAnyGroup(account: AccountStatus, groups: GroupStatus[])
   return groups.some((group) => accountBelongsToGroup(account, group));
 }
 
+/** 一次建立成员索引，指标与卡片共用分组健康结果。 */
+export function buildOverviewHealth(
+  accounts: AccountStatus[],
+  groups: GroupStatus[],
+): {
+  metrics: OverviewMetrics;
+  healthRows: GroupHealth[];
+  attention: AttentionAccount[];
+} {
+  const visibleGroups = visibleOverviewGroups(groups);
+  const members = new Map<string, AccountStatus[]>();
+  for (const group of visibleGroups) members.set(group.name.trim().toLocaleLowerCase(), []);
+  const managed: AccountStatus[] = [];
+  for (const account of accounts) {
+    let included = false;
+    const names = new Set(account.groups.map((name) => name.trim().toLocaleLowerCase()));
+    for (const name of names) {
+      const groupMembers = members.get(name);
+      if (!groupMembers) continue;
+      groupMembers.push(account);
+      included = true;
+    }
+    if (included) managed.push(account);
+  }
+  const healthRows = visibleGroups.map((group) =>
+    groupHealthFromMembers(group, members.get(group.name.trim().toLocaleLowerCase()) ?? []),
+  );
+  return {
+    metrics: metricsFromGroupHealth(managed, healthRows),
+    healthRows,
+    attention: attentionFromManagedAccounts(managed),
+  };
+}
+
 export function visibleOverviewGroups(groups: GroupStatus[]): GroupStatus[] {
   return groups.filter((group) => group.participation_status !== "out_of_scope");
 }
 
-export function overviewAccounts(
-  accounts: AccountStatus[],
-  groups: GroupStatus[],
-): AccountStatus[] {
+function overviewAccounts(accounts: AccountStatus[], groups: GroupStatus[]): AccountStatus[] {
   return accounts.filter((account) => accountBelongsToAnyGroup(account, groups));
 }
 
@@ -141,6 +188,10 @@ export function buildAttentionAccounts(
   accounts: AccountStatus[],
   groups: GroupStatus[],
 ): AttentionAccount[] {
+  return attentionFromManagedAccounts(overviewAccounts(accounts, visibleOverviewGroups(groups)));
+}
+
+function attentionFromManagedAccounts(accounts: AccountStatus[]): AttentionAccount[] {
   const priorities: Record<AttentionState, number> = {
     apply_pending: 0,
     fused: 1,
@@ -152,7 +203,7 @@ export function buildAttentionAccounts(
     degraded: 6,
   };
 
-  return overviewAccounts(accounts, visibleOverviewGroups(groups))
+  return accounts
     .map((account): AttentionAccount | null => {
       const state = attentionState(account);
       if (!state) return null;
@@ -172,34 +223,46 @@ export function buildAttentionAccounts(
     });
 }
 
-function roundedAverage(values: number[]): number | null {
-  if (values.length === 0) return null;
-  return Math.round((values.reduce((total, value) => total + value, 0) / values.length) * 10) / 10;
-}
-
-function averageMultiplier(accounts: AccountStatus[]): number | null {
-  const values = accounts
-    .map((account) => (account.multiplier === null ? Number.NaN : Number(account.multiplier)))
-    .filter((value) => Number.isFinite(value));
-  if (values.length === 0) return null;
-  return Math.round((values.reduce((sum, value) => sum + value, 0) / values.length) * 100) / 100;
-}
-
 export function buildGroupHealth(group: GroupStatus, accounts: AccountStatus[]): GroupHealth {
   const groupAccounts = accounts.filter((account) => accountBelongsToGroup(account, group));
+  return groupHealthFromMembers(group, groupAccounts);
+}
+
+function groupHealthFromMembers(group: GroupStatus, groupAccounts: AccountStatus[]): GroupHealth {
   const totalCount = Math.max(group.account_count, groupAccounts.length);
   const liveCount = Math.max(0, Math.min(group.scheduling_open, totalCount));
   const livePercent = totalCount === 0 ? 0 : Math.round((liveCount / totalCount) * 100);
-  const scores = groupAccounts
-    .map(accountHealthScore)
-    .filter((value): value is number => value !== null);
-  const healthScore =
-    group.average_health_score !== undefined ? group.average_health_score : roundedAverage(scores);
-  const scoredCount = group.scored_accounts ?? scores.length;
+  let scoreTotal = 0;
+  let scoreCount = 0;
+  let multiplierTotal = 0;
+  let multiplierCount = 0;
+  let fusedCount = 0;
+  for (const account of groupAccounts) {
+    const state = effectiveAccountState(account);
+    const score = accountHealthScoreForState(account, state);
+    if (score !== null) {
+      scoreTotal += score;
+      scoreCount += 1;
+    }
+    if (state === "fused") fusedCount += 1;
+    if (account.multiplier !== null) {
+      const multiplier = Number(account.multiplier);
+      if (Number.isFinite(multiplier)) {
+        multiplierTotal += multiplier;
+        multiplierCount += 1;
+      }
+    }
+  }
+  let healthScore: number | null;
+  if (group.average_health_score !== undefined) {
+    healthScore = group.average_health_score;
+  } else if (scoreCount === 0) {
+    healthScore = null;
+  } else {
+    healthScore = Math.round((scoreTotal / scoreCount) * 10) / 10;
+  }
+  const scoredCount = group.scored_accounts ?? scoreCount;
   const rateLimitedCount = group.rate_limited_accounts ?? 0;
-  const fusedCount = groupAccounts.filter((account) => {
-    return effectiveAccountState(account) === "fused";
-  }).length;
   const fallbackAttention = Math.min(
     totalCount,
     Math.max(0, totalCount - liveCount, group.scheduling_closed + group.scheduling_unknown),
@@ -241,7 +304,8 @@ export function buildGroupHealth(group: GroupStatus, accounts: AccountStatus[]):
     needsAttention,
     rateLimitedCount,
     fusedCount,
-    averageMultiplier: averageMultiplier(groupAccounts),
+    averageMultiplier:
+      multiplierCount === 0 ? null : Math.round((multiplierTotal / multiplierCount) * 100) / 100,
     platformSummary: groupPlatformSummary(group),
     statusLabel,
     tone,
@@ -252,31 +316,69 @@ export function buildOverviewMetrics(
   accounts: AccountStatus[],
   groups: GroupStatus[],
 ): OverviewMetrics {
-  const states = accounts.map(effectiveAccountState);
-  const scores = accounts
-    .map(accountHealthScore)
-    .filter((value): value is number => value !== null);
-  const groupHealth = groups.map((group) => buildGroupHealth(group, accounts));
-  const concurrency = accounts
-    .map((account) => account.concurrency)
-    .filter((value): value is number => value !== null && Number.isFinite(value) && value >= 0);
+  return metricsFromGroupHealth(
+    accounts,
+    groups.map((group) => buildGroupHealth(group, accounts)),
+  );
+}
+
+function metricsFromGroupHealth(
+  accounts: AccountStatus[],
+  groupHealth: GroupHealth[],
+): OverviewMetrics {
+  let healthyAccounts = 0;
+  let degradedAccounts = 0;
+  let costBlockedAccounts = 0;
+  let concurrencyLimitedAccounts = 0;
+  let fusedAccounts = 0;
+  let survivorAccounts = 0;
+  let pausedAccounts = 0;
+  let disabledAccounts = 0;
+  let unknownAccounts = 0;
+  let scoreTotal = 0;
+  let scoreCount = 0;
+  let assignedConcurrency = 0;
+  let accountsWithConcurrency = 0;
+  for (const account of accounts) {
+    const state = effectiveAccountState(account);
+    if (HEALTHY_STATES.has(state)) healthyAccounts += 1;
+    if (state === "degraded") degradedAccounts += 1;
+    if (state === "cost_blocked") costBlockedAccounts += 1;
+    if (state === "concurrency_limited") concurrencyLimitedAccounts += 1;
+    if (state === "fused") fusedAccounts += 1;
+    if (state === "survivor") survivorAccounts += 1;
+    if (state === "paused") pausedAccounts += 1;
+    if (state === "disabled") disabledAccounts += 1;
+    if (state === "unknown") unknownAccounts += 1;
+    const score = accountHealthScoreForState(account, state);
+    if (score !== null) {
+      scoreTotal += score;
+      scoreCount += 1;
+    }
+    if (
+      account.concurrency !== null &&
+      Number.isFinite(account.concurrency) &&
+      account.concurrency >= 0
+    ) {
+      assignedConcurrency += account.concurrency;
+      accountsWithConcurrency += 1;
+    }
+  }
 
   return {
     managedAccounts: accounts.length,
-    healthyAccounts: states.filter((state) =>
-      ["healthy", "active", "available", "succeeded", "passed", "pass", "normal"].includes(state),
-    ).length,
-    degradedAccounts: states.filter((state) => state === "degraded").length,
-    costBlockedAccounts: states.filter((state) => state === "cost_blocked").length,
-    concurrencyLimitedAccounts: states.filter((state) => state === "concurrency_limited").length,
-    fusedAccounts: states.filter((state) => state === "fused").length,
-    survivorAccounts: states.filter((state) => state === "survivor").length,
-    pausedAccounts: states.filter((state) => state === "paused").length,
-    disabledAccounts: states.filter((state) => state === "disabled").length,
-    unknownAccounts: states.filter((state) => state === "unknown").length,
-    averageHealthScore: roundedAverage(scores),
-    assignedConcurrency: concurrency.reduce((sum, value) => sum + value, 0),
-    accountsWithConcurrency: concurrency.length,
+    healthyAccounts,
+    degradedAccounts,
+    costBlockedAccounts,
+    concurrencyLimitedAccounts,
+    fusedAccounts,
+    survivorAccounts,
+    pausedAccounts,
+    disabledAccounts,
+    unknownAccounts,
+    averageHealthScore: scoreCount === 0 ? null : Math.round((scoreTotal / scoreCount) * 10) / 10,
+    assignedConcurrency,
+    accountsWithConcurrency,
     riskGroups: groupHealth.filter((group) => group.tone !== "healthy").length,
     criticalGroups: groupHealth.filter((group) => group.tone === "critical").length,
   };

@@ -1,3 +1,4 @@
+import { seedDictionaries } from "@/test/dictionary-fixtures";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -30,6 +31,7 @@ function renderPage(rows: TaskSummary[] = [task]) {
   client = new QueryClient({
     defaultOptions: { queries: { retry: false, staleTime: Infinity } },
   });
+  seedDictionaries(client);
   client.setQueryData(["tasks"], rows);
   client.setQueryData(["accounts"], []);
   client.setQueryData(["system-metrics"], {
@@ -37,7 +39,7 @@ function renderPage(rows: TaskSummary[] = [task]) {
     memory: { usage_percent: 30, used_bytes: 1024, total_bytes: 4096 },
     disk: { usage_percent: 40, used_bytes: 1024, total_bytes: 4096 },
   });
-  client.setQueryData(["dictionaries", "task_status"], { items: [] });
+
   for (const row of rows) client.setQueryData(["task", row.id], { ...row, result: {} });
   return render(
     <QueryClientProvider client={client}>

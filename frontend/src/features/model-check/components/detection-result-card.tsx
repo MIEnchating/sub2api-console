@@ -14,6 +14,7 @@ import {
 import { DetectionStageStatus } from "./detection-stage-status";
 import { AnimationPreview } from "./animation-preview";
 import { AnimationResultDetails } from "./animation-result-details";
+import { AnimationManualVerdictControls } from "./animation-manual-verdict";
 import { PrecheckResultDetails } from "./precheck-result-details";
 import { TerminalRoundResults } from "./terminal-round-results";
 import { detectionMissingResult } from "../lib/detection-task-outcome";
@@ -66,7 +67,10 @@ export function DetectionResultCard(props: {
               label={terminalVerdicts[row.terminal.verdict].label}
               tone={terminalVerdictTones[row.terminal.verdict]}
             />
-            <TerminalRoundResults rounds={row.terminal.round_results} />
+            <TerminalRoundResults
+              rounds={row.terminal.round_results}
+              invalidRounds={row.terminal.invalidRounds}
+            />
           </div>
         )}
         {row.animation && (
@@ -97,6 +101,7 @@ export function DetectionResultCard(props: {
               )}
             </div>
             <AnimationResultMetrics result={row.animation} showUsage={false} />
+            <AnimationManualVerdictControls result={row.animation} disabled={props.active} />
           </div>
         )}
         {props.precheck && !row.precheck && (

@@ -9,6 +9,7 @@ import { AnimationScheduleConfirmation } from "./animation-schedule-confirmation
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
+import { AnimationPromptDialog } from "./animation-prompt-dialog";
 import {
   Dialog,
   DialogBody,
@@ -92,6 +93,7 @@ export function AnimationScheduleDialog(props: {
         daily_times:
           value.schedule_type === "daily" ? value.daily_times?.slice().sort() : undefined,
         timezone: value.schedule_type === "daily" ? "Asia/Shanghai" : undefined,
+        prompt: undefined,
       }));
     if (value.enabled || props.targets) setConfirmation(payload);
     else save.mutate(payload);
@@ -166,6 +168,7 @@ export function AnimationScheduleDialog(props: {
                 />
               </label>
               <FieldError message={form.formState.errors.model?.message} />
+              {mode !== "precheck" ? <AnimationPromptDialog disabled={save.isPending} /> : null}
               <AnimationScheduleTiming form={form} pending={save.isPending} />
               <label className="block space-y-1 text-sm">
                 请求超时（秒）

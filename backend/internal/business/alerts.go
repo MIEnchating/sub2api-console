@@ -242,41 +242,58 @@ func (s *Store) prepareAlertDelivery(ctx context.Context, channelKey string, pri
 }
 
 func (s *Store) NotificationQueueSnapshot(ctx context.Context, channelKey string, privateConfigured bool) (NotificationQueueSnapshot, error) {
-	details, err := s.NotificationQueueDetails(ctx, channelKey, privateConfigured)
-	if err != nil {
-		return NotificationQueueSnapshot{}, err
-	}
-	return NotificationQueueSnapshot{
-		ProducerFiring:    len(details.ProducerFiring),
-		ProducerRecovered: len(details.ProducerRecovered),
-		ConsumerPending:   len(details.ConsumerPending),
-		ConsumerFailed:    len(details.ConsumerFailed),
-	}, nil
+	return s.notificationQueue(ctx, channelKey, privateConfigured, nil)
 }
 
 func (s *Store) NotificationQueueDetails(ctx context.Context, channelKey string, privateConfigured bool) (NotificationQueueDetails, error) {
-	policy, err := s.readAlertPolicy(ctx)
-	if err != nil {
-		return NotificationQueueDetails{}, err
-	}
-	incidents, err := s.deliveryIncidents(ctx)
-	if err != nil {
-		return NotificationQueueDetails{}, err
-	}
-	prior, err := s.priorDeliveries(ctx, channelKey)
-	if err != nil {
-		return NotificationQueueDetails{}, err
-	}
-	enabled, qqbotEnabled, configurationErrors, err := s.notificationRules(ctx, privateConfigured)
-	if err != nil {
-		return NotificationQueueDetails{}, err
-	}
 	result := NotificationQueueDetails{
 		ProducerFiring:    []NotificationQueueItem{},
 		ProducerRecovered: []NotificationQueueItem{},
 		ConsumerPending:   []NotificationQueueItem{},
 		ConsumerFailed:    []NotificationQueueItem{},
 		ConsumerItems:     []NotificationQueueItem{},
+	}
+	if _, err := s.notificationQueue(ctx, channelKey, privateConfigured, &result); err != nil {
+		return NotificationQueueDetails{}, err
+	}
+	return result, nil
+}
+
+// The frequently polled overview counts the same states without retaining detail lists.
+func (s *Store) notificationQueue(ctx context.Context, channelKey string, privateConfigured bool, details *NotificationQueueDetails) (NotificationQueueSnapshot, error) {
+	policy, err := s.readAlertPolicy(ctx)
+	if err != nil {
+		return NotificationQueueSnapshot{}, err
+	}
+	incidents, err := s.deliveryIncidents(ctx)
+	if err != nil {
+		return NotificationQueueSnapshot{}, err
+	}
+	prior, err := s.priorDeliveries(ctx, channelKey)
+	if err != nil {
+		return NotificationQueueSnapshot{}, err
+	}
+	enabled, qqbotEnabled, configurationErrors, err := s.notificationRules(ctx, privateConfigured)
+	if err != nil {
+		return NotificationQueueSnapshot{}, err
+	}
+	var result NotificationQueueSnapshot
+	addConsumer := func(item NotificationQueueItem, pending, failed bool) {
+		if pending {
+			result.ConsumerPending++
+		}
+		if failed {
+			result.ConsumerFailed++
+		}
+		if details != nil {
+			if pending {
+				details.ConsumerPending = append(details.ConsumerPending, item)
+			}
+			if failed {
+				details.ConsumerFailed = append(details.ConsumerFailed, item)
+			}
+			details.ConsumerItems = append(details.ConsumerItems, item)
+		}
 	}
 	now := time.Now().UTC()
 	degradedDigestCooling := !deliveryCooldownDue(
@@ -292,57 +309,63 @@ func (s *Store) NotificationQueueDetails(ctx context.Context, channelKey string,
 			item.DeliveredAt = previous.deliveredAt
 		}
 		if incident.Status == "firing" {
-			result.ProducerFiring = append(result.ProducerFiring, item)
+			result.ProducerFiring++
+			if details != nil {
+				details.ProducerFiring = append(details.ProducerFiring, item)
+			}
 		} else if incident.Status == "recovered" {
-			result.ProducerRecovered = append(result.ProducerRecovered, item)
+			result.ProducerRecovered++
+			if details != nil {
+				details.ProducerRecovered = append(details.ProducerRecovered, item)
+			}
 		}
 		if !found && incident.EventType == "account.routing_degraded" && incident.Status == "recovered" {
 			item.QueueStatus = "无需发送"
 			item.QueueReason = "问题已自行恢复，未发送告警"
-			result.ConsumerItems = append(result.ConsumerItems, item)
+			addConsumer(item, false, false)
 			continue
 		}
 		if !found && incident.EventType == "account.routing_degraded" &&
 			!incidentObservationDue(incident.FirstSeenAt, policy.StateChangeCooldownMinute, now) {
 			item.QueueStatus = "状态观察中"
 			item.QueueReason = fmt.Sprintf("持续 %d 分钟后才通知，避免短暂波动反复提醒", policy.StateChangeCooldownMinute)
-			result.ConsumerItems = append(result.ConsumerItems, item)
+			addConsumer(item, false, false)
 			continue
 		}
 		if !policy.DeliveryEnabled {
 			item.QueueStatus = "已抑制"
 			item.QueueReason = "告警通知开关已关闭"
-			result.ConsumerItems = append(result.ConsumerItems, item)
+			addConsumer(item, false, false)
 			continue
 		}
 		if incident.Status == "recovered" && (!recoveryNotificationEnabled(policy, incident.EventType) || pointerTextValue(incident.DeliveryStatus) == "恢复通知已关闭") {
 			item.QueueStatus = "已抑制"
 			item.QueueReason = "恢复通知开关已关闭"
-			result.ConsumerItems = append(result.ConsumerItems, item)
+			addConsumer(item, false, false)
 			continue
 		}
 		if len(configurationErrors) > 0 {
 			item.QueueStatus = "已抑制"
 			item.QueueReason = "通知配置无效：" + strings.Join(configurationErrors, "、")
-			result.ConsumerItems = append(result.ConsumerItems, item)
+			addConsumer(item, false, false)
 			continue
 		}
 		if !privateConfigured {
 			item.QueueStatus = "已抑制"
 			item.QueueReason = "QQBot 通知配置不完整"
-			result.ConsumerItems = append(result.ConsumerItems, item)
+			addConsumer(item, false, false)
 			continue
 		}
 		if !enabled {
 			item.QueueStatus = "已抑制"
 			item.QueueReason = "通知规则开关已关闭"
-			result.ConsumerItems = append(result.ConsumerItems, item)
+			addConsumer(item, false, false)
 			continue
 		}
 		if !qqbotEnabled {
 			item.QueueStatus = "已抑制"
 			item.QueueReason = "QQBot 通知渠道未开启"
-			result.ConsumerItems = append(result.ConsumerItems, item)
+			addConsumer(item, false, false)
 			continue
 		}
 		if found && previous.status == "failed" {
@@ -351,9 +374,7 @@ func (s *Store) NotificationQueueDetails(ctx context.Context, channelKey string,
 			if item.QueueReason == "" {
 				item.QueueReason = "上次通知发送失败，等待重试"
 			}
-			result.ConsumerFailed = append(result.ConsumerFailed, item)
-			result.ConsumerPending = append(result.ConsumerPending, item)
-			result.ConsumerItems = append(result.ConsumerItems, item)
+			addConsumer(item, true, true)
 			continue
 		}
 		if found && previous.status == "commit_unknown" {
@@ -362,21 +383,20 @@ func (s *Store) NotificationQueueDetails(ctx context.Context, channelKey string,
 			if item.QueueReason == "" {
 				item.QueueReason = "发送请求可能已被 QQBot 接收，为避免重复通知不会自动重试"
 			}
-			result.ConsumerFailed = append(result.ConsumerFailed, item)
-			result.ConsumerItems = append(result.ConsumerItems, item)
+			addConsumer(item, false, true)
 			continue
 		}
 		if incidentUsesStateChangeCooldown(incident) && found && previous.status == "transition" &&
 			!deliveryCooldownDue(previous.updatedAt, policy.StateChangeCooldownMinute, now) {
 			item.QueueStatus = "状态变化冷却中"
 			item.QueueReason = fmt.Sprintf("状态变化后等待 %d 分钟再通知，避免短暂波动反复提醒", policy.StateChangeCooldownMinute)
-			result.ConsumerItems = append(result.ConsumerItems, item)
+			addConsumer(item, false, false)
 			continue
 		}
 		if incident.EventType == "account.routing_degraded" && degradedDigestCooling {
 			item.QueueStatus = "降级告警汇总冷却中"
 			item.QueueReason = fmt.Sprintf("降级变化将在 %d 分钟冷却结束后合并通知", policy.StateChangeCooldownMinute)
-			result.ConsumerItems = append(result.ConsumerItems, item)
+			addConsumer(item, false, false)
 			continue
 		}
 		repeatDue := incident.Status == "firing" && deliveryRepeatDue(previous.deliveredAt, policy.RepeatIntervalMinute, now)
@@ -390,8 +410,7 @@ func (s *Store) NotificationQueueDetails(ctx context.Context, channelKey string,
 			default:
 				item.QueueReason = "等待通知服务处理"
 			}
-			result.ConsumerPending = append(result.ConsumerPending, item)
-			result.ConsumerItems = append(result.ConsumerItems, item)
+			addConsumer(item, true, false)
 			continue
 		}
 		item.QueueStatus = "本轮不发送"
@@ -403,7 +422,7 @@ func (s *Store) NotificationQueueDetails(ctx context.Context, channelKey string,
 		default:
 			item.QueueReason = "还没到下次提醒时间"
 		}
-		result.ConsumerItems = append(result.ConsumerItems, item)
+		addConsumer(item, false, false)
 	}
 	return result, nil
 }
@@ -416,10 +435,6 @@ func pointerTextValue(value *string) string {
 }
 
 func incidentUsesStateChangeCooldown(incident AlertIncident) bool {
-	if incident.EventType == "account.routing_breaker" &&
-		(incident.CauseCode == "MANUAL_FUSE" || incident.CauseCode == "ROUTING_BREAKER:人工熔断") {
-		return false
-	}
 	return incident.EventType == "account.routing_degraded" || incident.EventType == "account.routing_breaker"
 }
 
@@ -664,7 +679,7 @@ func (s *Store) scopedDeliveryIncidents(ctx context.Context, balanceHost string)
 	query := `SELECT i.incident_key,i.event_type,i.object_kind,i.object_id,a.name,i.cause_code,
 		i.status,i.first_seen_at,i.last_seen_at,i.delivery_status,i.last_error,
 		(SELECT json_group_array(group_name ORDER BY group_name) FROM account_groups
-		 WHERE i.object_kind='account' AND account_id=i.object_id) FROM alert_incidents i
+		 WHERE i.object_kind='account' AND account_id=i.object_id) FROM alert_incidents i INDEXED BY ix_alert_incidents_delivery_recent
 		LEFT JOIN accounts a ON i.object_kind='account' AND a.id=i.object_id
 		WHERE i.status IN ('firing','recovered')`
 	var args []any
@@ -686,7 +701,7 @@ func (s *Store) scopedDeliveryIncidents(ctx context.Context, balanceHost string)
 			&objectName, &item.CauseCode, &item.Status, &item.FirstSeenAt, &item.LastSeenAt, &deliveryStatus, &lastError, &groupNamesJSON); err != nil {
 			return nil, err
 		}
-		if legacyCapacityWaitAlert(item.EventType, item.CauseCode) {
+		if manualFuseAlert(item.EventType, item.CauseCode) || legacyCapacityWaitAlert(item.EventType, item.CauseCode) {
 			continue
 		}
 		if item.EventType == "account.cost_traffic" && containsControlID(ignoredAccounts, item.ObjectID) {

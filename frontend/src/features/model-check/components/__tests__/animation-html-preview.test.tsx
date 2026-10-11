@@ -15,7 +15,7 @@ const result = {
   completed_at: "2026-09-24T00:00:00Z",
   html: "<!DOCTYPE html><html><body><svg><circle r='10'/></svg></body></html>",
   source: "<!DOCTYPE html><html><body><svg><circle r='10'/></svg></body></html>",
-  prompt: "本次实际发送的提示词",
+  prompt: "生成蓝色鲸鱼动画",
   reasoning_effort: "low",
   usage: { input_tokens: 1200, output_tokens: 200, total_tokens: 1400 },
 } satisfies AnimationResult;
@@ -25,7 +25,7 @@ it("HTML 动画可切换代码和本次提示词，不展示用量统计", async
   render(<AnimationPreview result={result} />);
   await user.click(screen.getByRole("button", { name: /放大查看/ }));
   const dialog = within(await screen.findByRole("dialog", { name: "动画预览" }));
-  const frame = dialog.getByLabelText("动画账号生成的鹈鹕骑自行车动画");
+  const frame = dialog.getByLabelText("动画账号生成的动画");
   expect(frame).toHaveAttribute("sandbox", "allow-scripts");
   expect(frame).toHaveAttribute("scrolling", "no");
   expect(frame).toHaveAttribute("referrerpolicy", "no-referrer");
@@ -40,7 +40,7 @@ it("HTML 动画可切换代码和本次提示词，不展示用量统计", async
   expect(dialog.getByRole("tab", { name: "提示词" })).toHaveAttribute("aria-selected", "true");
   expect(dialog.getByRole("tabpanel", { name: "提示词" })).toHaveTextContent(result.prompt);
   await user.click(dialog.getByRole("tab", { name: "动画" }));
-  expect(dialog.getByLabelText("动画账号生成的鹈鹕骑自行车动画")).toBeVisible();
+  expect(dialog.getByLabelText("动画账号生成的动画")).toBeVisible();
 });
 
 it("历史结果缺失用量和提示词时不补零或套用新提示词", async () => {

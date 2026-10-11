@@ -2,6 +2,7 @@ package accountops
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"net/http"
@@ -16,7 +17,7 @@ import (
 )
 
 type accountGroupsRepository interface {
-	PricingCatalog(context.Context) (business.PricingCatalog, error)
+	PricingCatalogForAccount(context.Context, string) (business.PricingCatalog, error)
 	CommitAccountGroups(context.Context, string, []string, []string, business.AccountOperation) error
 }
 
@@ -42,28 +43,15 @@ func (s *Service) AccountGroups(ctx context.Context, accountID string) (AccountG
 	if !stableID(accountID) {
 		return AccountGroupsPreview{}, errors.New("账号必须使用有效的稳定 ID")
 	}
-	mode, local, err := s.localAccount(ctx, accountID)
+	mode, err := s.repository.Mode(ctx)
 	if err != nil {
 		return AccountGroupsPreview{}, err
-	}
-	if local.GroupsLocked {
-		return AccountGroupsPreview{}, business.ErrAccountGroupsLocked
-	}
-	if local.ManualPriority != nil {
-		return AccountGroupsPreview{}, errors.New("账号处于手动控制，请先取消手动控制再切换分组")
-	}
-	if mode != runtimepolicy.Full {
-		return AccountGroupsPreview{}, errors.New("切换分组需要完全模式")
 	}
 	repository, ok := s.repository.(accountGroupsRepository)
 	if !ok {
 		return AccountGroupsPreview{}, errors.New("账号分组服务尚未就绪")
 	}
-	target, err := s.targets.TargetSettings(ctx)
-	if err != nil {
-		return AccountGroupsPreview{}, err
-	}
-	catalog, err := repository.PricingCatalog(ctx)
+	catalog, err := repository.PricingCatalogForAccount(ctx, accountID)
 	if err != nil {
 		return AccountGroupsPreview{}, err
 	}
@@ -71,8 +59,21 @@ func (s *Service) AccountGroups(ctx context.Context, accountID string) (AccountG
 		if account.ID != accountID {
 			continue
 		}
+		if account.GroupsLocked {
+			return AccountGroupsPreview{}, business.ErrAccountGroupsLocked
+		}
+		if account.ManualPriority {
+			return AccountGroupsPreview{}, errors.New("账号处于手动控制，请先取消手动控制再切换分组")
+		}
+		if mode != runtimepolicy.Full {
+			return AccountGroupsPreview{}, errors.New("切换分组需要完全模式")
+		}
 		if !account.GroupsValid || account.Platform == "" {
 			return AccountGroupsPreview{}, errors.New("账号平台或分组信息不完整，请先同步管理平台目录")
+		}
+		target, err := s.targets.TargetSettings(ctx)
+		if err != nil {
+			return AccountGroupsPreview{}, err
 		}
 		result := AccountGroupsPreview{AccountID: accountID, CurrentGroupIDs: append([]string{}, account.GroupIDs...), Groups: []AccountGroupOption{}, TargetVersion: targetguard.Fingerprint(target)}
 		for _, group := range catalog.Groups {
@@ -82,7 +83,7 @@ func (s *Service) AccountGroups(ctx context.Context, accountID string) (AccountG
 		}
 		return result, nil
 	}
-	return AccountGroupsPreview{}, errors.New("账号已不存在，请刷新后重试")
+	return AccountGroupsPreview{}, sql.ErrNoRows
 }
 
 func validateGroupChange(preview AccountGroupsPreview, input AccountGroupsInput) error {

@@ -13,6 +13,7 @@ import (
 )
 
 func TestReleaseWithoutBaselineSkipsRemoteAccountLookup(t *testing.T) {
+	t.Parallel()
 	store, err := business.Open(filepath.Join(t.TempDir(), "release.sqlite3"))
 	if err != nil {
 		t.Fatal(err)
@@ -46,6 +47,7 @@ func TestReleaseWithoutBaselineSkipsRemoteAccountLookup(t *testing.T) {
 }
 
 func TestUnmanagedReleaseDoesNotBlockRestoringManagedAccountInSameBatch(t *testing.T) {
+	t.Parallel()
 	service, _, targets := newLoadFactorService(t, 1, true)
 	targets["1169"] = business.AccountRoutingTarget{AccountID: "1169", GroupNames: []string{"test-group"}, ReleaseControl: true}
 	result, err := service.Apply(t.Context(), targets, "scheduler")
@@ -63,6 +65,7 @@ func TestUnmanagedReleaseDoesNotBlockRestoringManagedAccountInSameBatch(t *testi
 }
 
 func TestManagedReleaseStillReportsMissingRemoteAccount(t *testing.T) {
+	t.Parallel()
 	service, fixture, targets := newLoadFactorService(t, 1, true)
 	fixture.mu.Lock()
 	delete(fixture.states, "41")

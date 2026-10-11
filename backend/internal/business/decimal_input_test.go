@@ -3,6 +3,7 @@ package business
 import "testing"
 
 func TestCatalogDecimalsRejectUnboundedAndNonDecimalInput(t *testing.T) {
+	t.Parallel()
 	for _, value := range []string{"1e1001", "1/2", "0x10"} {
 		t.Run(value, func(t *testing.T) {
 			if normalizeDecimal(value) != nil {
@@ -13,6 +14,7 @@ func TestCatalogDecimalsRejectUnboundedAndNonDecimalInput(t *testing.T) {
 }
 
 func TestMultiplierConversionRejectsUnboundedAndNonDecimalInput(t *testing.T) {
+	t.Parallel()
 	for _, value := range []string{"1e1001", "1/2", "0x10"} {
 		t.Run(value, func(t *testing.T) {
 			if _, err := ConvertMultiplier(value, "1"); err == nil {
@@ -26,6 +28,7 @@ func TestMultiplierConversionRejectsUnboundedAndNonDecimalInput(t *testing.T) {
 }
 
 func TestManagementSnapshotDecimalsRejectUnsafeSyntax(t *testing.T) {
+	t.Parallel()
 	for _, value := range []string{"1e1001", "1/2", "0x10"} {
 		t.Run(value, func(t *testing.T) {
 			if _, err := managementDecimal(value); err == nil {

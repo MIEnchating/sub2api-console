@@ -1,12 +1,13 @@
 import type { TrafficRankingRow } from "@/api";
 
+const countFormatter = new Intl.NumberFormat("zh-CN");
 const tokenMillionsFormatter = new Intl.NumberFormat("zh-CN", {
   minimumFractionDigits: 2,
   maximumFractionDigits: 2,
 });
 
 export function formatTrafficCount(value: number): string {
-  return new Intl.NumberFormat("zh-CN").format(value);
+  return countFormatter.format(value);
 }
 
 export function formatTrafficTokens(value: number | null): string {
@@ -53,7 +54,17 @@ export function trafficStabilityLabel(value: number | null): {
 }
 
 export function trafficAccountMatches(row: TrafficRankingRow, query: string): boolean {
-  const normalized = query.trim().toLocaleLowerCase();
+  return trafficAccountMatchesNormalized(row, normalizeTrafficSearchQuery(query));
+}
+
+export function normalizeTrafficSearchQuery(query: string): string {
+  return query.trim().toLocaleLowerCase();
+}
+
+export function trafficAccountMatchesNormalized(
+  row: TrafficRankingRow,
+  normalized: string,
+): boolean {
   if (normalized === "") return true;
   return [row.account_id, row.account_name, row.upstream_host, row.platform, ...row.groups].some(
     (value) => value.toLocaleLowerCase().includes(normalized),

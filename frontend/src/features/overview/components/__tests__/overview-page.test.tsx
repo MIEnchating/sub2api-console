@@ -1,9 +1,9 @@
-import { render, screen } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
-import type { AccountStatus, GroupStatus, RunEvent } from "@/api";
+import { api, type AccountStatus, type GroupStatus, type RunEvent } from "@/api";
 import { OverviewPage } from "../overview-page";
 import { OverviewActivity } from "../overview-activity";
 
@@ -102,6 +102,27 @@ function group(overrides: Partial<GroupStatus> = {}): GroupStatus {
 }
 
 describe("OverviewPage", () => {
+  it("重新打开总览且分组缓存仍新鲜时不重复读取分组", async () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    client.setQueryData(["accounts"], [account()]);
+    client.setQueryData(["groups"], [group()]);
+    client.setQueryData(["overview-events"], []);
+    const readGroups = vi.spyOn(api, "groups").mockResolvedValue([group()]);
+
+    try {
+      render(
+        <QueryClientProvider client={client}>
+          <OverviewPage onOpenAccounts={() => {}} onOpenGroups={() => {}} onOpenEvents={() => {}} />
+        </QueryClientProvider>,
+      );
+      await act(async () => {});
+      expect(readGroups).not.toHaveBeenCalled();
+    } finally {
+      readGroups.mockRestore();
+      client.clear();
+    }
+  });
+
   it.each(["attention", "events"] as const)("%s 刷新失败时保留已读取的运营动态", (kind) => {
     const props = {
       attention: [{ account: account(), state: "fused" as const, reason: "连续失败" }],

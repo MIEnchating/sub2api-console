@@ -216,6 +216,7 @@ func (s *Store) PersistProbeSamples(ctx context.Context, samples []ProbeSample) 
 	if err := tx.Commit(); err != nil {
 		return 0, err
 	}
+	s.invalidateAccountStabilityCache()
 	return len(samples), nil
 }
 

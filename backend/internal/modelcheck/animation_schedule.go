@@ -7,8 +7,11 @@ import (
 	"fmt"
 	"slices"
 	"sort"
+	"strings"
 	"sync"
 	"time"
+	"unicode"
+	"unicode/utf8"
 )
 
 type animationRepository interface {
@@ -17,6 +20,7 @@ type animationRepository interface {
 }
 
 type AnimationSchedule struct {
+	Prompt            string   `json:"prompt,omitempty"`
 	ScheduleType      string   `json:"schedule_type,omitempty"`
 	DailyTime         string   `json:"daily_time,omitempty"`
 	DailyTimes        []string `json:"daily_times,omitempty"`
@@ -95,6 +99,9 @@ func (s *Service) loadAnimationConfiguration(ctx context.Context) error {
 }
 
 func validateAnimationSchedule(value AnimationSchedule) error {
+	if utf8.RuneCountInString(strings.TrimSpace(value.Prompt)) > maximumAnimationPromptLength || strings.ContainsFunc(value.Prompt, func(r rune) bool { return unicode.IsControl(r) && r != '\n' && r != '\r' && r != '\t' }) {
+		return errors.New("动画提示词不能超过 10000 个字符")
+	}
 	if !validAnimationMode(value.Mode) {
 		return errors.New("自动检测内容必须为动画检测、前置检测或两者")
 	}
@@ -191,7 +198,7 @@ func (s *Service) RunDueAnimations(ctx context.Context, now time.Time) {
 		s.animation.scheduleMu.Lock()
 		s.animation.next[key] = nextAnimationTime(schedule, now)
 		s.animation.scheduleMu.Unlock()
-		task, err := s.EnqueueAnimation(ctx, AnimationRequest{Targets: []AnimationTarget{{AccountID: schedule.AccountID, Model: schedule.Model}}, TimeoutSeconds: schedule.TimeoutSeconds, Mode: schedule.Mode, PrecheckQuestions: schedule.PrecheckQuestions})
+		task, err := s.EnqueueAnimation(ctx, AnimationRequest{Prompt: schedule.Prompt, Targets: []AnimationTarget{{AccountID: schedule.AccountID, Model: schedule.Model}}, TimeoutSeconds: schedule.TimeoutSeconds, Mode: schedule.Mode, PrecheckQuestions: schedule.PrecheckQuestions})
 		s.animation.scheduleMu.Lock()
 		if err != nil {
 			s.animation.lastError[key] = safeCredentialError(err)

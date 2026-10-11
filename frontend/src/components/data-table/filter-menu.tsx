@@ -1,8 +1,18 @@
 import { Popover } from "@base-ui/react/popover";
 import { Check, CirclePlus, Search } from "lucide-react";
-import { useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type ReactNode,
+} from "react";
 
 import { Badge } from "@/components/ui/badge";
+import type { DictionaryKind } from "@/api";
+import { DictionaryReadState } from "@/components/dictionary-read-state";
 import { Button } from "@/components/ui/button";
 import {
   dropdownSearchInputClassName,
@@ -22,6 +32,8 @@ type FilterMenuProps<Value extends string> = {
   value: Value | null;
   onValueChange: (value: Value | null) => void;
   optionLabel?: (value: Value) => string;
+  emptyContent?: ReactNode;
+  dictionaryKind?: DictionaryKind;
   clearable?: boolean;
   className?: string;
 };
@@ -42,6 +54,11 @@ function optionMatchesSearch(value: string, label: string, query: string): boole
 export function FilterMenu<Value extends string>(props: FilterMenuProps<Value>) {
   const listID = useId();
   const listRef = useRef<HTMLDivElement>(null);
+  const searchRef = useRef<HTMLInputElement>(null);
+  const attachSearch = useCallback((element: HTMLInputElement | null): void => {
+    searchRef.current = element;
+    focusDropdownSearchOnMount(element);
+  }, []);
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [activeIndex, setActiveIndex] = useState(0);
@@ -67,12 +84,17 @@ export function FilterMenu<Value extends string>(props: FilterMenuProps<Value>) 
     }
   }
 
+  function selectOption(option: Value | null): void {
+    props.onValueChange(option);
+    focusDropdownSearchOnMount(searchRef.current);
+  }
+
   function toggleOption(option: Value): void {
     if (props.value === option && props.clearable !== false) {
-      props.onValueChange(null);
+      selectOption(null);
       return;
     }
-    props.onValueChange(option);
+    selectOption(option);
   }
 
   function handleSearchKeyDown(event: KeyboardEvent<HTMLInputElement>): void {
@@ -86,10 +108,10 @@ export function FilterMenu<Value extends string>(props: FilterMenuProps<Value>) 
       setActiveIndex(
         (current) => (Math.min(current, options.length - 1) - 1 + options.length) % options.length,
       );
-    } else if (event.key === "Home") {
+    } else if (event.key === "Home" && query.length === 0) {
       event.preventDefault();
       setActiveIndex(0);
-    } else if (event.key === "End") {
+    } else if (event.key === "End" && query.length === 0) {
       event.preventDefault();
       setActiveIndex(options.length - 1);
     } else if (event.key === "Enter") {
@@ -143,7 +165,7 @@ export function FilterMenu<Value extends string>(props: FilterMenuProps<Value>) 
                 aria-hidden="true"
               />
               <Input
-                ref={focusDropdownSearchOnMount}
+                ref={attachSearch}
                 value={query}
                 onChange={(event) => {
                   setQuery(event.target.value);
@@ -160,6 +182,7 @@ export function FilterMenu<Value extends string>(props: FilterMenuProps<Value>) 
                 className={filterMenuSearchInputClassName}
               />
             </div>
+            {!options.length ? props.emptyContent : null}
             <div
               ref={listRef}
               id={listID}
@@ -167,8 +190,8 @@ export function FilterMenu<Value extends string>(props: FilterMenuProps<Value>) 
               role="listbox"
               aria-label={props.label}
             >
-              {!options.length ? (
-                <div className="text-muted-foreground py-6 text-center text-sm">没有匹配项</div>
+              {!options.length && !props.emptyContent ? (
+                <FilterEmptyState dictionaryKind={props.dictionaryKind} />
               ) : null}
               {options.map((option, index) => (
                 <button
@@ -207,7 +230,7 @@ export function FilterMenu<Value extends string>(props: FilterMenuProps<Value>) 
                   variant="ghost"
                   data-press-animation="none"
                   className="w-full rounded-sm"
-                  onClick={() => props.onValueChange(null)}
+                  onClick={() => selectOption(null)}
                 >
                   清除筛选
                 </Button>
@@ -218,4 +241,11 @@ export function FilterMenu<Value extends string>(props: FilterMenuProps<Value>) 
       </Popover.Portal>
     </Popover.Root>
   );
+}
+
+function FilterEmptyState(props: { dictionaryKind?: DictionaryKind }) {
+  const content = <div className="text-muted-foreground py-6 text-center text-sm">没有匹配项</div>;
+  if (props.dictionaryKind)
+    return <DictionaryReadState kind={props.dictionaryKind}>{content}</DictionaryReadState>;
+  return content;
 }

@@ -3,7 +3,7 @@ import { requestBodyFields, updateRequestBody, requestEndpointURL } from "../lib
 import { useMutation } from "@tanstack/react-query";
 import { Controller, type UseFormReturn } from "react-hook-form";
 import { api, type KumaTemplate } from "@/api";
-import { FormField } from "@/App";
+import { FormField } from "@/components/form-field";
 import { JsonEditorField } from "@/components/json-editor/form-field";
 import {
   Select,

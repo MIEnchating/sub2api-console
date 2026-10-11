@@ -46,22 +46,16 @@ func (s *Service) Accounts(ctx context.Context) ([]Account, error) {
 	if err != nil {
 		return nil, err
 	}
-	rows, err := client.Accounts(ctx)
+	result := []Account{}
+	err = client.VisitAccounts(ctx, func(row map[string]any) error {
+		if text(row["platform"]) != "openai" || text(row["type"]) != "oauth" {
+			return nil
+		}
+		result = append(result, publicAccount(row))
+		return nil
+	})
 	if err != nil {
 		return nil, errors.New("线上账号读取失败，请检查站点连接后重试")
-	}
-	result := make([]Account, 0, len(rows))
-	seen := map[string]bool{}
-	for _, row := range rows {
-		if text(row["platform"]) != "openai" || text(row["type"]) != "oauth" {
-			continue
-		}
-		account := publicAccount(row)
-		if account.ID == "" || seen[account.ID] {
-			return nil, errors.New("线上账号缺少稳定 ID 或存在重复，请同步站点后重试")
-		}
-		seen[account.ID] = true
-		result = append(result, account)
 	}
 	if _, err = targetguard.Pin(ctx, s.private); err != nil {
 		return nil, err

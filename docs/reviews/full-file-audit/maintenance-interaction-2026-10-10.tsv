@@ -1,0 +1,15 @@
+frontend/src/features/accounts/components/base-url-check-results.tsx	653685b260b26f21f3782dda61a72285077e831d5cbb1e9d1a6b8a246b41df08	fixed	全文复审；排序与搜索分开记忆，查询词只归一化一次；检查和修复共用忙碌禁用状态，保留分页、稳定ID回调和空状态。
+frontend/src/features/accounts/components/__tests__/base-url-check-interaction.test.tsx	e4f7a4dc55fc7a896e4e06fac79a765539056a0c7d55b00f2500b4c173a84dd8	reviewed	全文阅读；先复现两种忙碌状态的禁用遗漏，保护键盘修复、同名不同ID、搜索分页、目录刷新与空结果，不断言内部状态。
+frontend/src/features/accounts/components/__tests__/base-url-check-results.test.tsx	48f9f037badee371479402897b843359dd78e20e871d7b3b05fec3d602cd6215	reviewed	全文复审；既有静态布局和分页契约，新增交互回归补充实际行为，不扩大完整class快照。
+frontend/src/features/accounts/__tests__/configuration-repair.test.tsx	3efaf7aef0f53033ce650c7c44133d9de38484335fcfb55272f2ba011a468db3	fixed	全文复审；重开修复结果不重复检查的页面回归旧实现先失败；补充请求等待与创建失败恢复，保留成功提示一次的契约。
+frontend/src/features/accounts/components/accounts-page-actions.tsx	3e5543cb12c10cc90d0b1e5874c362072a20a6362ec205677d516025d741371d	reviewed	全文阅读；共享按钮与维护菜单、中文可访问名称、图标装饰隐藏；入口忙碌状态由父级处理。
+frontend/src/features/accounts/hooks/use-account-collection.ts	884f214d41f741e4262c1279db44abb9c4bfd95549077147f0b7be06ed49805e	reviewed	全文复审；React Query读取支持取消和模型同步期间暂停，结构共享保持未变账号引用。
+frontend/src/features/accounts/hooks/__tests__/account-collection.test.tsx	a1fdb56d98bf88dd4b41994c2a3e51dcae93a2cc8742852931fd61b413743a99	reviewed	全文阅读；模型同步期间保留缓存并暂停失效请求，关闭后恢复，卸载及查询缓存清理。
+frontend/src/hooks/use-client-pagination.ts	77c0b2d47405e439f66dbebd32afdddcb70b1f054ee8719ff445f26998c41508	reviewed	全文复审；当前页受结果数量约束，页大小变化复位；维护搜索显式回第一页。
+frontend/src/components/data-table/search-field.tsx	88f79271e6d5a4564662c9e347a50d558d2256ba992ca36847d97975a41b679e	reviewed	全文阅读；受控搜索、可访问名称和禁用状态直接映射共享输入，移动端自适应宽度。
+frontend/src/components/data-table/pagination.tsx	debd500dc18ed04959ac4e8d27ae06f6ffbc624909768373f2578e5812fa323f	reviewed	全文阅读；共享尺寸、可访问页码及当前页、边界禁用、未知总数和窄容器换行策略。
+frontend/src/components/ui/button.tsx	77baec3d5c7b8d4fe1bbd1f1c59497c7df5ba3dd9c668c6162608c157648d222	reviewed	全文阅读；统一默认与图标32px尺寸、原生及aria禁用样式、非原生render适配；本轮不修改共享样式。
+frontend/src/features/accounts/__tests__/fixtures.ts	b7f5248e51780634ed719c78d7e07a4452bcf72f495c8838259736c42edfc9d4	reviewed	全文复审；显式账号/策略/任务fixture，接口通过测试边界mock，无真实凭据。
+frontend/src/components/page-actions.tsx	8bf756063fc1e3ce7b67243ea946de4cac1e14cf5425f596e1096745a4dc1047	reviewed	全文阅读；共享操作行可换行、限制最大宽度，不覆盖按钮尺寸。
+frontend/src/components/data-table/table-panel.tsx	07f2be66c3a9a45a1a2d0ee8596bfca2369a13a4e2221d0c1f75ce3f900118b2	reviewed	全文阅读；表格容器使用min-height/min-width零及裁剪，由内部表格承担滚动。
+frontend/src/components/data-table/filter-toolbar.tsx	6a750367ab3496ac5905588e281d02bbbbbb307a19c7cc88a493997434ad2afe	reviewed	全文阅读；筛选操作共享自适应换行和收缩边界。

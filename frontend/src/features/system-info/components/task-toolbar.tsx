@@ -3,7 +3,7 @@ import type { ReactElement } from "react";
 import type { TaskSummary } from "@/api";
 import { FilterMenu } from "@/components/data-table/filter-menu";
 import { SegmentedControl, SegmentedControlItem } from "@/components/ui/segmented-control";
-import { useDictionaryOrder } from "@/hooks/use-dictionary-order";
+import { useDictionaryOrder, useDictionaryLabel } from "@/hooks/use-dictionary-order";
 import { taskStatusDictionary } from "@/lib/domain-dictionaries";
 import { activeTaskStatuses, taskStatusLabel } from "../constants";
 
@@ -16,6 +16,7 @@ export function TaskToolbar(props: {
   onGroupChange: (group: TaskListGroup) => void;
   onStatusChange: (status: TaskSummary["status"] | null) => void;
 }): ReactElement {
+  const statusLabel = useDictionaryLabel("task_status", taskStatusLabel);
   const statusOptions = useDictionaryOrder(
     "task_status",
     Object.keys(taskStatusDictionary) as TaskSummary["status"][],
@@ -59,12 +60,13 @@ export function TaskToolbar(props: {
         <span className="text-muted-foreground text-xs">最近 20 条任务</span>
         <FilterMenu
           label="任务状态"
+          dictionaryKind="task_status"
           options={statusOptions.filter(
             (status) => activeTaskStatuses.has(status) === (props.group === "active"),
           )}
           value={props.statusFilter}
           onValueChange={props.onStatusChange}
-          optionLabel={taskStatusLabel}
+          optionLabel={statusLabel}
         />
       </div>
     </div>

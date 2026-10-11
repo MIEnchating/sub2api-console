@@ -147,12 +147,20 @@ func (c *batchWriteCoordinator) Skip() {
 	c.arrive(nil)
 }
 
-func (c *batchWriteCoordinator) Submit(ctx context.Context, accountID string, desired map[string]any, current values) coordinatedWriteOutcome {
+// enqueue never waits: every account must finish preparation before writes start.
+func (c *batchWriteCoordinator) enqueue(ctx context.Context, accountID string, desired map[string]any, current values) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	request := &coordinatedWriteRequest{ctx: ctx, accountID: accountID, desired: copyMap(desired), current: current}
-	c.arrive(request)
+	c.arrive(&coordinatedWriteRequest{ctx: ctx, accountID: accountID, desired: copyMap(desired), current: current})
+}
+
+func (c *batchWriteCoordinator) Submit(ctx context.Context, accountID string, desired map[string]any, current values) coordinatedWriteOutcome {
+	c.enqueue(ctx, accountID, desired, current)
+	return c.outcome(ctx, accountID)
+}
+
+func (c *batchWriteCoordinator) outcome(ctx context.Context, accountID string) coordinatedWriteOutcome {
 	<-c.done
 	c.mu.Lock()
 	outcome := c.outcomes[accountID]
@@ -189,16 +197,7 @@ func (c *batchWriteCoordinator) execute() {
 			return
 		}
 	}
-	var wait sync.WaitGroup
-	for _, group := range groups {
-		group := group
-		wait.Add(1)
-		go func() {
-			defer wait.Done()
-			c.executeGroup(group)
-		}()
-	}
-	wait.Wait()
+	runBounded(len(groups), c.workerLimit(), func(index int) { c.executeGroup(groups[index]) })
 	if c.verification {
 		c.verifySuccessfulWrites()
 	}
@@ -233,11 +232,7 @@ func (c *batchWriteCoordinator) executeGroup(group []coordinatedWriteRequest) {
 	// repository. Clear it through the individual route, which supports NULL.
 	// Recovery also needs an individual concurrency read before enabling traffic.
 	if clearsLoadFactor(group[0].desired) || requiresConcurrencyConfirmation(group[0].desired) {
-		var wait sync.WaitGroup
-		for _, request := range group {
-			wait.Go(func() { c.executeSingle(request) })
-		}
-		wait.Wait()
+		runBounded(len(group), c.workerLimit(), func(index int) { c.executeSingle(group[index]) })
 		return
 	}
 	if len(group) == 1 {
@@ -264,16 +259,7 @@ func (c *batchWriteCoordinator) executeGroup(group []coordinatedWriteRequest) {
 	body["account_ids"] = accountIDs
 	payload, err := c.admin.Mutate(groupCtx, http.MethodPost, "/admin/accounts/bulk-update", body)
 	if isMissingBatchRoute(err) {
-		var wait sync.WaitGroup
-		for _, request := range validGroup {
-			request := request
-			wait.Add(1)
-			go func() {
-				defer wait.Done()
-				c.executeSingle(request)
-			}()
-		}
-		wait.Wait()
+		runBounded(len(validGroup), c.workerLimit(), func(index int) { c.executeSingle(validGroup[index]) })
 		return
 	}
 	if err != nil {
@@ -287,6 +273,7 @@ func (c *batchWriteCoordinator) executeGroup(group []coordinatedWriteRequest) {
 		requested[request.accountID] = struct{}{}
 	}
 	acknowledgements, malformed := batchUpdateAcknowledgements(payload, requested)
+	ambiguous := make([]coordinatedWriteRequest, 0)
 	for _, request := range validGroup {
 		if cause := contextCause(request.ctx); cause != nil {
 			c.setOutcome(request.accountID, coordinatedWriteOutcome{err: cause})
@@ -294,7 +281,7 @@ func (c *batchWriteCoordinator) executeGroup(group []coordinatedWriteRequest) {
 		}
 		accountAcknowledgements := acknowledgements[request.accountID]
 		if malformed || len(accountAcknowledgements) != 1 || !accountAcknowledgements[0].valid {
-			c.confirmAmbiguousBatchWrite(request, errors.New("批量更新响应未唯一确认账号 "+request.accountID))
+			ambiguous = append(ambiguous, request)
 			continue
 		}
 		if cause := accountAcknowledgements[0].err; cause != nil {
@@ -306,6 +293,25 @@ func (c *batchWriteCoordinator) executeGroup(group []coordinatedWriteRequest) {
 			after:           valuesWithDesired(request.current, request.desired),
 		})
 	}
+	c.confirmAmbiguousBatchWrites(ambiguous)
+}
+
+func (c *batchWriteCoordinator) workerLimit() int {
+	if limited, ok := c.admin.(*limitedAdmin); ok {
+		return max(1, cap(limited.gate))
+	}
+	return 1
+}
+
+func (c *batchWriteCoordinator) confirmAmbiguousBatchWrites(requests []coordinatedWriteRequest) {
+	runBounded(len(requests), c.workerLimit(), func(index int) {
+		request := requests[index]
+		if cause := contextCause(request.ctx); cause != nil {
+			c.setOutcome(request.accountID, coordinatedWriteOutcome{err: cause})
+			return
+		}
+		c.confirmAmbiguousBatchWrite(request, errors.New("批量更新响应未唯一确认账号 "+request.accountID))
+	})
 }
 
 func (c *batchWriteCoordinator) confirmAmbiguousBatchWrite(request coordinatedWriteRequest, ambiguity error) {
@@ -408,29 +414,30 @@ func (c *batchWriteCoordinator) verifySuccessfulWrites() {
 
 func combinedRequestContext(parent context.Context, requests []coordinatedWriteRequest) (context.Context, func()) {
 	ctx, cancel := context.WithCancel(parent)
-	done := make(chan struct{})
-	var wait sync.WaitGroup
+	// Requests normally inherit the same task context. Watch only distinct
+	// cancellation signals; AfterFunc does not park one goroutine per account.
+	seen := map[<-chan struct{}]struct{}{parent.Done(): {}}
+	stops := make([]func() bool, 0)
 	for _, request := range requests {
-		if request.ctx == nil {
+		if request.ctx == nil || request.ctx.Done() == nil {
 			continue
 		}
-		wait.Add(1)
-		go func(requestCtx context.Context) {
-			defer wait.Done()
-			select {
-			case <-requestCtx.Done():
-				cancel()
-			case <-done:
-			}
-		}(request.ctx)
-	}
-	var once sync.Once
-	return ctx, func() {
-		once.Do(func() {
-			close(done)
+		if request.ctx.Err() != nil {
 			cancel()
-			wait.Wait()
-		})
+			break
+		}
+		signal := request.ctx.Done()
+		if _, found := seen[signal]; found {
+			continue
+		}
+		seen[signal] = struct{}{}
+		stops = append(stops, context.AfterFunc(request.ctx, cancel))
+	}
+	return ctx, func() {
+		for _, stop := range stops {
+			stop()
+		}
+		cancel()
 	}
 }
 
@@ -450,7 +457,7 @@ func (c *batchWriteCoordinator) successfulRequests() []coordinatedWriteRequest {
 	result := []coordinatedWriteRequest{}
 	for accountID, request := range c.pending {
 		outcome := c.outcomes[accountID]
-		if outcome.remoteConfirmed && outcome.err == nil {
+		if outcome.remoteConfirmed && !outcome.readbackConfirmed && outcome.err == nil {
 			result = append(result, request)
 		}
 	}
@@ -570,15 +577,31 @@ type batchUpdateAcknowledgement struct {
 
 func batchUpdateAcknowledgements(payload map[string]any, requested map[string]struct{}) (map[string][]batchUpdateAcknowledgement, bool) {
 	result := map[string][]batchUpdateAcknowledgement{}
+	sources := map[string]map[string]bool{}
 	malformed := false
-	appendAcknowledgement := func(accountID string, acknowledgement batchUpdateAcknowledgement) {
-		accountID = strings.TrimSpace(accountID)
-		if accountID == "" {
+	appendAcknowledgement := func(source, accountID string, acknowledgement batchUpdateAcknowledgement) {
+		if !stableRoutingAccountID(accountID) {
 			malformed = true
 			return
 		}
 		if _, expected := requested[accountID]; !expected {
 			malformed = true
+		}
+		if sources[accountID] == nil {
+			sources[accountID] = map[string]bool{}
+		}
+		duplicate := sources[accountID][source]
+		sources[accountID][source] = true
+		previous := result[accountID]
+		// Summary ID lists and detailed results may describe the same outcome.
+		// Merge only across different fields; duplicate IDs within a field,
+		// invalid acknowledgements and conflicting outcomes remain ambiguous.
+		if !duplicate && len(previous) == 1 && previous[0].valid && acknowledgement.valid &&
+			(previous[0].err == nil) == (acknowledgement.err == nil) {
+			if source == "results" {
+				result[accountID][0] = acknowledgement
+			}
+			return
 		}
 		result[accountID] = append(result[accountID], acknowledgement)
 	}
@@ -602,7 +625,7 @@ func batchUpdateAcknowledgements(payload map[string]any, requested map[string]st
 				continue
 			}
 			for _, rawID := range ids {
-				appendAcknowledgement(fmt.Sprint(rawID), batchUpdateAcknowledgement{valid: true, err: list.err})
+				appendAcknowledgement(list.key, capacityAccountID(rawID), batchUpdateAcknowledgement{valid: true, err: list.err})
 			}
 		}
 		rawItems, present := data["results"]
@@ -620,23 +643,37 @@ func batchUpdateAcknowledgements(payload map[string]any, requested map[string]st
 				malformed = true
 				continue
 			}
-			accountID := strings.TrimSpace(fmt.Sprint(item["account_id"]))
-			if accountID == "" {
-				accountID = strings.TrimSpace(fmt.Sprint(item["id"]))
-			}
+			accountID := batchResultAccountID(item)
 			success, valid := item["success"].(bool)
 			acknowledgement := batchUpdateAcknowledgement{valid: valid}
 			if valid && !success {
-				detail := strings.TrimSpace(fmt.Sprint(item["error"]))
+				detail, _ := item["error"].(string)
+				detail = strings.TrimSpace(detail)
 				if detail == "" {
 					detail = "批量更新失败"
 				}
 				acknowledgement.err = errors.New(detail)
 			}
-			appendAcknowledgement(accountID, acknowledgement)
+			appendAcknowledgement("results", accountID, acknowledgement)
 		}
 	}
 	return result, malformed
+}
+
+func batchResultAccountID(item map[string]any) string {
+	accountID := ""
+	for _, field := range []string{"account_id", "id"} {
+		raw, present := item[field]
+		if !present || raw == nil {
+			continue
+		}
+		id := capacityAccountID(raw)
+		if id == "" || accountID != "" && accountID != id {
+			return ""
+		}
+		accountID = id
+	}
+	return accountID
 }
 
 func mutationResponseObjects(payload map[string]any) []map[string]any {

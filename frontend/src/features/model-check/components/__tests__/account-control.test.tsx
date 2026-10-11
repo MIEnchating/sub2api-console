@@ -32,7 +32,7 @@ function setup(overrides: Partial<AccountStatus> = {}, rejectWrite = false) {
     "fetch",
     vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const path = String(input);
-      if (path === "/api/accounts/41") return Response.json(current);
+      if (path === "/api/accounts/41/control-state") return Response.json(current);
       if (path === "/api/accounts") return Response.json([current]);
       if (path === "/api/accounts/41/control") {
         requests.push(JSON.parse(String(init?.body)));
@@ -49,7 +49,6 @@ function setup(overrides: Partial<AccountStatus> = {}, rejectWrite = false) {
   client.setQueryData(["policy"], {});
   client.setQueryData(["model-animation", "history"], []);
   client.setQueryData(["model-animation", "schedules"], []);
-  client.setQueryData(["terminal-continuity", "history"], []);
   for (const name of ["group", "platform"])
     client.setQueryData(["dictionaries", name], { items: [] });
   const view = render(
@@ -71,7 +70,7 @@ function setup(overrides: Partial<AccountStatus> = {}, rejectWrite = false) {
   };
 }
 
-it.each(["账号检测", "前置检测", "终端续接检测"])(
+it.each(["账号检测", "前置检测"])(
   "%s 卡片确认熔断后按稳定 ID 提交任务，完成后显示恢复入口",
   async (tab) => {
     const view = setup();
@@ -114,16 +113,13 @@ it.each([
   view.dispose();
 });
 
-it.each([{ manual_priority: 1 }, { health: "excluded" }])(
-  "受保护账号 %j 禁用熔断和恢复",
-  (state) => {
-    const view = setup(state);
-    expect(screen.getByRole("button", { name: "手动熔断" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "恢复调度" })).toBeDisabled();
-    expect(view.requests).toEqual([]);
-    view.dispose();
-  },
-);
+it.each([{ health: "excluded" }])("受保护账号 %j 禁用熔断和恢复", (state) => {
+  const view = setup(state);
+  expect(screen.getByRole("button", { name: "手动熔断" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "恢复调度" })).toBeDisabled();
+  expect(view.requests).toEqual([]);
+  view.dispose();
+});
 
 it("确认期间账号变为等待并发额度时禁止恢复", async () => {
   const view = setup({ schedulable: false });
@@ -166,8 +162,8 @@ it("熔断任务执行时切换标签仍禁用重复操作，任务失败通过�
   await waitFor(() => expect(confirm).toBeEnabled());
   await user.click(confirm);
   await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
-  await user.click(screen.getByRole("tab", { name: "终端续接检测" }));
-  const panel = screen.getByRole("tabpanel", { name: "终端续接检测" });
+  await user.click(screen.getByRole("tab", { name: "前置检测" }));
+  const panel = screen.getByRole("tabpanel", { name: "前置检测" });
   expect(await within(panel).findByRole("button", { name: "手动熔断" })).toBeDisabled();
   view.task.status = "failed";
   view.task.message = "上游写入失败，请重试";
@@ -189,7 +185,7 @@ it("最新账号读取失败时禁止确认并可重试，返回其他账号 ID 
   const network = vi.mocked(fetch);
   const original = network.getMockImplementation()!;
   network.mockImplementation(async (input, init) =>
-    String(input) === "/api/accounts/41"
+    String(input) === "/api/accounts/41/control-state"
       ? Response.json({ detail: "账号读取失败，请重试" }, { status: 403 })
       : original(input, init),
   );
@@ -217,5 +213,25 @@ it("键盘打开熔断确认后取消将焦点还给入口且不发起写入", a
   await user.click(screen.getByRole("button", { name: "取消" }));
   await waitFor(() => expect(button).toHaveFocus());
   expect(view.requests).toEqual([]);
+  view.dispose();
+});
+
+it.each([
+  { health: "manual_priority", schedulable: true, label: "手动熔断", action: "fuse" },
+  { health: "fused", schedulable: false, label: "解除熔断", action: "recover" },
+  { health: "paused", schedulable: false, label: "恢复调度", action: "resume" },
+])("人工控制账号处于 $health 时确认后提交 $action", async (scenario) => {
+  const view = setup({
+    manual_priority: 1,
+    health: scenario.health,
+    schedulable: scenario.schedulable,
+  });
+  const user = userEvent.setup();
+  await user.click(screen.getByRole("button", { name: scenario.label }));
+  const confirm = await screen.findByRole("button", { name: `确认${scenario.label}` });
+  await waitFor(() => expect(confirm).toBeEnabled());
+  expect(view.requests).toEqual([]);
+  await user.click(confirm);
+  await waitFor(() => expect(view.requests).toEqual([{ action: scenario.action }]));
   view.dispose();
 });

@@ -33,6 +33,7 @@ const accounts = [
 it("组合筛选使用交集，手动控制值为零的账号也能匹配", () => {
   expect(
     filterAnimationAccounts(accounts, {
+      ...defaultAnimationFilters,
       query: "",
       group: "主组",
       platform: "openai",

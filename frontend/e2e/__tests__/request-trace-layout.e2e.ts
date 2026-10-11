@@ -72,7 +72,127 @@ test("查询失败时展示原因和重试提示，再次查询成功后才展�
   await expect(page.getByRole("button", { name: "查询", exact: true })).toBeEnabled();
   await expect(page.getByText("没有匹配的系统日志", { exact: true })).toHaveCount(0);
   failed = false;
-  await page.getByRole("button", { name: "查询", exact: true }).click();
+  await page.getByRole("button", { name: "重新读取", exact: true }).click();
   await expect(page.getByText("没有匹配的系统日志", { exact: true })).toBeVisible();
   await expect(content.getByRole("alert")).toHaveCount(0);
+});
+
+test("查询等待期间重置可用，迟到响应不会恢复旧结果", async ({ page }) => {
+  let release: () => void = () => {};
+  const pending = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await page.route("**/api/ops/system-logs?**", async (route) => {
+    await pending;
+    await route.fulfill({ json: { items: [record], total: 1, page: 1, page_size: 20 } });
+  });
+  try {
+    await page.goto("/trace");
+    await page.getByRole("textbox", { name: "request_id" }).fill("req-layout");
+    const started = page.waitForRequest("**/api/ops/system-logs?**");
+    await page.getByRole("button", { name: "查询", exact: true }).click();
+    await started;
+    await expect(page.getByRole("button", { name: "查询中", exact: true })).toBeDisabled();
+    await expect(page.getByRole("button", { name: "重置", exact: true })).toBeEnabled();
+    const cancelled = page.waitForEvent("requestfailed", (request) =>
+      request.url().includes("/api/ops/system-logs?"),
+    );
+    await page.getByRole("button", { name: "重置", exact: true }).click();
+    await cancelled;
+    release();
+    await expect(page.getByRole("textbox", { name: "request_id" })).toHaveValue("");
+    await expect(page.getByText("输入 request_id 开始查询", { exact: true })).toBeVisible();
+    await expect(page.getByText(`Host：${host}`, { exact: true })).toHaveCount(0);
+  } finally {
+    release();
+    await page.unrouteAll({ behavior: "wait" });
+  }
+});
+
+test("重复查询同一请求时保留结果，返回后更新内容", async ({ page }) => {
+  await page.goto("/trace");
+  await page.getByRole("textbox", { name: "request_id" }).fill("req-layout");
+  await page.getByRole("button", { name: "查询", exact: true }).click();
+  await expect(page.getByText(`Host：${host}`, { exact: true })).toBeVisible();
+
+  let release: () => void = () => {};
+  const pending = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await page.route("**/api/ops/system-logs?**", async (route) => {
+    await pending;
+    await route.fulfill({
+      json: {
+        items: [{ ...record, payload: { host: "refreshed.example.test" } }],
+        total: 1,
+        page: 1,
+        page_size: 20,
+      },
+    });
+  });
+  try {
+    const started = page.waitForRequest("**/api/ops/system-logs?**");
+    await page.getByRole("button", { name: "查询", exact: true }).click();
+    await started;
+    await expect(page.getByRole("button", { name: "查询中", exact: true })).toBeDisabled();
+    await expect(page.getByText(`Host：${host}`, { exact: true })).toBeVisible();
+    release();
+    await expect(page.getByText("Host：refreshed.example.test", { exact: true })).toBeVisible();
+    await expect(page.getByText(`Host：${host}`, { exact: true })).toHaveCount(0);
+  } finally {
+    release();
+    await page.unrouteAll({ behavior: "wait" });
+  }
+});
+
+test("重置日志查询时取消账号状态读取，迟到响应不会重新显示处置入口", async ({ page }) => {
+  let release: () => void = () => {};
+  const pending = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await page.route("**/api/ops/system-logs?**", (route) =>
+    route.fulfill({
+      json: {
+        items: [{ ...record, account_id: "41", account_name: "测试账号" }],
+        total: 1,
+        page: 1,
+        page_size: 20,
+      },
+    }),
+  );
+  await page.route("**/api/accounts/41/control-state", async (route) => {
+    await pending;
+    await route.fulfill({
+      json: {
+        id: "41",
+        name: "测试账号",
+        health: "healthy",
+        health_status: "healthy",
+        routing_state: "healthy",
+        manual_priority: null,
+        paused: false,
+        schedulable: true,
+      },
+    });
+  });
+  try {
+    await page.goto("/trace");
+    await page.getByRole("textbox", { name: "request_id" }).fill("req-layout");
+    const started = page.waitForRequest("**/api/accounts/41/control-state");
+    await page.getByRole("button", { name: "查询", exact: true }).click();
+    await started;
+    await expect(page.getByRole("status", { name: "正在读取账号状态" })).toBeVisible();
+    const cancelled = page.waitForEvent(
+      "requestfailed",
+      (request) => new URL(request.url()).pathname === "/api/accounts/41/control-state",
+    );
+    await page.getByRole("button", { name: "重置", exact: true }).click();
+    await cancelled;
+    release();
+    await expect(page.getByText("输入 request_id 开始查询", { exact: true })).toBeVisible();
+    await expect(page.getByRole("group", { name: "账号 41 处置" })).toHaveCount(0);
+  } finally {
+    release();
+    await page.unrouteAll({ behavior: "wait" });
+  }
 });

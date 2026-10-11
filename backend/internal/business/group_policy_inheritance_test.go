@@ -6,6 +6,7 @@ import (
 )
 
 func TestGroupPolicyInheritedStrategyPreservesProbeModel(t *testing.T) {
+	t.Parallel()
 	store := openPolicyStore(t)
 	ctx := context.Background()
 	if _, err := store.db.ExecContext(ctx, `INSERT INTO local_groups(name,remote_id,strategy,strategy_source,updated_at) VALUES('codex','6','balanced','global_default','now')`); err != nil {

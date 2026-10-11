@@ -2,7 +2,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
-import { FormField } from "../../App";
+import { FormField } from "../form-field";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select";
 
 describe("form field layout", () => {

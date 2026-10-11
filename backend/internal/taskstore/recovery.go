@@ -2,8 +2,10 @@ package taskstore
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/MIEnchating/sub2api-console/backend/internal/taskcontext"
@@ -32,63 +34,153 @@ func RecoveryInput(task Task, into any) error {
 	return json.Unmarshal(task.Recovery.Input, into)
 }
 
+// RecoveryRef keeps the waiting queue independent of result and checkpoint size.
+// The complete current task is loaded only when a dispatcher attempts it.
+type RecoveryRef struct {
+	ID string `json:"id"`
+}
+
+var ErrInvalidRecovery = errors.New("任务恢复数据损坏")
+
 // PendingRecovery is called once after this process owns its listening socket,
-// before schedulers start. RecoverInterrupted leaves these records intact.
-func (s *Store) PendingRecovery(ctx context.Context) ([]Task, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT r.task_id,r.payload FROM task_recovery r JOIN tasks t ON t.id=r.task_id WHERE t.status IN ('queued','running') ORDER BY t.created_at,t.id`)
+// before schedulers start. Preparation updates local state without decoding
+// results or checkpoints. The dispatcher validates each complete task separately.
+func (s *Store) PendingRecovery(ctx context.Context) ([]RecoveryRef, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT t.id FROM task_recovery r JOIN tasks t ON t.id=r.task_id WHERE t.status IN ('queued','running') ORDER BY t.created_at,t.id`)
 	if err != nil {
 		return nil, err
 	}
-	type record struct{ id, payload string }
-	records := []record{}
+	refs := []RecoveryRef{}
 	for rows.Next() {
-		var r record
-		if err := rows.Scan(&r.id, &r.payload); err != nil {
+		var ref RecoveryRef
+		if err := rows.Scan(&ref.ID); err != nil {
 			rows.Close()
 			return nil, err
 		}
-		records = append(records, r)
+		refs = append(refs, ref)
 	}
 	err = rows.Err()
 	rows.Close()
 	if err != nil {
 		return nil, err
 	}
-	tasks := make([]Task, 0, len(records))
-	for _, record := range records {
-		task, err := s.Get(ctx, record.id)
+	pending := make([]RecoveryRef, 0, len(refs))
+	for _, ref := range refs {
+		prepared, err := s.prepareRecovery(ctx, ref.ID)
 		if err != nil {
 			return nil, err
 		}
-		var recovery Recovery
-		if err := json.Unmarshal([]byte(record.payload), &recovery); err != nil {
-			return nil, err
+		if prepared {
+			pending = append(pending, ref)
 		}
-		task.Recovery = &recovery
-		task.Status = "queued"
-		task.Message = "任务中断，等待恢复执行"
-		if task.Result == nil {
-			task.Result = map[string]any{}
-		}
-		task.Result["interrupted"] = true
-		task.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
-		if err := s.Save(ctx, task); err != nil {
-			return nil, err
-		}
-		tasks = append(tasks, task)
 	}
-	return tasks, nil
+	return pending, nil
 }
 
-// CancelRecovery persists intent before cancelling the worker, so a crash
-// between the HTTP response and worker finalization cannot restart manual work.
-func (s *Store) CancelRecovery(ctx context.Context, id string) (bool, error) {
+func (s *Store) prepareRecovery(ctx context.Context, id string) (bool, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return false, err
 	}
 	defer tx.Rollback()
-	result, err := tx.ExecContext(ctx, `UPDATE tasks SET status='cancelled',message='任务已手动取消',updated_at=?,result_json=json_set(result_json,'$.cancelled',json('true')) WHERE id=? AND status IN ('queued','running') AND EXISTS(SELECT 1 FROM task_recovery WHERE task_id=tasks.id)`, time.Now().UTC().Format(storageTimeLayout), id)
+	var task Task
+	err = tx.QueryRowContext(ctx, `SELECT id,skill,operation,status,progress,message,created_at,updated_at
+		FROM tasks WHERE id=? AND status IN ('queued','running')
+		AND EXISTS(SELECT 1 FROM task_recovery WHERE task_id=tasks.id)
+		AND NOT EXISTS(SELECT 1 FROM deleted_tasks WHERE id=tasks.id)`, id).Scan(
+		&task.ID, &task.Skill, &task.Operation, &task.Status, &task.Progress, &task.Message, &task.CreatedAt, &task.UpdatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if key := activeOperationKey(task.Operation); key != "" {
+		reservation, err := tx.ExecContext(ctx, `INSERT INTO active_task_operations(operation,task_id) VALUES(?,?)
+			ON CONFLICT(operation) DO UPDATE SET task_id=excluded.task_id
+			WHERE active_task_operations.task_id=excluded.task_id`, key, id)
+		if err != nil {
+			return false, err
+		}
+		count, err := reservation.RowsAffected()
+		if err != nil {
+			return false, err
+		}
+		if count == 0 {
+			return false, fmt.Errorf("%w：%s", ErrOperationActive, task.Operation)
+		}
+	}
+	if validateTaskColumns(task) != nil {
+		// Keep corrupt fields intact so dispatch cannot mistake them for valid inputs.
+		_, err = tx.ExecContext(ctx, `UPDATE tasks SET status='queued' WHERE id=?`, id)
+	} else {
+		_, err = tx.ExecContext(ctx, `UPDATE tasks SET status='queued',message='任务中断，等待恢复执行',updated_at=?,
+			result_json=CASE WHEN json_valid(result_json) THEN
+				CASE WHEN json_type(result_json)='object' THEN json_set(result_json,'$.interrupted',json('true')) ELSE result_json END
+				ELSE result_json END WHERE id=?`, time.Now().UTC().Format(storageTimeLayout), id)
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, tx.Commit()
+}
+
+// RecoveryTask reads the task and its checkpoint from the same database
+// snapshot. Only queued tasks with a checkpoint are dispatchable.
+func (s *Store) RecoveryTask(ctx context.Context, id string) (Task, error) {
+	row := s.db.QueryRowContext(ctx, `SELECT t.id,t.skill,t.operation,t.status,t.progress,t.message,t.result_json,t.created_at,t.updated_at,r.payload
+	 FROM tasks t JOIN task_recovery r ON r.task_id=t.id WHERE t.id=? AND t.status='queued'`, id)
+	var payload string
+	task, err := scanTask(recoveryTaskScanner{row: row, payload: &payload})
+	if err != nil {
+		return Task{}, err
+	}
+	if task.Result["storage_corrupt"] == true {
+		return task, fmt.Errorf("%w：%s", ErrInvalidRecovery, task.Message)
+	}
+	var recovery Recovery
+	if err := json.Unmarshal([]byte(payload), &recovery); err != nil {
+		return task, fmt.Errorf("%w：恢复参数不是有效 JSON", ErrInvalidRecovery)
+	}
+	task.Recovery = &recovery
+	return task, nil
+}
+
+type recoveryTaskScanner struct {
+	row     scanner
+	payload *string
+}
+
+func (r recoveryTaskScanner) Scan(dest ...any) error {
+	return r.row.Scan(append(dest, r.payload)...)
+}
+
+// CancelRecovery persists intent before cancelling the worker, so a crash
+// between the HTTP response and worker finalization cannot restart manual work.
+func (s *Store) CancelRecovery(ctx context.Context, id string) (bool, error) {
+	return s.cancelTask(ctx, id, true)
+}
+
+// CancelTask also persists cancellation for non-resumable orchestration tasks.
+// Their children may have recovery checkpoints, so the parent's intent must
+// survive a crash before its runner receives the cancellation signal.
+func (s *Store) CancelTask(ctx context.Context, id string) (bool, error) {
+	return s.cancelTask(ctx, id, false)
+}
+
+func (s *Store) cancelTask(ctx context.Context, id string, recoveryOnly bool) (bool, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback()
+	query := `UPDATE tasks SET status='cancelled',message='任务已手动取消',updated_at=?,result_json=json_set(result_json,'$.cancelled',json('true')) WHERE id=?`
+	if recoveryOnly {
+		query += ` AND status IN ('queued','running') AND EXISTS(SELECT 1 FROM task_recovery WHERE task_id=tasks.id)`
+	} else {
+		query += ` AND status IN ('queued','running','waiting_input')`
+	}
+	result, err := tx.ExecContext(ctx, query, time.Now().UTC().Format(storageTimeLayout), id)
 	if err != nil {
 		return false, err
 	}

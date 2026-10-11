@@ -360,7 +360,7 @@ export function ModelCheckResult(props: { task: Task }) {
   if (["queued", "running", "waiting_input"].includes(props.task.status)) {
     return <LiveModelCheckResult task={props.task} rows={rows} />;
   }
-  if (props.task.status === "cancelled") {
+  if (props.task.status === "cancelled" && rows.length === 0) {
     return (
       <div className="grid h-full place-items-center">
         <div className="w-full max-w-lg rounded-md border p-5">
@@ -370,7 +370,7 @@ export function ModelCheckResult(props: { task: Task }) {
       </div>
     );
   }
-  if (props.task.status === "failed") {
+  if (props.task.status === "failed" && rows.length === 0) {
     return (
       <div className="grid h-full place-items-center">
         <div className="border-destructive/40 bg-destructive/5 w-full max-w-lg rounded-md border p-5">
@@ -389,14 +389,28 @@ export function ModelCheckResult(props: { task: Task }) {
   const summary = resultSummary(rows);
   const profileVersion = textValue(props.task.result.profile_version);
   const profileFingerprint = textValue(props.task.result.profile_fingerprint);
+  let heading = "检测完成";
+  let statusIcon = <CheckCircle2 className="text-primary size-4" aria-hidden="true" />;
+  if (props.task.status === "cancelled") {
+    heading = "检测已取消";
+    statusIcon = <CircleHelp className="text-muted-foreground size-4" aria-hidden="true" />;
+  } else if (props.task.status === "failed") {
+    heading = "检测失败";
+    statusIcon = <CircleHelp className="text-destructive size-4" aria-hidden="true" />;
+  }
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-col" data-testid="model-check-result">
       <div className="flex shrink-0 flex-col gap-2 pb-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="min-w-0">
           <p className="flex items-center gap-2 font-medium">
-            <CheckCircle2 className="text-primary size-4" aria-hidden="true" />
-            检测完成
+            {statusIcon}
+            {heading}
           </p>
+          {props.task.status === "failed" ? (
+            <p className="text-destructive mt-1 text-sm break-words">
+              {textValue(props.task.result.error) ?? props.task.message}
+            </p>
+          ) : null}
           {profileVersion ? (
             <Tooltip>
               <TooltipTrigger

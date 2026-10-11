@@ -60,7 +60,7 @@ func (s *Service) runOAuthAnimationTarget(ctx context.Context, account selectedA
 		})
 	}
 	sender.animationStream = true
-	text, model, err := sender.SendWithReasoning(guarded, account.ID, result.Model, animationPrompt, timeout, effort)
+	text, model, err := sender.SendWithReasoning(guarded, account.ID, result.Model, result.Prompt, timeout, effort)
 	if err != nil {
 		return err
 	}
@@ -98,7 +98,11 @@ func runManagedOAuthAnimation(ctx context.Context, client *adminclient.Client, a
 			return send(question.Question, requestID)
 		})
 	}
-	text, model, err := send(animationPrompt, result.RequestID)
+	prompt := result.Prompt
+	if prompt == "" {
+		prompt = animationPrompt
+	}
+	text, model, err := send(prompt, result.RequestID)
 	if err != nil {
 		return err
 	}

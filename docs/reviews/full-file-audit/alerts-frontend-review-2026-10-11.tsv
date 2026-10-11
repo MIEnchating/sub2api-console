@@ -1,0 +1,6 @@
+frontend/src/features/alerts/components/__tests__/alert-bell-button.test.tsx	cdca565975c5110285f3bfef958639b3976d5f0f7d8b4c334f07109403d9da68	reviewed	全文阅读：总览缓存更新只影响告警按钮，验证同级页面不重复渲染及点击回调。 未确认新增缺陷；本轮无源码/测试修改，未重复执行检查。
+frontend/src/features/alerts/components/notification-queue-status.tsx	74de47dbedc567ccab6eda218b6e5b54dcd46886b8bb715a99eb5c093a5c1e59	reviewed	差异及队列详情上下文：预计算展示/搜索文本避免过滤和渲染重复格式化；读取支持 AbortSignal、版本号和关闭/卸载取消，陈旧结果不写入状态。 未确认新增缺陷；本轮无源码/测试修改，未重复执行检查。
+frontend/src/features/alerts/lib/__tests__/alert-display.test.ts	44757a0396186611f65135fe4286ef62017576fd53b77e88a75a3255b7f4c11b	reviewed	差异阅读：补充人工熔断及解除文案契约。 未确认新增缺陷；本轮无源码/测试修改，未重复执行检查。
+frontend/src/features/alerts/lib/__tests__/capacity-wait.test.ts	78250201a498c0dcf1414490d3b5611dad1ce0697e1a7522be8f7566828ae5f1	reviewed	全文阅读：旧容量等待原因显示为不发送通知，避免未知状态。 未确认新增缺陷；本轮无源码/测试修改，未重复执行检查。
+frontend/src/features/alerts/lib/__tests__/cost-traffic.test.ts	508496534d3516bee3a950379991ca483dfa11325f52160cd52118ad41ef73c6	reviewed	全文阅读：成本流量按亏损/无利润分类，分组和证据完整，恢复文案不复用旧证据。 未确认新增缺陷；本轮无源码/测试修改，未重复执行检查。
+frontend/src/features/alerts/lib/alert-display.ts	041acf496465da2d6e2c22426fa7ca12cf7998f58a520d38e3902cdbfd877054	reviewed	差异阅读：成本流量和人工熔断分类、恢复文案及分组前缀与后端协议一致；保留未知码、截断和安全文本处理。 未确认新增缺陷；本轮无源码/测试修改，未重复执行检查。

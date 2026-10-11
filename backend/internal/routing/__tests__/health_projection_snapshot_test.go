@@ -10,6 +10,7 @@ import (
 )
 
 func TestProjectHealthOlderSnapshotCalculatedLastKeepsEarlierEvaluationTime(t *testing.T) {
+	t.Parallel()
 	store, _ := healthEvidenceStore(t)
 	service := routing.NewService(store)
 	now := time.Now().UTC().Add(-time.Second)

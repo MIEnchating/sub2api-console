@@ -15,7 +15,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/MIEnchating/sub2api-console/backend/internal/adminclient"
@@ -371,16 +370,12 @@ func (s *Service) Apply(ctx context.Context, targets map[string]business.Account
 		coordinator := newBatchWriteCoordinator(ctx, admin, end-start, policy.verifyAfterWrite || hasUpstreamReduction(targets) || hasConcurrencyRestoration(targets))
 		coordinator.capacity = capacityGuard
 		coordinator.authorize = authorize
-		var wait sync.WaitGroup
-		for index := start; index < end; index++ {
-			index, accountID := index, orderedIDs[index]
-			wait.Add(1)
-			go func() {
-				defer wait.Done()
-				items[index] = s.applyAccountCoordinated(ctx, admin, targets[accountID], policy, actor, targetFingerprint, coordinator)
-			}()
-		}
-		wait.Wait()
+		prepared := runAccountPreparations(end-start, policy.maxConcurrency, func(index int) (AccountResult, func() AccountResult) {
+			accountID := orderedIDs[start+index]
+			return s.prepareAccount(ctx, admin, targets[accountID], policy, actor, targetFingerprint, coordinator)
+		})
+		<-coordinator.done
+		copy(items[start:end], prepared)
 		return nil
 	}
 	if err := runBatch(0, regularCount); err != nil {
@@ -588,17 +583,10 @@ func (s *Service) RestoreControl(ctx context.Context, actor string) (Result, err
 		return nil
 	})
 	coordinator := newBatchWriteCoordinator(ctx, admin, len(baselines), true)
-	items := make([]AccountResult, len(baselines))
-	var wait sync.WaitGroup
-	for index, baseline := range baselines {
-		index, baseline := index, baseline
-		wait.Add(1)
-		go func() {
-			defer wait.Done()
-			items[index] = s.restoreAccount(ctx, admin, baseline, actor, lockedTargetFingerprint, coordinator)
-		}()
-	}
-	wait.Wait()
+	items := runAccountPreparations(len(baselines), restoreControlConcurrency, func(index int) (AccountResult, func() AccountResult) {
+		return s.prepareRestoration(ctx, admin, baselines[index], actor, lockedTargetFingerprint, coordinator)
+	})
+	<-coordinator.done
 	for _, item := range items {
 		result.Results = append(result.Results, item)
 		result.RemoteWrite = result.RemoteWrite || item.RemoteWrite
@@ -617,7 +605,7 @@ func (s *Service) RestoreControl(ctx context.Context, actor string) (Result, err
 	return result, nil
 }
 
-func (s *Service) applyAccountCoordinated(
+func (s *Service) prepareAccount(
 	ctx context.Context,
 	admin Admin,
 	target business.AccountRoutingTarget,
@@ -625,7 +613,7 @@ func (s *Service) applyAccountCoordinated(
 	actor string,
 	targetFingerprint string,
 	coordinator *batchWriteCoordinator,
-) AccountResult {
+) (AccountResult, func() AccountResult) {
 	submitted := false
 	defer func() {
 		if !submitted {
@@ -634,39 +622,39 @@ func (s *Service) applyAccountCoordinated(
 	}()
 	result := AccountResult{AccountID: target.AccountID}
 	if target.UpstreamReductionID != "" && (target.CleanupAction != nil || target.ReleaseControl || target.AbandonControl) {
-		return failedResult(result, errors.New("上游并发下调不能合并清理或交还控制权操作"))
+		return failedResult(result, errors.New("上游并发下调不能合并清理或交还控制权操作")), nil
 	}
 	operationID, err := randomOperationID("routing-writeback")
 	if err != nil {
-		return failedResult(result, err)
+		return failedResult(result, err), nil
 	}
 	if target.ConfigurationError != nil && strings.TrimSpace(*target.ConfigurationError) != "" {
 		err := errors.New(*target.ConfigurationError)
 		s.recordOperation(ctx, operation(operationID, operationType(target.ReleaseControl), target, actor, nil, nil, false, false, err))
-		return failedResult(result, err)
+		return failedResult(result, err), nil
 	}
 	if len(target.GroupNames) == 0 {
 		err := errors.New("目标缺少守护分组，已阻止自动执行")
 		s.recordOperation(ctx, operation(operationID, operationType(target.ReleaseControl), target, actor, nil, nil, false, false, err))
-		return failedResult(result, err)
+		return failedResult(result, err), nil
 	}
 	if reason, protected, err := s.accountMutationProtection(ctx, target.AccountID); err != nil {
-		return failedResult(result, err)
+		return failedResult(result, err), nil
 	} else if protected {
 		result.Skipped, result.Reason = true, &reason
-		return result
+		return result, nil
 	}
 	var releaseBaseline business.RoutingBaseline
 	if target.ReleaseControl {
 		var found bool
 		releaseBaseline, found, err = s.baseline(ctx, target.AccountID, targetFingerprint)
 		if err != nil {
-			return failedResult(result, err)
+			return failedResult(result, err), nil
 		}
 		if !found {
 			reason := "账号没有托管基线，无需交还控制权，已跳过"
 			result.Skipped, result.Reason = true, &reason
-			return result
+			return result, nil
 		}
 	}
 	// The batch snapshot may predate a waiting human operation. Refresh only
@@ -674,22 +662,22 @@ func (s *Service) applyAccountCoordinated(
 	currentPayload, err := admin.Account(ctx, target.AccountID)
 	if err != nil {
 		s.recordOperation(ctx, operation(operationID, operationType(target.ReleaseControl), target, actor, nil, nil, false, false, err))
-		return failedResult(result, err)
+		return failedResult(result, err), nil
 	}
 	current, err := remoteValues(currentPayload)
 	if err != nil {
 		s.recordOperation(ctx, operation(operationID, operationType(target.ReleaseControl), target, actor, nil, nil, false, false, err))
-		return failedResult(result, err)
+		return failedResult(result, err), nil
 	}
 	if policy.respectExternalControl && !target.AbandonControl {
 		baseline, found, err := s.baseline(ctx, target.AccountID, targetFingerprint)
 		if err != nil {
-			return failedResult(result, err)
+			return failedResult(result, err), nil
 		}
 		if found && baseline.OwnershipVersion == 2 {
 			reason := "账号已交还外部控制，本轮自动变更已跳过"
 			result.Skipped, result.Reason, result.Effective = true, &reason, current.asMap()
-			return result
+			return result, nil
 		}
 		if found && !target.ReleaseControl && externallyModifiedBaseline(baseline, current) {
 			target.AbandonControl, target.DesiredHealth = true, "external_control"
@@ -700,22 +688,22 @@ func (s *Service) applyAccountCoordinated(
 		op := operation(operationID, "routing.release_external", target, actor, current.asMap(), current.asMap(), false, true, nil)
 		if err := s.repository.AbandonRoutingControl(ctx, target.AccountID, targetFingerprint, current.readback(nil), op); err != nil {
 			s.recordLocalApplyFailure(ctx, operationID, "routing.release_external", target, actor, current.asMap(), current.asMap(), false, true, "local-release", err)
-			return failedResult(result, err)
+			return failedResult(result, err), nil
 		}
 		result.Released, result.Effective = true, current.asMap()
 		reason := "检测到 Sub2API 人工修改，已保留当前值并停止 Console 托管"
 		result.Reason = &reason
-		return result
+		return result, nil
 	}
 	if target.RestoreConcurrency {
 		if reason, err := s.checkConcurrencyRestoration(ctx, target, current, targetFingerprint); err != nil {
-			return failedResult(result, err)
+			return failedResult(result, err), nil
 		} else if reason != "" {
 			result.Skipped, result.Reason, result.Effective = true, &reason, current.asMap()
 			op := operation(operationID, "routing.writeback", target, actor, current.asMap(), map[string]any{"reason": reason}, false, false, nil)
 			op.State, op.FieldName = "skipped", nil
 			s.recordOperation(ctx, op)
-			return result
+			return result, nil
 		}
 	}
 	if target.CleanupAction != nil && *target.CleanupAction == "delete" {
@@ -723,31 +711,31 @@ func (s *Service) applyAccountCoordinated(
 			if err := coordinator.authorize(); err != nil {
 				var change *writeAuthorizationChanged
 				if errors.As(err, &change) {
-					return s.skipAuthorizationChange(ctx, result, target, operationID, actor, change)
+					return s.skipAuthorizationChange(ctx, result, target, operationID, actor, change), nil
 				}
-				return failedResult(result, err)
+				return failedResult(result, err), nil
 			}
 		}
-		return s.deleteCleanupAccount(ctx, admin, target, actor, operationID, currentPayload)
+		return s.deleteCleanupAccount(ctx, admin, target, actor, operationID, currentPayload), nil
 	}
 	if target.UpstreamReductionID != "" {
 		if !policy.upstreamReductionEnabled {
-			return failedResult(result, errors.New("上游共享并发自动分配已关闭，请重新计算调度"))
+			return failedResult(result, errors.New("上游共享并发自动分配已关闭，请重新计算调度")), nil
 		}
 		needed, checkErr := coordinator.capacity.checkReduction(target, current)
 		if checkErr != nil {
-			return failedResult(result, checkErr)
+			return failedResult(result, checkErr), nil
 		}
 		if !needed {
 			reason := "上游当前已无可确认的超额或账号已暂停，本轮下调已跳过"
 			result.Skipped, result.Reason = true, &reason
-			return result
+			return result, nil
 		}
 	}
 	desired, err := desiredValues(target, policy, current)
 	if err != nil {
 		s.recordOperation(ctx, operation(operationID, operationType(target.ReleaseControl), target, actor, current.asMap(), nil, false, false, err))
-		return failedResult(result, err)
+		return failedResult(result, err), nil
 	}
 	if target.ReleaseControl {
 		var conflicts []string
@@ -766,24 +754,24 @@ func (s *Service) applyAccountCoordinated(
 				if err := s.repository.MarkCleanupPaused(ctx, target.AccountID, cleanupReason(target)+"，已自动暂停"); err != nil {
 					s.recordCleanupOutcome(ctx, target, "pause", false, err)
 					s.recordLocalApplyFailure(ctx, operationID, "routing.writeback", target, actor, current.asMap(), current.asMap(), false, true, "local-cleanup", err)
-					return failedResult(result, err)
+					return failedResult(result, err), nil
 				}
 				s.recordCleanupOutcome(ctx, target, "pause", false, nil)
 				result.Changed = true
 				reason := "账号已不接流量，本地暂停状态已生效"
 				result.Reason = &reason
-				return result
+				return result, nil
 			case "disable":
 				if err := s.repository.MarkCleanupDisabled(ctx, target.AccountID); err != nil {
 					s.recordCleanupOutcome(ctx, target, "disable", false, err)
 					s.recordLocalApplyFailure(ctx, operationID, "routing.writeback", target, actor, current.asMap(), current.asMap(), false, true, "local-cleanup", err)
-					return failedResult(result, err)
+					return failedResult(result, err), nil
 				}
 				s.recordCleanupOutcome(ctx, target, "disable", false, nil)
 				result.Changed = true
 				reason := "账号已不接流量，本地停用状态已生效"
 				result.Reason = &reason
-				return result
+				return result, nil
 			}
 		}
 		state := confirmedRoutingState(target, current)
@@ -793,7 +781,7 @@ func (s *Service) applyAccountCoordinated(
 		if state != nil {
 			if !target.ReleaseControl {
 				if err := s.captureRoutingBaseline(ctx, target, policy, current, targetFingerprint); err != nil {
-					return failedResult(result, err)
+					return failedResult(result, err), nil
 				}
 			}
 			op := operation(operationID, operationType(target.ReleaseControl), target, actor, current.asMap(), current.asMap(), false, true, nil)
@@ -801,7 +789,7 @@ func (s *Service) applyAccountCoordinated(
 			intent := confirmedManagedIntent(target, policy, current)
 			if err := s.repository.CommitRoutingReadback(ctx, target.AccountID, targetFingerprint, current.readback(state), intentPointer(intent), target.ReleaseControl, op); err != nil {
 				s.recordLocalApplyFailure(ctx, operationID, operationType(target.ReleaseControl), target, actor, current.asMap(), current.asMap(), false, true, "local-commit", err)
-				return failedResult(result, err)
+				return failedResult(result, err), nil
 			}
 			result.Effective = current.asMap()
 			result.Restored = target.ReleaseControl
@@ -812,7 +800,7 @@ func (s *Service) applyAccountCoordinated(
 				}
 				result.Reason = &reason
 			}
-			return result
+			return result, nil
 		}
 		reason := "没有达到自动执行阈值的字段"
 		if target.WriteCooldown || target.ScalingCooldown {
@@ -820,82 +808,85 @@ func (s *Service) applyAccountCoordinated(
 		}
 		result.Skipped, result.Reason = true, &reason
 		s.recordOperation(ctx, operation(operationID, operationType(target.ReleaseControl), target, actor, current.asMap(), desired, false, true, nil))
-		return result
+		return result, nil
 	}
 	if err := coordinator.capacity.reserve(target.AccountID, current, desired); err != nil {
 		var wait *upstreamCapacityWait
 		if errors.As(err, &wait) {
-			return s.skipCapacityWait(ctx, result, target, current, desired, operationID, actor, wait)
+			return s.skipCapacityWait(ctx, result, target, current, desired, operationID, actor, wait), nil
 		}
 		s.recordOperation(ctx, operation(operationID, operationType(target.ReleaseControl), target, actor, current.asMap(), desired, false, false, err))
-		return failedResult(result, err)
+		return failedResult(result, err), nil
 	}
 	if !target.ReleaseControl {
 		if err := s.captureRoutingBaseline(ctx, target, policy, current, targetFingerprint); err != nil {
 			s.recordLocalApplyFailure(ctx, operationID, "routing.writeback", target, actor, current.asMap(), desired, false, false, "ownership-capture", err)
-			return failedResult(result, err)
+			return failedResult(result, err), nil
 		}
 	}
 	submitted = true
-	write := coordinator.Submit(ctx, target.AccountID, desired, current)
-	result.RemoteWrite = !write.writePrevented
-	if cause := contextCause(ctx); cause != nil {
-		return failedResult(result, cause)
-	}
-	var change *writeAuthorizationChanged
-	if write.writePrevented && errors.As(write.err, &change) {
-		return s.skipAuthorizationChange(ctx, result, target, operationID, actor, change)
-	}
-	if write.err != nil && !write.remoteConfirmed {
-		s.recordOperation(ctx, operation(operationID, operationType(target.ReleaseControl), target, actor, current.asMap(), desired, false, false, write.err))
-		return failedResult(result, write.err)
-	}
-	after := write.after
-	if write.err != nil && !write.readbackConfirmed {
-		s.recordOperation(ctx, operation(operationID, operationType(target.ReleaseControl), target, actor, current.asMap(), after.asMap(), true, false, write.err))
-		return failedResult(result, write.err)
-	}
-	state := confirmedRoutingState(target, after)
-	op := operation(operationID, operationType(target.ReleaseControl), target, actor, current.asMap(), after.asMap(), write.remoteConfirmed, write.readbackConfirmed, write.err)
-	op.FieldName = changedReadbackFieldNames(current, after)
-	if write.err != nil {
-		op.Phase = "remote-partial"
-	}
-	intent := confirmedManagedIntent(target, policy, after)
-	releaseComplete := target.ReleaseControl && write.err == nil
-	if err := s.repository.CommitRoutingReadback(ctx, target.AccountID, targetFingerprint, after.readback(state), intentPointer(intent), releaseComplete, op); err != nil {
-		s.recordLocalApplyFailure(ctx, operationID, operationType(target.ReleaseControl), target, actor, current.asMap(), after.asMap(), true, write.readbackConfirmed, "local-commit", err)
-		return failedResult(result, err)
-	}
-	if shouldRecoverRuntime(current, after) {
-		s.recoverRuntime(ctx, admin, target)
-	}
-	result.Changed, result.Effective = changedReadbackFieldNames(current, after) != nil, after.asMap()
-	if write.err != nil {
-		return failedResult(result, write.err)
-	}
-	if target.CleanupAction != nil {
-		switch *target.CleanupAction {
-		case "pause":
-			if err := s.repository.MarkCleanupPaused(ctx, target.AccountID, cleanupReason(target)+"，已自动暂停"); err != nil {
-				s.recordCleanupOutcome(ctx, target, "pause", true, err)
-				s.recordLocalApplyFailure(ctx, operationID, "routing.writeback", target, actor, current.asMap(), after.asMap(), true, true, "local-cleanup", err)
-				result.RemoteWrite = true
-				return failedResult(result, err)
-			}
-			s.recordCleanupOutcome(ctx, target, "pause", true, nil)
-		case "disable":
-			if err := s.repository.MarkCleanupDisabled(ctx, target.AccountID); err != nil {
-				s.recordCleanupOutcome(ctx, target, "disable", true, err)
-				s.recordLocalApplyFailure(ctx, operationID, "routing.writeback", target, actor, current.asMap(), after.asMap(), true, true, "local-cleanup", err)
-				result.RemoteWrite = true
-				return failedResult(result, err)
-			}
-			s.recordCleanupOutcome(ctx, target, "disable", true, nil)
+	coordinator.enqueue(ctx, target.AccountID, desired, current)
+	return result, func() AccountResult {
+		write := coordinator.outcome(ctx, target.AccountID)
+		result.RemoteWrite = !write.writePrevented
+		if cause := contextCause(ctx); cause != nil {
+			return failedResult(result, cause)
 		}
+		var change *writeAuthorizationChanged
+		if write.writePrevented && errors.As(write.err, &change) {
+			return s.skipAuthorizationChange(ctx, result, target, operationID, actor, change)
+		}
+		if write.err != nil && !write.remoteConfirmed {
+			s.recordOperation(ctx, operation(operationID, operationType(target.ReleaseControl), target, actor, current.asMap(), desired, false, false, write.err))
+			return failedResult(result, write.err)
+		}
+		after := write.after
+		if write.err != nil && !write.readbackConfirmed {
+			s.recordOperation(ctx, operation(operationID, operationType(target.ReleaseControl), target, actor, current.asMap(), after.asMap(), true, false, write.err))
+			return failedResult(result, write.err)
+		}
+		state := confirmedRoutingState(target, after)
+		op := operation(operationID, operationType(target.ReleaseControl), target, actor, current.asMap(), after.asMap(), write.remoteConfirmed, write.readbackConfirmed, write.err)
+		op.FieldName = changedReadbackFieldNames(current, after)
+		if write.err != nil {
+			op.Phase = "remote-partial"
+		}
+		intent := confirmedManagedIntent(target, policy, after)
+		releaseComplete := target.ReleaseControl && write.err == nil
+		if err := s.repository.CommitRoutingReadback(ctx, target.AccountID, targetFingerprint, after.readback(state), intentPointer(intent), releaseComplete, op); err != nil {
+			s.recordLocalApplyFailure(ctx, operationID, operationType(target.ReleaseControl), target, actor, current.asMap(), after.asMap(), true, write.readbackConfirmed, "local-commit", err)
+			return failedResult(result, err)
+		}
+		if shouldRecoverRuntime(current, after) {
+			s.recoverRuntime(ctx, admin, target)
+		}
+		result.Changed, result.Effective = changedReadbackFieldNames(current, after) != nil, after.asMap()
+		if write.err != nil {
+			return failedResult(result, write.err)
+		}
+		if target.CleanupAction != nil {
+			switch *target.CleanupAction {
+			case "pause":
+				if err := s.repository.MarkCleanupPaused(ctx, target.AccountID, cleanupReason(target)+"，已自动暂停"); err != nil {
+					s.recordCleanupOutcome(ctx, target, "pause", true, err)
+					s.recordLocalApplyFailure(ctx, operationID, "routing.writeback", target, actor, current.asMap(), after.asMap(), true, true, "local-cleanup", err)
+					result.RemoteWrite = true
+					return failedResult(result, err)
+				}
+				s.recordCleanupOutcome(ctx, target, "pause", true, nil)
+			case "disable":
+				if err := s.repository.MarkCleanupDisabled(ctx, target.AccountID); err != nil {
+					s.recordCleanupOutcome(ctx, target, "disable", true, err)
+					s.recordLocalApplyFailure(ctx, operationID, "routing.writeback", target, actor, current.asMap(), after.asMap(), true, true, "local-cleanup", err)
+					result.RemoteWrite = true
+					return failedResult(result, err)
+				}
+				s.recordCleanupOutcome(ctx, target, "disable", true, nil)
+			}
+		}
+		result.Restored = target.ReleaseControl
+		return result
 	}
-	result.Restored = target.ReleaseControl
-	return result
 }
 
 func (s *Service) captureRoutingBaseline(
@@ -1137,14 +1128,14 @@ func cleanupWriteActionLabel(action string) string {
 	return action
 }
 
-func (s *Service) restoreAccount(
+func (s *Service) prepareRestoration(
 	ctx context.Context,
 	admin Admin,
 	baseline business.RoutingBaseline,
 	actor string,
 	targetFingerprint string,
 	coordinator *batchWriteCoordinator,
-) AccountResult {
+) (AccountResult, func() AccountResult) {
 	submitted := false
 	defer func() {
 		if !submitted {
@@ -1155,49 +1146,54 @@ func (s *Service) restoreAccount(
 	result := AccountResult{AccountID: baseline.AccountID}
 	operationID, err := randomOperationID("routing-restore")
 	if err != nil {
-		return failedResult(result, err)
+		return failedResult(result, err), nil
 	}
 	if reason, protected, err := s.accountMutationProtection(ctx, baseline.AccountID); err != nil {
-		return failedResult(result, err)
+		return failedResult(result, err), nil
 	} else if protected {
 		result.Skipped, result.Reason = true, &reason
-		return result
+		return result, nil
 	}
 	beforePayload, err := admin.Account(ctx, baseline.AccountID)
 	if err != nil {
-		return failedResult(result, err)
+		return failedResult(result, err), nil
 	}
 	before, err := remoteValues(beforePayload)
 	if err != nil {
-		return failedResult(result, err)
+		return failedResult(result, err), nil
 	}
 	desired, conflicts := restorableBaselineValues(baseline, before)
 	changed := changedFields(desired, before)
-	after, readbackConfirmed := before, true
 	if len(changed) > 0 {
 		submitted = true
-		write := coordinator.Submit(ctx, baseline.AccountID, changed, before)
-		result.RemoteWrite = write.remoteConfirmed
-		if cause := contextCause(ctx); cause != nil {
-			return failedResult(result, cause)
+		coordinator.enqueue(ctx, baseline.AccountID, changed, before)
+	}
+	return result, func() AccountResult {
+		after, readbackConfirmed := before, true
+		if len(changed) > 0 {
+			write := coordinator.outcome(ctx, baseline.AccountID)
+			result.RemoteWrite = write.remoteConfirmed
+			if cause := contextCause(ctx); cause != nil {
+				return failedResult(result, cause)
+			}
+			if write.err != nil {
+				s.recordOperation(ctx, operation(operationID, "routing.restore", target, actor, before.asMap(), changed, write.remoteConfirmed, write.readbackConfirmed, write.err))
+				return failedResult(result, write.err)
+			}
+			after, readbackConfirmed = write.after, write.readbackConfirmed
 		}
-		if write.err != nil {
-			s.recordOperation(ctx, operation(operationID, "routing.restore", target, actor, before.asMap(), changed, write.remoteConfirmed, write.readbackConfirmed, write.err))
-			return failedResult(result, write.err)
+		op := operation(operationID, "routing.restore", target, actor, before.asMap(), after.asMap(), len(changed) > 0, readbackConfirmed, nil)
+		if err := s.repository.CommitRoutingReadback(ctx, baseline.AccountID, targetFingerprint, after.readback(nil), nil, true, op); err != nil {
+			return failedResult(result, err)
 		}
-		after, readbackConfirmed = write.after, write.readbackConfirmed
+		result.Changed, result.RemoteWrite, result.Restored, result.Effective = len(changed) > 0, len(changed) > 0, true, after.asMap()
+		result.Before = before.asMap()
+		if len(conflicts) > 0 {
+			reason := "已交还控制权；保留外部修改字段：" + strings.Join(conflicts, ",")
+			result.Reason = &reason
+		}
+		return result
 	}
-	op := operation(operationID, "routing.restore", target, actor, before.asMap(), after.asMap(), len(changed) > 0, readbackConfirmed, nil)
-	if err := s.repository.CommitRoutingReadback(ctx, baseline.AccountID, targetFingerprint, after.readback(nil), nil, true, op); err != nil {
-		return failedResult(result, err)
-	}
-	result.Changed, result.RemoteWrite, result.Restored, result.Effective = len(changed) > 0, len(changed) > 0, true, after.asMap()
-	result.Before = before.asMap()
-	if len(conflicts) > 0 {
-		reason := "已交还控制权；保留外部修改字段：" + strings.Join(conflicts, ",")
-		result.Reason = &reason
-	}
-	return result
 }
 
 func (s *Service) accountMutationProtection(ctx context.Context, accountID string) (string, bool, error) {

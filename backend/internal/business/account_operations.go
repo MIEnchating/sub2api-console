@@ -198,9 +198,7 @@ func (s *Store) CommitAccountGroupsReadback(
 				return err
 			}
 		}
-		_, err := tx.ExecContext(ctx, `UPDATE local_groups SET account_count=(SELECT COUNT(*) FROM account_groups
-			WHERE group_name=local_groups.name),updated_at=?`, now)
-		return err
+		return refreshAccountGroupCounts(ctx, tx, now)
 	})
 }
 

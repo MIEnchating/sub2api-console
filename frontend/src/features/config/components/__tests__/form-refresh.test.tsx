@@ -1,3 +1,4 @@
+import { seedDictionaries } from "@/test/dictionary-fixtures";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import type { RenderResult } from "@testing-library/react";
@@ -55,6 +56,7 @@ afterEach(() => {
 describe.each(forms)("$name 表单与服务端快照同步", (fixture) => {
   function setup(model: string, onSubmit: () => Promise<void>): RenderResult {
     const client = new QueryClient({ defaultOptions: { queries: { enabled: false } } });
+    seedDictionaries(client);
     clients.push(client);
     return render(fixture.render({ model, onSubmit }), {
       wrapper: (props): ReactElement => (

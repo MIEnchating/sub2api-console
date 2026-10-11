@@ -97,3 +97,31 @@ func TestOfficialRefreshWithInvalidPageRetainsLastSuccessfulPrices(t *testing.T)
 		})
 	}
 }
+
+func TestKimiInvalidCacheTierRetainsCompleteOfficialCache(t *testing.T) {
+	page := `<DocTable columns={[
+{title: "模型"}, {title: "计费单位"}, {title: "缓存写入（TTL 5min）"},
+{title: "缓存写入（TTL 1h）"}, {title: "输入价格（缓存命中）"},
+{title: "输入价格（缓存未命中）"}, {title: "输出价格"}, {title: "上下文窗口"}
+]} rows={[["kimi-k3", "1M tokens", "¥20", "¥40", "¥2", "¥20", "¥100", "1M tokens"]]} />`
+	service := setupOfficialRefresh(t, pricing.KimiURL, "kimi-k3", &page)
+	fresh, err := service.ModelPriceCatalog(context.Background(), "test", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := priceByName(t, fresh, "kimi-k3")
+	if fresh.Stale || len(before.PriceTiers) != 2 {
+		t.Fatalf("expected complete initial cache: %+v", fresh)
+	}
+	page = strings.Replace(page, "¥40", "invalid", 1)
+	stale, err := service.ModelPriceCatalog(context.Background(), "test", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !stale.Stale || !strings.Contains(stale.Warning, "Kimi") {
+		t.Fatalf("invalid cache tier was not reported: %+v", stale)
+	}
+	if after := priceByName(t, stale, "kimi-k3"); !reflect.DeepEqual(before, after) {
+		t.Fatalf("invalid cache tier replaced the last complete price: before=%+v after=%+v", before, after)
+	}
+}

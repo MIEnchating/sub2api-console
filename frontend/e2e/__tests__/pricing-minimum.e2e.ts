@@ -2,6 +2,7 @@ import { expect, test } from "@playwright/test";
 
 import type { PricingConfig } from "../../src/api";
 import { pricing } from "./fixtures/settings";
+import { dictionaryResponse } from "./fixtures/dictionaries";
 
 test.beforeEach(async ({ page, colorScheme }) => {
   await page.addInitScript(
@@ -26,6 +27,10 @@ test.beforeEach(async ({ page, colorScheme }) => {
       },
       "/api/pricing": { ...pricing, config },
       "/api/pricing/backups": [],
+      "/api/dictionaries": dictionaryResponse(
+        route.request().url(),
+        pricing.groups.map((group) => ({ value: group.id, name: group.name })),
+      ),
     };
     if (path.endsWith("/events")) {
       await route.fulfill({ contentType: "text/event-stream", body: ": fixture\n\n" });
@@ -74,6 +79,17 @@ test("超长分组名与最低迁入倍率在窄屏不溢出，非法输入显�
         ...pricing,
         groups: pricing.groups.map((group) => (group.id === "6" ? { ...group, name } : group)),
       },
+    }),
+  );
+  await page.route("**/api/dictionaries?**", (route) =>
+    route.fulfill({
+      json: dictionaryResponse(
+        route.request().url(),
+        pricing.groups.map((group) => ({
+          value: group.id,
+          name: group.id === "6" ? name : group.name,
+        })),
+      ),
     }),
   );
   await page.goto("/pricing-config");

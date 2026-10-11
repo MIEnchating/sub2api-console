@@ -55,8 +55,15 @@ func (s *Service) EnqueueProbe(ctx context.Context, action, host, groupID, model
 	if action == "probe" && (strings.TrimSpace(model) == "" || len(model) > 255) {
 		return taskstore.Task{}, errors.New("请选择有效的测试模型")
 	}
-	if action == "probe" && mode != "" && mode != "default" && mode != "stream" {
+	if action == "probe" && mode != "" && mode != "default" && mode != "stream" && mode != "animation" {
 		return taskstore.Task{}, errors.New("不支持的探活模式")
+	}
+	animationPrompt := ""
+	if action == "probe" && mode == "animation" {
+		if s.animations == nil {
+			return taskstore.Task{}, errors.New("动画测试服务尚未就绪，请稍后重试")
+		}
+		animationPrompt = s.animations.AnimationPromptSettings().Prompt
 	}
 	task, err := s.newQueuedTask("onboarding-probe-"+action, "探活任务已排队")
 	if err != nil {
@@ -66,7 +73,9 @@ func (s *Service) EnqueueProbe(ctx context.Context, action, host, groupID, model
 	if err = s.tasks.Save(ctx, task); err != nil {
 		return taskstore.Task{}, err
 	}
-	if err = taskrunner.GoTask(s.taskRunner, task.ID, func(parent context.Context) { s.executeProbeTask(parent, task, action, host, groupID, model, mode) }); err != nil {
+	if err = taskrunner.GoTask(s.taskRunner, task.ID, func(parent context.Context) {
+		s.executeProbeTask(context.WithValue(parent, probeAnimationPromptKey{}, animationPrompt), task, action, host, groupID, model, mode)
+	}); err != nil {
 		taskstore.PersistLaunchFailure(s.tasks, task, err)
 		return taskstore.Task{}, err
 	}

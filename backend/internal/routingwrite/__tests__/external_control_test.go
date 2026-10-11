@@ -7,6 +7,7 @@ import (
 )
 
 func TestWriteRechecksExternalControlAgainstFreshRemoteValues(t *testing.T) {
+	t.Parallel()
 	for _, scenario := range []struct {
 		name      string
 		manageAll bool
@@ -79,6 +80,7 @@ func TestWriteRechecksExternalControlAgainstFreshRemoteValues(t *testing.T) {
 }
 
 func TestReleasedExternalControlCannotBeReacquiredUnlessManageAllIsEnabled(t *testing.T) {
+	t.Parallel()
 	for _, scenario := range []struct {
 		name      string
 		manageAll bool

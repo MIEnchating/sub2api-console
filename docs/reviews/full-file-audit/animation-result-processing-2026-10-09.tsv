@@ -1,0 +1,5 @@
+frontend/src/features/model-check/hooks/use-animation-tasks.ts	1dc2ef99b35613ac1331b8493dac8493519d5804faebf47b7cae9ddfd63ca9a8	fixed	完整复审；Query combine 保留未变任务数组，useMemo 复用公开汇总；错误/加载/刷新与失败重试回调仍更新，提交中集合改变仍重算；新详情和纳秒版本刷新不被缓存阻断。全历史请求、创建ID保留和详情缓存规模仍待继续优化。
+frontend/src/features/model-check/lib/animation-task-results.ts	319ad9df51d3ed3da78bb73986a423068a804fec5876bd10c093bbc1dbf9ec37	fixed	完整复审；每条结果只做一次Zod校验，共享生成动画/前置/活动阶段，保留终态旧阶段、无效行过滤、最新结果选择及批次占用；不增加全局缓存。完成时间与任务排序仍用Date.parse，同毫秒精度边界待进一步核对。
+frontend/src/features/model-check/hooks/__tests__/history-refresh.test.tsx	9ca131fc17b6c288e9a849117f403a470dc2a16e3648cbeb89dcff354b656f0b	reviewed	完整复审；新增公开结果引用复用与后台刷新后新结论回归，旧实现两项失败；原纳秒版本、错误重试、慢请求不中断及重挂载六项继续保护。
+frontend/src/features/model-check/lib/__tests__/combined-task-results.test.ts	170cdbb0e3b3a3e20bbd096a1fccc23c333fb0d0bf76980135eb92f18cf214b1	reviewed	完整复审；组合任务成功、等待前置、前置完成转动画，以及无效阶段更新不得覆盖有效生成中状态，保持账号占用和独立前置结论。
+frontend/src/features/model-check/lib/__tests__/animation-task-results.bench.ts	33a5637f336c0cdeb510a8c82e4cd6bf2d237bb70af42b435cb298afe7190ff8	reviewed	完整阅读；Node环境真实纯逻辑，100任务各20账号共4000条结果，固定90完成10运行并校验1800动画/2000前置/200忙碌账号；只测汇总计算，不含Hook、网络、SQLite或DOM。

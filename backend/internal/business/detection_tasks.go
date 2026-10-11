@@ -2,11 +2,8 @@ package business
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"slices"
 )
 
 func (s *Store) LoadDetectionTasks(ctx context.Context) ([]byte, error) {
@@ -30,27 +27,57 @@ func (s *Store) DetectionTaskAccountIDs(ctx context.Context, groups []string) ([
 
 // Resolve accounts and group labels together, so a directory sync cannot split the snapshot.
 func (s *Store) DetectionTaskScope(ctx context.Context, groups []string) (DetectionTaskScope, error) {
+	var scope DetectionTaskScope
+	err := s.WithReadSnapshot(ctx, func(ctx context.Context) error {
+		var err error
+		scope, err = s.detectionTaskScope(ctx, groups)
+		return err
+	})
+	return scope, err
+}
+
+func (s *Store) detectionTaskScope(ctx context.Context, groups []string) (DetectionTaskScope, error) {
 	scope := DetectionTaskScope{AccountIDs: []string{}, GroupIDsByAccount: map[string][]string{}, GroupNamesByID: map[string]string{}}
-	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
-	if err != nil {
-		return scope, err
-	}
-	defer tx.Rollback()
-	for _, id := range groups {
-		var name string
-		if err := tx.QueryRowContext(ctx, "SELECT name FROM local_groups WHERE remote_id=?", id).Scan(&name); err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
-				return scope, fmt.Errorf("分组 %s 不存在，请重新选择", id)
-			}
-			return scope, err
-		}
-		scope.GroupNamesByID[id] = name
+	if len(groups) == 0 {
+		return scope, nil
 	}
 	raw, err := json.Marshal(groups)
 	if err != nil {
 		return scope, err
 	}
-	rows, err := tx.QueryContext(ctx, "SELECT DISTINCT ag.account_id, ag.group_id FROM account_groups ag JOIN accounts a ON a.id=ag.account_id WHERE ag.group_id IN (SELECT value FROM json_each(?)) ORDER BY ag.account_id, ag.group_id", string(raw))
+	// Scan the group directory once rather than once per requested group.
+	// The membership read shares this exact snapshot.
+	labels, err := s.db.QueryContext(ctx, `SELECT remote_id,name FROM local_groups
+		WHERE remote_id IN (SELECT value FROM json_each(?)) ORDER BY rowid`, string(raw))
+	if err != nil {
+		return scope, err
+	}
+	defer labels.Close()
+	names := make(map[string]string, len(groups))
+	for labels.Next() {
+		var id, name string
+		if err := labels.Scan(&id, &name); err != nil {
+			return scope, err
+		}
+		if _, found := names[id]; !found {
+			names[id] = name
+		}
+	}
+	if err := labels.Err(); err != nil {
+		return scope, err
+	}
+	if err := labels.Close(); err != nil {
+		return scope, err
+	}
+	// Match the previous first-missing-ID error in request order.
+	for _, id := range groups {
+		name, found := names[id]
+		if !found {
+			return scope, fmt.Errorf("分组 %s 不存在，请重新选择", id)
+		}
+		scope.GroupNamesByID[id] = name
+	}
+	rows, err := s.db.QueryContext(ctx, "SELECT DISTINCT ag.account_id, ag.group_id FROM account_groups ag JOIN accounts a ON a.id=ag.account_id WHERE ag.group_id IN (SELECT value FROM json_each(?)) ORDER BY ag.account_id, ag.group_id", string(raw))
 	if err != nil {
 		return scope, err
 	}
@@ -63,12 +90,11 @@ func (s *Store) DetectionTaskScope(ctx context.Context, groups []string) (Detect
 		if _, exists := scope.GroupIDsByAccount[accountID]; !exists {
 			scope.AccountIDs = append(scope.AccountIDs, accountID)
 		}
-		if !slices.Contains(scope.GroupIDsByAccount[accountID], groupID) {
-			scope.GroupIDsByAccount[accountID] = append(scope.GroupIDsByAccount[accountID], groupID)
-		}
+		// DISTINCT already guarantees each account/group pair appears once.
+		scope.GroupIDsByAccount[accountID] = append(scope.GroupIDsByAccount[accountID], groupID)
 	}
 	if err := rows.Err(); err != nil {
 		return scope, err
 	}
-	return scope, tx.Commit()
+	return scope, nil
 }

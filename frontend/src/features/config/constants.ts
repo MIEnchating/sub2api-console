@@ -35,6 +35,7 @@ export const taskPoolLabels: Record<string, string> = {
   logs: "日志任务",
   uptime_kuma: "Uptime Kuma",
   newapi_channel: "New API 渠道",
+  account_model_automation_group: "账号模型运营任务组",
   live: "实时采集",
   workbench: "账号工作台",
   housekeeping: "后台维护",

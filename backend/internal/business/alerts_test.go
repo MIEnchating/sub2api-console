@@ -6,6 +6,7 @@ import (
 )
 
 func TestPrepareAlertDeliveryRequiresPrivateCredentialsEvenWhenRulesEnabled(t *testing.T) {
+	t.Parallel()
 	store := openPolicyStore(t)
 	ctx := context.Background()
 	if _, err := store.db.ExecContext(ctx, `INSERT INTO operational_snapshots(
@@ -39,6 +40,7 @@ func TestPrepareAlertDeliveryRequiresPrivateCredentialsEvenWhenRulesEnabled(t *t
 }
 
 func TestSuccessfulMultiplierChangeNotificationClosesTheOneTimeIncident(t *testing.T) {
+	t.Parallel()
 	store := openPolicyStore(t)
 	ctx := context.Background()
 	if _, err := store.db.ExecContext(ctx, `INSERT INTO operational_snapshots(
@@ -78,6 +80,7 @@ func TestSuccessfulMultiplierChangeNotificationClosesTheOneTimeIncident(t *testi
 }
 
 func TestPreparedNotificationCommitUnknownIsNotAutomaticallyRetried(t *testing.T) {
+	t.Parallel()
 	store := openPolicyStore(t)
 	ctx := context.Background()
 	if _, err := store.db.ExecContext(ctx, `INSERT INTO operational_snapshots(
@@ -115,6 +118,7 @@ func TestPreparedNotificationCommitUnknownIsNotAutomaticallyRetried(t *testing.T
 }
 
 func TestAlertEvaluationLeavesOneTimeMultiplierIncidentPending(t *testing.T) {
+	t.Parallel()
 	store := openPolicyStore(t)
 	ctx := context.Background()
 	if _, err := store.db.ExecContext(ctx, `INSERT INTO alert_incidents(

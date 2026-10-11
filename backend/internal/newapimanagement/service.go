@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"math"
 	"math/big"
 	"net/http"
@@ -81,7 +82,7 @@ type Service struct {
 	keys         KeyManager
 	auth         Authenticator
 	managementMu sync.Mutex
-	pricingMu    sync.Mutex
+	pricingMu    pricingReadGate
 }
 
 type Workspace struct {
@@ -419,24 +420,34 @@ func (s *Service) Refresh(ctx context.Context, platformID string) (RemoteSnapsho
 	}
 	configuredModels := models
 	enabledModelNames := []string{}
-	if payload, requestErr := s.request(ctx, *platform, http.MethodGet, "/api/channel/models_enabled", nil); requestErr == nil {
-		enabledModelNames = decodeModelNames(payload)
-	}
-	unsetModels := findUnsetModelPrices(configuredModels, enabledModelNames)
-
 	// Retain the public pricing catalog for the separate comparison view. It
 	// must not affect the three model-pricing categories above.
 	pricingCatalog := []ModelPrice{}
-	if payload, requestErr := s.request(ctx, *platform, http.MethodGet, "/api/pricing", nil); requestErr == nil {
-		pricingCatalog = decodePricingCatalog(payload)
+	var upstreamPrices []UpstreamPriceCatalog
+	var upstreamWarning string
+	var reads sync.WaitGroup
+	reads.Go(func() {
+		if payload, requestErr := s.request(ctx, *platform, http.MethodGet, "/api/channel/models_enabled", nil); requestErr == nil {
+			enabledModelNames = decodeModelNames(payload)
+		}
+	})
+	reads.Go(func() {
+		if payload, requestErr := s.request(ctx, *platform, http.MethodGet, "/api/pricing", nil); requestErr == nil {
+			pricingCatalog = decodePricingCatalog(payload)
+		}
+	})
+	reads.Go(func() { upstreamPrices, upstreamWarning = s.readUpstreamPriceCatalogs(ctx) })
+	reads.Wait()
+	if err := ctx.Err(); err != nil {
+		return RemoteSnapshot{}, err
 	}
+	unsetModels := findUnsetModelPrices(configuredModels, enabledModelNames)
 	references := mergeModelPriceRows(configuredModels, unsetModels)
 	// Compare configured ratios against the remote pricing catalog. The
 	// configured+unset projection is useful for display, but comparing it with
 	// itself can never reveal a mismatch.
 	differences := compareCatalogPrices(configuredModels, pricingCatalog)
 	toolPrices := decodeToolPrices(options["tool_price_setting.prices"])
-	upstreamPrices, upstreamWarning := s.readUpstreamPriceCatalogs(ctx)
 	return RemoteSnapshot{
 		Groups: groups, Models: configuredModels, UnsetModels: unsetModels, ToolPrices: toolPrices,
 		References: references, NewAPIModels: pricingCatalog,
@@ -463,7 +474,9 @@ func (s *Service) RemoteModelPricingSource(ctx context.Context, platformID strin
 	if _, err := s.requirePlatform(ctx, platformID); err != nil {
 		return RemotePricingSource{}, err
 	}
-	s.pricingMu.Lock()
+	if err := s.pricingMu.Lock(ctx); err != nil {
+		return RemotePricingSource{}, err
+	}
 	defer s.pricingMu.Unlock()
 	_, source, err := s.loadRemotePricing(ctx, false)
 	return source, err
@@ -693,6 +706,11 @@ func (s *Service) SaveBindings(ctx context.Context, platformID string, inputs []
 		originalNewAPIRatios, err = decodeDecimalMap(options["GroupRatio"])
 		if err != nil {
 			return nil, serviceError(ErrorUpstream, "New API 当前分组倍率不可读")
+		}
+		for groupID, ratio := range newAPIRatios {
+			if sameDecimal(originalNewAPIRatios[groupID], ratio) {
+				delete(newAPIRatios, groupID)
+			}
 		}
 	}
 
@@ -1300,12 +1318,14 @@ func (s *Service) SaveModelPrices(ctx context.Context, platformID string, inputs
 		"ImageRatio", "AudioRatio", "AudioCompletionRatio",
 	}
 	numericOptions := make(map[string]map[string]string, len(numericKeys))
+	originalNumericOptions := make(map[string]map[string]string, len(numericKeys))
 	for _, key := range numericKeys {
 		values, decodeErr := decodeDecimalMap(options[key])
 		if decodeErr != nil {
 			return RemoteSnapshot{}, fmt.Errorf("New API 当前 %s 配置不可读", key)
 		}
 		numericOptions[key] = values
+		originalNumericOptions[key] = maps.Clone(values)
 	}
 	billingModes, err := decodeStringMap(options["billing_setting.billing_mode"])
 	if err != nil {
@@ -1372,6 +1392,9 @@ func (s *Service) SaveModelPrices(ctx context.Context, platformID string, inputs
 	}
 	writtenKeys := make([]string, 0, len(numericKeys)+2)
 	for _, key := range numericKeys {
+		if maps.EqualFunc(originalNumericOptions[key], numericOptions[key], sameDecimal) {
+			continue
+		}
 		// A failed response can follow a committed remote write.
 		writtenKeys = append(writtenKeys, key)
 		if err := s.writeOption(ctx, *platform, key, numericOptions[key]); err != nil {

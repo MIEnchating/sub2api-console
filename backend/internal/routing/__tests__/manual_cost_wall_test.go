@@ -7,6 +7,7 @@ import (
 )
 
 func TestManualCostWallBlocksUntilExplicitlyExemptAndRestoresOnlyItsOwnPause(t *testing.T) {
+	t.Parallel()
 	store, db := costWallStore(t, "1.25")
 	if _, err := store.AssignManualPriority(t.Context(), "41", 1, "10", 10, true, "test"); err != nil {
 		t.Fatal(err)
@@ -50,6 +51,7 @@ func TestManualCostWallBlocksUntilExplicitlyExemptAndRestoresOnlyItsOwnPause(t *
 }
 
 func TestManualCostWallUsesAllCurrentMembershipsAndPreservesOtherStops(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name, sql string
 		want      int

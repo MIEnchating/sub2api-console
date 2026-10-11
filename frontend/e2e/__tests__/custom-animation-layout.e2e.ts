@@ -2,6 +2,59 @@ import { expect, test } from "@playwright/test";
 import type { Task } from "../../src/api";
 import { pageFixtures } from "./fixtures/page-shell";
 
+test("自定义接口分区排列，模型输入可读且空记录与操作栏不溢出", async ({
+  page,
+  colorScheme,
+}, testInfo) => {
+  await page.addInitScript(
+    (theme) => localStorage.setItem("sub2api-console-theme", theme ?? "light"),
+    colorScheme,
+  );
+  await page.route("**/api/**", async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    const fixtures: Record<string, unknown> = {
+      ...pageFixtures,
+      "/api/setup/status": { initialized: true, configuration_errors: [] },
+      "/api/auth/session": { authenticated: true, username: "布局测试" },
+      "/api/accounts": [],
+      "/api/model-checks/animation-schedules": [],
+      "/api/model-checks/animations": [],
+      "/api/dictionaries": { items: [] },
+    };
+    if (path.endsWith("/events"))
+      await route.fulfill({ contentType: "text/event-stream", body: ": fixture\n\n" });
+    else if (path in fixtures) await route.fulfill({ json: fixtures[path] });
+    else await route.fulfill({ status: 503, json: { detail: "隔离测试未配置此接口" } });
+  });
+  await page.goto("/animation-check");
+  await page.getByRole("tab", { name: "自定义接口", exact: true }).click();
+  const model = page.getByRole("combobox", { name: "检测模型" });
+  expect((await model.boundingBox())!.width).toBeGreaterThanOrEqual(180);
+  const connection = page.getByRole("group", { name: "接口配置", exact: true });
+  const operations = page.getByRole("group", { name: "自定义接口检测操作", exact: true });
+  const parameters = operations.getByRole("group", { name: "检测参数", exact: true });
+  const connectionBox = (await connection.boundingBox())!;
+  const parametersBox = (await parameters.boundingBox())!;
+  const operationsBox = (await operations.boundingBox())!;
+  expect(parametersBox.y).toBeGreaterThan(connectionBox.y + connectionBox.height);
+  expect(operationsBox.y).toBeGreaterThan(connectionBox.y + connectionBox.height);
+  if (page.viewportSize()!.width >= 1440) {
+    const startBox = (await operations
+      .getByRole("button", { name: "开始检测", exact: true })
+      .boundingBox())!;
+    expect(startBox.y).toBeCloseTo((await model.boundingBox())!.y, 0);
+  }
+  const empty = page.getByRole("group", { name: "暂无检测记录", exact: true });
+  expect((await empty.boundingBox())!.height).toBeLessThanOrEqual(180);
+  await expect(operations.getByRole("button", { name: "编辑动画提示词" })).toBeVisible();
+  await expect(page.getByText("暂无自定义接口检测记录")).toBeVisible();
+  for (const button of await operations.getByRole("button").all()) {
+    await expect(button).toHaveCSS("height", "32px");
+  }
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.screenshot({ path: testInfo.outputPath("custom-interface-form.png") });
+});
+
 test("多条自定义动画记录分页展示且无横向溢出，较矮窗口仍能滚动访问完整内容", async ({
   page,
 }, testInfo) => {

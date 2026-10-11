@@ -76,15 +76,14 @@ func (s *Service) ModelSyncSettings(ctx context.Context) (business.AccountModelS
 	return business.AccountModelSyncSettings{BlockedPatterns: patterns}, nil
 }
 
-func (s *Service) ConfigureModelSyncSettings(ctx context.Context, patterns []string, actor string) (business.AccountModelSyncSettings, error) {
-	repository, ok := s.repository.(modelSyncRepository)
+func (s *Service) ConfigureModelSyncSettings(ctx context.Context, patterns, expected []string, actor string) (business.AccountModelSyncSettings, error) {
+	repository, ok := s.repository.(interface {
+		ReplaceAccountModelBlocks(context.Context, []string, []string, string) (business.AccountModelSyncSettings, error)
+	})
 	if !ok {
 		return business.AccountModelSyncSettings{}, errors.New("账号模型同步存储尚未就绪")
 	}
-	if err := repository.SaveAccountModelExclusionList(ctx, patterns, strings.TrimSpace(actor)); err != nil {
-		return business.AccountModelSyncSettings{}, err
-	}
-	return s.ModelSyncSettings(ctx)
+	return repository.ReplaceAccountModelBlocks(ctx, patterns, expected, strings.TrimSpace(actor))
 }
 
 func (s *Service) ModelSyncPreview(ctx context.Context, accountIDs []string) (business.AccountModelSyncPreview, error) {
@@ -324,7 +323,7 @@ func (s *Service) enqueueModelSyncTask(
 func (s *Service) executeModelDiscovery(ctx context.Context, task taskstore.Task, accountIDs []string, _ string) {
 	ctx, cancel := context.WithTimeout(ctx, s.timeout)
 	defer cancel()
-	task.Status, task.Progress, task.Message = "running", 2, "正在逐账号获取上游模型目录"
+	task.Status, task.Progress, task.Message = "running", 0, "正在逐账号获取上游模型目录"
 	task.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
 	if !taskstore.SaveRunning(ctx, s.tasks, task) {
 		return
@@ -357,7 +356,7 @@ func (s *Service) executeModelDiscovery(ctx context.Context, task taskstore.Task
 	for outcome := range outcomes {
 		items[outcome.index] = outcome.item
 		completed++
-		task.Progress = 2 + completed*94/len(accountIDs)
+		task.Progress = completed * 100 / len(accountIDs)
 		task.Message = fmt.Sprintf("模型发现进度：已处理 %d/%d 个账号", completed, len(accountIDs))
 		task.Result = modelSyncTaskResult(accountIDs, completed, items)
 		task.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)

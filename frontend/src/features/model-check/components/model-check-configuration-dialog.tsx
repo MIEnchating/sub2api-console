@@ -68,7 +68,7 @@ export function ModelCheckConfigurationDialog(props: ModelCheckConfigurationDial
   });
   const configuration = useQuery({
     queryKey: ["model-check-configuration"],
-    queryFn: api.modelCheckConfiguration,
+    queryFn: ({ signal }) => api.modelCheckConfiguration(signal),
     enabled: props.open,
   });
   const isDirty = form.formState.isDirty;

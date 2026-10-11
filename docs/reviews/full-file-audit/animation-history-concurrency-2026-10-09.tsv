@@ -1,0 +1,5 @@
+frontend/src/features/model-check/lib/animation-task-reader.ts	a0407e494c6e4657cfc7ea3fcb52c24a0c1c0c40150cdc37bf3fd2c4fae9ff5b	reviewed	完整阅读；页面实例内详情读取及解码最多四路，活动/历史队列各保留FIFO，排队取消移除闭包，在途取消沿用Query信号，成功失败均释放位置；不保存结果缓存，不截断历史。
+frontend/src/features/model-check/hooks/use-animation-tasks.ts	ea6ac51984ec4b96d3e992f046c1c3836ead83e542205b3859062b9525b835f2	fixed	完整复审；详情读取接入有界队列，按摘要与缓存的纳秒版本判断优先级；保留终态更新失效、慢请求不中断、失败重试与逐账号状态。全历史查询观察者及完整结果缓存仍随账号增长，未声明整体内存有界。
+frontend/src/features/model-check/hooks/__tests__/history-concurrency.test.tsx	f19b0280b492f709afd31874ff9fe47ecd418adc3de9eeaa48b9dfe318cea401	reviewed	完整阅读；真实Hook/Query/API及可控Fetch覆盖四路上限、全部账号结果、活动优先、新版本优先、慢响应体、空历史、离开取消和失败重试；无固定等待或生产网络。
+frontend/src/features/model-check/hooks/__tests__/history-refresh.test.tsx	8382f6c630cb1e83b7d210f8e562545c147c3feb2296355791b6efdaa99f37f3	reviewed	完整复审；纳秒版本刷新、相同/旧版本避免重复读取、失败保留结果并重试、慢详情不被后续刷新取消、重新挂载更新旧缓存，限流后六项通过。
+frontend/src/features/model-check/hooks/__tests__/animation-request-lifecycle.test.tsx	4509b9095f77913bec27cf563bab592450a29ee08c8e1e791742226f5d3bd6dc	reviewed	完整复审；未读取历史及已有历史两条路径的离开取消，迟到响应不触发额外请求，不取消业务任务，限流后两项通过。

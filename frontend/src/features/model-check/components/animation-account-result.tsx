@@ -9,6 +9,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { AnimationPreview } from "./animation-preview";
 import { AnimationCardResult } from "./animation-card-result";
 import { AnimationResultDetails } from "./animation-result-details";
+import { AnimationManualVerdictControls } from "./animation-manual-verdict";
 
 const resultStatusLabels = { succeeded: "成功", failed: "失败" } as const;
 const compactTimeFormat = new Intl.DateTimeFormat("zh-CN", {
@@ -115,6 +116,7 @@ export const AnimationAccountResult = memo(function AnimationAccountResult(props
         <span className="shrink-0">耗时 {(result.duration_ms / 1000).toFixed(1)} 秒</span>
         <AnimationResultDetails result={result} />
       </div>
+      <AnimationManualVerdictControls result={result} disabled={props.retryDisabled} />
     </div>
   );
 });

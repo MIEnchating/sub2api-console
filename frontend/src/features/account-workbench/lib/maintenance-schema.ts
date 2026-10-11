@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { WorkbenchMaintenance } from "../types";
 
 export const maintenanceSchema = z.object({
   enabled: z.boolean(),
@@ -8,3 +9,13 @@ export const maintenanceSchema = z.object({
   group_ids: z.array(z.string().regex(/^[1-9]\d*$/, "分组 ID 无效")).max(500),
 });
 export type MaintenanceValues = z.infer<typeof maintenanceSchema>;
+
+export function maintenanceFormValues(value: WorkbenchMaintenance): MaintenanceValues {
+  return {
+    enabled: value.enabled,
+    interval_minutes: value.interval_minutes,
+    cooldown_minutes: value.cooldown_minutes,
+    check_after_repair: value.check_after_repair,
+    group_ids: value.group_ids,
+  };
+}

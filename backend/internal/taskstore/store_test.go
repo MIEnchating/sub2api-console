@@ -185,7 +185,7 @@ func TestConsoleTaskSummariesOnlyIncludeSystemInfoTasks(t *testing.T) {
 	}
 }
 
-func TestConsoleTaskSummariesReturnTheLatestTwentyRecords(t *testing.T) {
+func TestConsoleTaskSummariesDefaultToLatestTwentyRecords(t *testing.T) {
 	store, err := Open(filepath.Join(t.TempDir(), "tasks.sqlite3"))
 	if err != nil {
 		t.Fatal(err)
@@ -205,8 +205,7 @@ func TestConsoleTaskSummariesReturnTheLatestTwentyRecords(t *testing.T) {
 		}
 	}
 
-	limit := 20
-	summaries, err := store.ListConsoleSummaries(ctx, &limit)
+	summaries, err := store.ListConsoleSummaries(ctx, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

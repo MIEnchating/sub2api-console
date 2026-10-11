@@ -8,6 +8,7 @@ import (
 )
 
 func TestCrossGroupTrafficResamplingPreservesKnownLatency(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name         string
 		oldToken     any
@@ -87,6 +88,7 @@ func TestCrossGroupTrafficResamplingPreservesKnownLatency(t *testing.T) {
 }
 
 func TestCrossGroupTrafficResamplingPreservesLegacyFirstTokenForRouting(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name   string
 		metric string
@@ -136,6 +138,7 @@ func TestCrossGroupTrafficResamplingPreservesLegacyFirstTokenForRouting(t *testi
 }
 
 func TestCrossGroupTrafficResamplingMergesOutOfOrderBatchIntoNewestSample(t *testing.T) {
+	t.Parallel()
 	store := openPolicyStore(t)
 	ctx := context.Background()
 	newest := groupLatencySample("pro", nil, "")
@@ -177,6 +180,7 @@ func TestCrossGroupTrafficResamplingMergesOutOfOrderBatchIntoNewestSample(t *tes
 }
 
 func TestCrossGroupTrafficResamplingKeepsStableIdentityIsolated(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name      string
 		accountID string

@@ -231,3 +231,63 @@ test("窄屏没有任务时无需横向滚动即可完整看到空状态", async
   const container = page.getByTestId("system-tasks-panel").locator('[data-slot="table-container"]');
   expect(await container.evaluate((element) => element.scrollLeft)).toBe(0);
 });
+
+test("普通任务启动期间不显示虚构百分比，取得后端进度后更新详情", async ({ page }) => {
+  let current: Task = {
+    ...activeTask,
+    operation: "active-probe",
+    status: "queued",
+    progress: 0,
+    message: "等待探活执行",
+    result: {},
+  };
+  await page.route("**/api/tasks?*", (route) => route.fulfill({ json: [current] }));
+  await page.route(`**/api/tasks/${current.id}`, (route) => route.fulfill({ json: current }));
+  await page.goto("/system-info");
+  const table = page.getByRole("table", { name: "后台任务" });
+  await expect(table.getByRole("status", { name: "等待任务进度" })).toBeVisible();
+  await expect(table.getByRole("progressbar")).toHaveCount(0);
+  await expect(table.getByText("0%", { exact: true })).toHaveCount(0);
+  await table.getByRole("button", { name: "查看任务" }).click();
+  const dialog = page.getByRole("dialog", { name: "任务详情" });
+  await expect(dialog.getByRole("status", { name: "等待探活执行" })).toBeVisible();
+  await expect(dialog.getByRole("progressbar")).toHaveCount(0);
+  current = { ...current, status: "running", progress: 40, message: "已完成 2/5 项" };
+  await expect(dialog.getByRole("progressbar", { name: "任务详情进度" })).toHaveAttribute(
+    "aria-valuenow",
+    "40",
+  );
+  await expect(dialog.getByText("已完成 2/5 项", { exact: true })).toBeVisible();
+  await expect(dialog.getByRole("status", { name: "等待探活执行" })).toHaveCount(0);
+});
+
+test("任务详情读取期间可关闭并取消读取，焦点回到查看入口", async ({ page }) => {
+  let release: () => void = () => {};
+  const pending = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await page.route(`**/api/tasks/${activeTask.id}`, async (route) => {
+    await pending;
+    await route.fulfill({ json: { ...activeTask, result: {} } });
+  });
+  try {
+    await page.goto("/system-info");
+    const opener = page.getByRole("button", { name: "查看任务", exact: true });
+    const started = page.waitForRequest(`**/api/tasks/${activeTask.id}`);
+    await opener.click();
+    await started;
+    const dialog = page.getByRole("dialog", { name: "任务详情" });
+    await expect(dialog.getByRole("status", { name: "正在读取任务详情" })).toBeVisible();
+    const cancelled = page.waitForEvent("requestfailed", (request) =>
+      request.url().endsWith(`/api/tasks/${activeTask.id}`),
+    );
+    await page.keyboard.press("Escape");
+    await cancelled;
+    release();
+    await expect(dialog).not.toBeVisible();
+    await expect(opener).toBeFocused();
+  } finally {
+    release();
+    await page.unrouteAll({ behavior: "wait" });
+  }
+});

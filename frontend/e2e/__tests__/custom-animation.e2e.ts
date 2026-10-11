@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 import type { Task } from "../../src/api";
+import { dictionaryResponse } from "./fixtures/dictionaries";
 import { pageFixtures } from "./fixtures/page-shell";
 
 test("无账号时自定义接口可确认生成、查看动画并清除 Key，长地址和模型在窄屏不溢出", async ({
@@ -61,6 +62,7 @@ test("无账号时自定义接口可确认生成、查看动画并清除 Key，�
     }
     const fixtures: Record<string, unknown> = {
       ...pageFixtures,
+      "/api/dictionaries": dictionaryResponse(route.request().url()),
       "/api/setup/status": { initialized: true, configuration_errors: [] },
       "/api/auth/session": { authenticated: true, username: "自定义动画测试" },
       "/api/accounts": [],

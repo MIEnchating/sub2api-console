@@ -1,38 +1,10 @@
-import "@testing-library/jest-dom/vitest";
+import { afterEach, vi } from "vitest";
 
-import { cleanup } from "@testing-library/react";
-import { afterEach, beforeEach, vi } from "vitest";
-
-const nativeMatches = Element.prototype.matches;
-
-beforeEach(() => {
-  // JSDOM 不进行文字布局；编辑器的几何测量由浏览器测试覆盖。
-  Object.defineProperty(Range.prototype, "getClientRects", { configurable: true, value: () => [] });
-  Object.defineProperty(Range.prototype, "getBoundingClientRect", {
-    configurable: true,
-    value: () => new DOMRect(),
+// Pure contract tests avoid loading React Testing Library and DOM polyfills.
+if (typeof document !== "undefined") {
+  await import("./setup-dom");
+} else {
+  afterEach(() => {
+    vi.unstubAllGlobals();
   });
-  vi.stubGlobal(
-    "ResizeObserver",
-    class {
-      observe(): void {}
-      unobserve(): void {}
-      disconnect(): void {}
-    },
-  );
-  // Keep this JSDOM polyfill through teardown: pending Floating UI promises
-  // can query top-layer state after cleanup, when NWSAPI would recurse.
-  Element.prototype.matches = function matches(selector: string): boolean {
-    if (selector === ":modal" || selector === ":fullscreen" || selector === ":popover-open") {
-      return false;
-    }
-    return nativeMatches.call(this, selector);
-  };
-});
-
-afterEach(() => {
-  cleanup();
-  Reflect.deleteProperty(Range.prototype, "getClientRects");
-  Reflect.deleteProperty(Range.prototype, "getBoundingClientRect");
-  vi.unstubAllGlobals();
-});
+}

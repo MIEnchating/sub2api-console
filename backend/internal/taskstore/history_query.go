@@ -81,23 +81,60 @@ func (s *Store) QueryBySkill(ctx context.Context, skill string, input HistoryQue
 	}
 	defer tx.Rollback()
 	page := HistoryPage{Items: []Task{}, Offset: input.Offset, Limit: input.Limit}
-	if err := tx.QueryRowContext(ctx, "SELECT count(*) FROM tasks WHERE "+where, args...).Scan(&page.Total); err != nil {
-		return HistoryPage{}, err
-	}
 	args = append(args, input.Limit, input.Offset)
-	rows, err := tx.QueryContext(ctx, "SELECT id,skill,operation,status,progress,message,result_json,created_at,updated_at FROM tasks WHERE "+where+" ORDER BY updated_at DESC,id LIMIT ? OFFSET ?", args...)
+	// Keep large result bodies out of the count window and its temporary sort.
+	// Materialize only the requested IDs before looking up their full records.
+	rows, err := tx.QueryContext(ctx, `WITH page AS MATERIALIZED (
+		SELECT id,updated_at,COUNT(*) OVER() AS total FROM tasks WHERE `+where+`
+		ORDER BY updated_at DESC,id LIMIT ? OFFSET ?
+	) SELECT t.id,t.skill,t.operation,t.status,t.progress,t.message,t.result_json,t.created_at,t.updated_at,page.total
+	FROM page JOIN tasks t ON t.id=page.id ORDER BY page.updated_at DESC,page.id`, args...)
 	if err != nil {
 		return HistoryPage{}, err
 	}
 	defer rows.Close()
+	hasRows := false
 	for rows.Next() {
-		task, err := scanTask(rows)
+		var total int
+		task, err := scanTaskWithTotal(rows, &total)
 		if err != nil {
 			return HistoryPage{}, err
 		}
+		if page.Total == 0 {
+			page.Total = total
+		}
+		hasRows = true
 		page.Items = append(page.Items, task)
 	}
-	return page, rows.Err()
+	if err := rows.Err(); err != nil {
+		return HistoryPage{}, err
+	}
+	if !hasRows {
+		if err := tx.QueryRowContext(ctx, "SELECT count(*) FROM tasks WHERE "+where, args[:len(args)-2]...).Scan(&page.Total); err != nil {
+			return HistoryPage{}, err
+		}
+	}
+	return page, nil
+}
+
+func scanTaskWithTotal(scanner scanner, total *int) (Task, error) {
+	var task Task
+	var raw string
+	if err := scanner.Scan(
+		&task.ID,
+		&task.Skill,
+		&task.Operation,
+		&task.Status,
+		&task.Progress,
+		&task.Message,
+		&raw,
+		&task.CreatedAt,
+		&task.UpdatedAt,
+		total,
+	); err != nil {
+		return Task{}, err
+	}
+	return decodeTaskResult(task, raw)
 }
 
 // ActiveBySkill returns the entire current cancellation scope independently of

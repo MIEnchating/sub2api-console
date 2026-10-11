@@ -1,8 +1,10 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { TrafficRankingPage } from "../components/traffic-ranking-page";
+import { TrafficRankingTable } from "../components/traffic-ranking-table";
 import { rankingFixture } from "./fixtures";
 
 const clients: QueryClient[] = [];
@@ -17,7 +19,7 @@ function renderRanking(): void {
   clients.push(client);
   client.setQueryData(["groups"], []);
   client.setQueryData(["dictionaries", "platform"], { items: [] });
-  client.setQueryData(["traffic-ranking", "24h", "all", "traffic"], rankingFixture);
+  client.setQueryData(["traffic-ranking", "24h", null, "traffic"], rankingFixture);
   render(
     <QueryClientProvider client={client}>
       <TrafficRankingPage />
@@ -26,6 +28,32 @@ function renderRanking(): void {
 }
 
 describe("流量排行布局", () => {
+  it("键盘聚焦缓存占比说明时展示口径，Escape 关闭且保留焦点", async () => {
+    const user = userEvent.setup();
+    render(
+      <TrafficRankingTable
+        rows={[]}
+        bucket="hour"
+        sortBy="traffic"
+        failed={false}
+        pending={false}
+        onRetry={() => {}}
+      />,
+    );
+    const heading = screen.getByRole("columnheader", { name: /缓存占比/ });
+    expect(heading).not.toHaveAttribute("title");
+    const trigger = within(heading).getByText("缓存占比");
+    expect(trigger).toHaveAttribute("tabindex", "0");
+    await user.tab();
+    expect(trigger).toHaveFocus();
+    const tooltip = await screen.findByRole("tooltip");
+    expect(tooltip).toHaveTextContent("输入侧用量 = 输入 + 缓存读取 + 缓存写入，不含输出");
+    expect(trigger).toHaveAccessibleDescription(tooltip.textContent ?? "");
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+    expect(trigger).toHaveFocus();
+  });
+
   it("有流量时合并账号排名与活跃信息，保留所有指标和清晰标签", () => {
     renderRanking();
 
@@ -43,10 +71,6 @@ describe("流量排行布局", () => {
     expect(within(row).getByText("0.05 M")).toBeInTheDocument();
     expect(within(row).getByText("6.19%")).toBeInTheDocument();
     expect(within(row).getByText("0.93%")).toBeInTheDocument();
-    expect(within(table).getByRole("columnheader", { name: /缓存占比/ })).toHaveAttribute(
-      "title",
-      "读取、写入分别占输入侧用量的比例；输入侧用量 = 输入 + 缓存读取 + 缓存写入，不含输出。",
-    );
     expect(within(row).getByText("输入")).toBeInTheDocument();
     expect(within(row).getByText("输出")).toBeInTheDocument();
     expect(within(row).getByText("读取")).toBeInTheDocument();

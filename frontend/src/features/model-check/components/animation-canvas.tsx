@@ -26,7 +26,7 @@ export function AnimationCanvas(props: {
     observer.observe(host);
     return () => observer.disconnect();
   }, [document]);
-  const alt = `${props.result.account_name}生成的鹈鹕骑自行车动画`;
+  const alt = `${props.result.account_name}生成的动画`;
   if (document) {
     const scale = Math.min(size.width / canvasWidth, size.height / canvasHeight);
     return (

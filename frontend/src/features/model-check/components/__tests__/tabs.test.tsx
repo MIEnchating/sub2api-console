@@ -93,7 +93,7 @@ it("独立动画页保留账号链接、超时设置和查看全部账号入口"
   expect(within(panel).getByRole("combobox", { name: "检测模型" })).toHaveValue("gpt-6-astra");
   expect(screen.queryByRole("tab", { name: "常规检测" })).not.toBeInTheDocument();
   expect(screen.getByRole("tab", { name: "前置检测" })).toBeVisible();
-  expect(screen.getByRole("tab", { name: "终端续接检测" })).toBeVisible();
+  expect(screen.queryByRole("tab", { name: "终端续接检测" })).not.toBeInTheDocument();
   expect(within(panel).getByRole("checkbox", { name: /检测 人工账号/ })).toBeChecked();
   await user.click(screen.getByRole("button", { name: "查看全部账号" }));
   expect(screen.getByRole("article", { name: "账号 自动账号" })).toBeVisible();
@@ -104,6 +104,12 @@ it("独立动画页保留账号链接、超时设置和查看全部账号入口"
   expect(screen.getByRole("tab", { name: "前置检测" })).toHaveAttribute("aria-selected", "true");
   await user.keyboard("{ArrowRight}{Enter}");
   expect(screen.getByRole("tab", { name: "自定义接口" })).toHaveAttribute("aria-selected", "true");
+  await user.keyboard("{ArrowRight}{Enter}");
+  expect(screen.getByRole("tab", { name: "任务管理" })).toHaveAttribute("aria-selected", "true");
+  expect(fetch).not.toHaveBeenCalledWith(
+    expect.stringContaining("terminal-continuity"),
+    expect.anything(),
+  );
   dispose();
 });
 

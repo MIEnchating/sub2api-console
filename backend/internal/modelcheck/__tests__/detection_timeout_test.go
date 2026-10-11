@@ -40,8 +40,7 @@ func TestDetectionTaskDeadlineCoversSelectedAccountsStagesAndRounds(t *testing.T
 	}{
 		{name: "200 prechecks budget 50 parallel batches", accounts: 200, precheck: true, minimumRemaining: 50 * 120 * time.Second},
 		{name: "small batch retains its minimum", accounts: 1, precheck: true, minimumRemaining: 29 * time.Minute},
-		{name: "terminal budget includes every round", accounts: 2, terminal: true, rounds: 20, minimumRemaining: 20 * 120 * time.Second},
-		{name: "combined stages include animation retries", accounts: 10, precheck: true, terminal: true, animation: true, rounds: 2, minimumRemaining: 3 * 6 * 120 * time.Second},
+		{name: "combined stages include animation retries", accounts: 10, precheck: true, animation: true, minimumRemaining: 29 * time.Minute},
 		{name: "legacy configuration budgets animation", accounts: 10, legacyAnimation: true, minimumRemaining: 29 * time.Minute},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

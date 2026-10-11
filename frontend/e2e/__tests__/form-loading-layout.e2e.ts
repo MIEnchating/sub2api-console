@@ -104,7 +104,7 @@ for (const scenario of [
     tab: "自动维护",
     endpoint: "/api/account-workbench/maintenance",
     loading: "正在读取维护设置",
-    ready: "维护设置",
+    ready: "维护结果",
     skeletons: 3,
   },
   {
@@ -134,7 +134,15 @@ for (const scenario of [
     if (scenario.tab === "配置模板") {
       await expect(ready.getByRole("article")).toHaveCount(2);
       await expect(page.getByRole("button", { name: "创建模板", exact: true })).toBeEnabled();
-    } else await expect(page.getByRole("button", { name: "预览并保存" })).toBeEnabled();
+    } else {
+      const settings = page.getByRole("button", { name: "维护设置", exact: true });
+      await expect(settings).toBeEnabled();
+      await settings.click();
+      const dialog = page.getByRole("dialog", { name: "维护设置", exact: true });
+      await expect(dialog.getByRole("button", { name: "预览并保存" })).toBeEnabled();
+      await expectNoOverflow(dialog);
+      await dialog.getByRole("button", { name: "取消", exact: true }).click();
+    }
     await expectNoOverflow(page.getByRole("tabpanel"));
   });
 }

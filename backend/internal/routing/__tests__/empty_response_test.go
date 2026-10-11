@@ -7,6 +7,7 @@ import (
 )
 
 func TestSuccessfulZeroTokenTrafficLowersHealthAndDoesNotRecover(t *testing.T) {
+	t.Parallel()
 	health, err := routing.HealthScore([]routing.Sample{
 		{Result: "通过", Source: "traffic", Payload: map[string]any{"input_tokens": 0, "output_tokens": 0, "first_token_ms": 1800}},
 		{Result: "通过", Source: "traffic"},
@@ -23,6 +24,7 @@ func TestSuccessfulZeroTokenTrafficLowersHealthAndDoesNotRecover(t *testing.T) {
 }
 
 func TestEmptyResponseRequiresExplicitZeroUsageAndPreservesOtherFailures(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name, source, result string
 		payload              map[string]any
@@ -51,6 +53,7 @@ func TestEmptyResponseRequiresExplicitZeroUsageAndPreservesOtherFailures(t *test
 }
 
 func TestEmptyResponseUsesConfiguredScore(t *testing.T) {
+	t.Parallel()
 	got, err := routing.ClassifySample(routing.Sample{Result: "通过", Source: "traffic", Payload: map[string]any{"input_tokens": 0, "output_tokens": 0}}, map[string]any{"scoring": map[string]any{"event_scores": map[string]any{"empty_response": 35}}})
 	if err != nil || got.Score != 35 || !got.Failure {
 		t.Fatalf("classified=%+v err=%v", got, err)

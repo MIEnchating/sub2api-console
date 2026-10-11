@@ -192,11 +192,16 @@ func (s *Service) CalculateRevenue(ctx context.Context, request RevenueRequest, 
 		return RevenueReport{}, err
 	}
 
+	var upstream map[string]upstreamsync.KeyUsageObservation
+	var issues []RevenueIssue
+	upstreamDone := make(chan struct{})
+	go func() {
+		defer close(upstreamDone)
+		upstream, issues = s.fetchUpstreamRevenueUsage(ctx, authStore, catalog.Accounts, date, start, end, actor)
+	}()
 	local := fetchLocalRevenueUsage(ctx, management, catalog.Accounts, date)
-	if err := ctx.Err(); err != nil {
-		return RevenueReport{}, err
-	}
-	upstream, issues := s.fetchUpstreamRevenueUsage(ctx, authStore, catalog.Accounts, date, start, end, actor)
+	// Join both readers before releasing the target lease, including on cancellation.
+	<-upstreamDone
 	if err := ctx.Err(); err != nil {
 		return RevenueReport{}, err
 	}
@@ -256,14 +261,11 @@ func revenueWindow(raw string, now time.Time) (string, time.Time, time.Time, err
 func fetchLocalRevenueUsage(ctx context.Context, client *adminclient.Client, accounts []business.RevenueAccount, date string) map[string]localUsageResult {
 	result := make(map[string]localUsageResult, len(accounts))
 	jobs := make(chan business.RevenueAccount)
+	workers := min(8, len(accounts))
 	values := make(chan struct {
 		id string
 		localUsageResult
-	}, len(accounts))
-	workers := 8
-	if len(accounts) < workers {
-		workers = len(accounts)
-	}
+	}, workers)
 	var wait sync.WaitGroup
 	for index := 0; index < workers; index++ {
 		wait.Add(1)
@@ -315,11 +317,8 @@ func (s *Service) fetchUpstreamRevenueUsage(
 	}
 	sort.Strings(hosts)
 	jobs := make(chan string)
-	results := make(chan upstreamUsageResult, len(hosts))
-	workers := 4
-	if len(hosts) < workers {
-		workers = len(hosts)
-	}
+	workers := min(4, len(hosts))
+	results := make(chan upstreamUsageResult, workers)
 	var wait sync.WaitGroup
 	for index := 0; index < workers; index++ {
 		wait.Add(1)
@@ -448,11 +447,8 @@ func (s *Service) readSub2APIRevenueKeys(
 		return values, nil
 	}
 	jobs := make(chan string)
-	results := make(chan readResult, len(keyIDs))
-	workers := 4
-	if len(keyIDs) < workers {
-		workers = len(keyIDs)
-	}
+	workers := min(4, len(keyIDs))
+	results := make(chan readResult, workers)
 	var wait sync.WaitGroup
 	for index := 0; index < workers; index++ {
 		wait.Add(1)

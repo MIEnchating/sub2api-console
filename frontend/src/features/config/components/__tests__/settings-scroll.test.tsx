@@ -44,6 +44,8 @@ describe("系统设置滚动边界", () => {
 
   it("界面与日志为右侧分配四成宽度，保留天数标签不拆行", () => {
     const client = new QueryClient({ defaultOptions: { queries: { enabled: false } } });
+    client.setQueryDefaults(["log-cleanup"], { staleTime: Infinity });
+    client.setQueryData(["log-cleanup"], { enabled: false, retention_days: 30 });
     render(
       <QueryClientProvider client={client}>
         <ConfigPage activeTab="interface" />

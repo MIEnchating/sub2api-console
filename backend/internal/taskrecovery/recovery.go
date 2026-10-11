@@ -14,22 +14,26 @@ var ErrBusy = errors.New("恢复任务所需资源仍在使用")
 
 type Handler func(context.Context, taskstore.Task) error
 
-func Run(ctx context.Context, store *taskstore.Store, pending []taskstore.Task, handlers map[string]Handler) {
+func Run(ctx context.Context, store *taskstore.Store, pending []taskstore.RecoveryRef, handlers map[string]Handler) {
 	for len(pending) > 0 && ctx.Err() == nil {
-		remaining := make([]taskstore.Task, 0, len(pending))
-		for _, task := range pending {
+		remaining := make([]taskstore.RecoveryRef, 0, len(pending))
+		for _, ref := range pending {
 			if ctx.Err() != nil {
 				return
 			}
-			current, err := store.Get(ctx, task.ID)
+			task, err := store.RecoveryTask(ctx, ref.ID)
 			if errors.Is(err, taskstore.ErrNotFound) {
 				continue
 			}
-			if err != nil {
-				remaining = append(remaining, task)
+			if errors.Is(err, taskstore.ErrInvalidRecovery) {
+				failRecovery(store, task, err)
 				continue
 			}
-			if current.Status != "queued" {
+			if err != nil {
+				remaining = append(remaining, ref)
+				continue
+			}
+			if task.Status != "queued" {
 				continue
 			}
 			handler := handlers[task.Operation]
@@ -42,17 +46,13 @@ func Run(ctx context.Context, store *taskstore.Store, pending []taskstore.Task, 
 				continue
 			}
 			if errors.Is(err, taskrunner.ErrCapacity) || errors.Is(err, ErrBusy) {
-				remaining = append(remaining, task)
+				remaining = append(remaining, ref)
 				continue
 			}
 			if ctx.Err() != nil || errors.Is(err, taskrunner.ErrStopped) {
 				return
 			}
-			task.Status = "failed"
-			task.Message = "任务恢复失败：" + err.Error()
-			task.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
-			task.Result["error"] = task.Message
-			taskstore.PersistFinal(store, task)
+			failRecovery(store, task, err)
 		}
 		pending = remaining
 		if len(pending) == 0 {
@@ -66,4 +66,12 @@ func Run(ctx context.Context, store *taskstore.Store, pending []taskstore.Task, 
 		case <-timer.C:
 		}
 	}
+}
+
+func failRecovery(store taskstore.Saver, task taskstore.Task, err error) {
+	task.Status = "failed"
+	task.Message = "任务恢复失败：" + err.Error()
+	task.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+	task.Result["error"] = task.Message
+	taskstore.PersistFinal(store, task)
 }

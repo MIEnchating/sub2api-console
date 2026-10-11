@@ -37,6 +37,7 @@ func reductionFixture(t *testing.T, accounts ...business.RoutingAccount) *upstre
 }
 
 func TestIndependentUpstreamReductionLowersOverageWithScalingAndFieldSwitchesDisabled(t *testing.T) {
+	t.Parallel()
 	repository := reductionFixture(t, upstreamCapacityAccount("41", 80, 10), upstreamCapacityAccount("42", 80, 10))
 	for _, id := range []string{"41", "42"} {
 		repository.previous = append(repository.previous, business.PreviousRoutingDecision{AccountID: id, GroupName: "codex", State: "healthy", LastApplyAt: time.Now()})
@@ -54,6 +55,7 @@ func TestIndependentUpstreamReductionLowersOverageWithScalingAndFieldSwitchesDis
 }
 
 func TestIndependentUpstreamReductionDoesNotTouchCapacityWithoutConfirmedFiniteOverage(t *testing.T) {
+	t.Parallel()
 	for _, name := range []string{"at limit with fused reservation", "unlimited", "unknown", "other upstream type", "disabled"} {
 		t.Run(name, func(t *testing.T) {
 			first, second := upstreamCapacityAccount("41", 10, 10), upstreamCapacityAccount("42", 10, 10)
@@ -97,6 +99,7 @@ func TestIndependentUpstreamReductionDoesNotTouchCapacityWithoutConfirmedFiniteO
 }
 
 func TestIndependentUpstreamReductionReservesProtectedAccountsAndPausesByStablePriority(t *testing.T) {
+	t.Parallel()
 	first, second, manual := upstreamCapacityAccount("10", 5, 3), upstreamCapacityAccount("2", 5, 3), upstreamCapacityAccount("41", 2, 3)
 	priority := int64(1)
 	manual.ManualPriority = &priority
@@ -117,6 +120,7 @@ func TestIndependentUpstreamReductionReservesProtectedAccountsAndPausesByStableP
 }
 
 func TestIndependentSharedAllocationUsesPriceWeightsAndDefersGrowthUntilReadback(t *testing.T) {
+	t.Parallel()
 	first, second, small := upstreamCapacityAccount("41", 100, 17), upstreamCapacityAccount("42", 100, 17), upstreamCapacityAccount("43", 1, 17)
 	expensive := "4"
 	second.Multiplier = &expensive
@@ -136,6 +140,7 @@ func TestIndependentSharedAllocationUsesPriceWeightsAndDefersGrowthUntilReadback
 }
 
 func TestIndependentSharedAllocationRecoversCapacityPauseAfterLimitIncreases(t *testing.T) {
+	t.Parallel()
 	first, waiting := upstreamCapacityAccount("41", 1, 10), upstreamCapacityAccount("42", 1, 10)
 	inactive := false
 	waiting.Schedulable, waiting.EffectiveState = &inactive, "concurrency_limited"
@@ -150,6 +155,7 @@ func TestIndependentSharedAllocationRecoversCapacityPauseAfterLimitIncreases(t *
 }
 
 func TestIndependentUpstreamReductionStillLowersOverageWhileHealthEvidenceIsPending(t *testing.T) {
+	t.Parallel()
 	repository := reductionFixture(t, upstreamCapacityAccount("41", 80, 10), upstreamCapacityAccount("42", 80, 10))
 	for _, id := range []string{"41", "42"} {
 		repository.samples = append(repository.samples, business.RoutingSample{AccountID: id, GroupName: "codex", Source: "traffic", Result: "通过", ObservedAt: time.Now().UTC().Format(time.RFC3339Nano), Payload: map[string]any{"input_tokens": 0, "output_tokens": 0}})
@@ -169,6 +175,7 @@ func TestIndependentUpstreamReductionStillLowersOverageWhileHealthEvidenceIsPend
 }
 
 func TestSharedAllocationWithScalingEnabledAppliesConfiguredStepOnlyOnce(t *testing.T) {
+	t.Parallel()
 	repository := reductionFixture(t, upstreamCapacityAccount("41", 100, 10), upstreamCapacityAccount("42", 1, 10))
 	repository.policy["scaling"].(map[string]any)["enabled"] = true
 	repository.policy["auto_apply"] = map[string]any{"concurrency": true, "schedulable": true}

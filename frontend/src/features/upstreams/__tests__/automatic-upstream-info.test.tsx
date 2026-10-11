@@ -30,11 +30,14 @@ it("新上游验证成功后自动获取开户所需的上游信息", async () =
   vi.spyOn(api, "createUpstream").mockResolvedValue(upstream);
   client = renderOnboarding();
 
-  await user.type(await screen.findByLabelText("上游地址", { exact: true }), upstream.host);
+  await user.click(await screen.findByLabelText("上游地址", { exact: true }));
+  await user.paste(upstream.host);
   await user.click(screen.getByRole("combobox", { name: "鉴权方式" }));
   await user.click(await screen.findByRole("option", { name: "Token + 刷新 Token" }));
-  await user.type(screen.getByLabelText("Token", { exact: true }), "access-token");
-  await user.type(screen.getByLabelText("刷新 Token", { exact: true }), "refresh-token");
+  await user.click(screen.getByLabelText("Token", { exact: true }));
+  await user.paste("access-token");
+  await user.click(screen.getByLabelText("刷新 Token", { exact: true }));
+  await user.paste("refresh-token");
   await user.click(screen.getByRole("button", { name: "添加并验证上游" }));
 
   await waitFor(() =>

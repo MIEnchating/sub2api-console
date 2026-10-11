@@ -8,14 +8,13 @@ import (
 	"testing"
 )
 
-func TestDetectionTaskCancellationStopsRemainingTerminalRoundsAndAnimation(t *testing.T) {
+func TestDetectionTaskCancellationDuringPrecheckStopsAnimation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	var requests atomic.Int32
 	f := setup(t, 1, "openai", func(w http.ResponseWriter, r *http.Request) { requests.Add(1); cancel() })
 	f.catalog.groupMembers = map[string][]string{"7": {"1"}, "8": {"1"}}
 	value := managedTask()
-	value.Precheck = false
 	plans, err := f.service.SaveDetectionTask(context.Background(), value, "test")
 	if err != nil {
 		t.Fatal(err)
@@ -30,8 +29,9 @@ func TestDetectionTaskCancellationStopsRemainingTerminalRoundsAndAnimation(t *te
 	if task.Status != "cancelled" || requests.Load() != 1 {
 		t.Fatalf("cancellation continued: %s %d", task.Status, requests.Load())
 	}
-	if len(task.Result["animations"].([]modelcheck.AnimationResult)) != 0 {
-		t.Fatal("animation started after cancel")
+	results := task.Result["animations"].([]modelcheck.AnimationResult)
+	if len(results) != 1 || results[0].Mode != "precheck" {
+		t.Fatalf("cancelled precheck did not stop animation: %+v", results)
 	}
 	if f.service.DetectionTasks()[0].Running {
 		t.Fatal("cancelled plan still busy")

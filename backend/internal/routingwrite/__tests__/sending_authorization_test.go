@@ -13,6 +13,7 @@ import (
 )
 
 func TestPendingWriteIsSkippedWhenModeChangesDuringEarlierRequest(t *testing.T) {
+	t.Parallel()
 	_, fixture := newUpstreamCapacityWriteFixture(t, writeCapacityPointer(20), 4, 4, true)
 	if _, err := fixture.store.UpdatePolicy(t.Context(), map[string]any{
 		"advanced_policy": map[string]any{"writeback": map[string]any{"concurrency": 1}},
@@ -49,6 +50,7 @@ func TestPendingWriteIsSkippedWhenModeChangesDuringEarlierRequest(t *testing.T) 
 }
 
 func TestFailedWriteIsNotRetriedAfterModeChangesDuringRequest(t *testing.T) {
+	t.Parallel()
 	_, fixture := newUpstreamCapacityWriteFixture(t, writeCapacityPointer(20), 4, 4, true)
 	var mutations atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
@@ -73,6 +75,7 @@ func TestFailedWriteIsNotRetriedAfterModeChangesDuringRequest(t *testing.T) {
 }
 
 func TestRecoveryDoesNotEnableTrafficWhenModeChangesAfterParameterWrite(t *testing.T) {
+	t.Parallel()
 	_, fixture := newUpstreamCapacityWriteFixture(t, writeCapacityPointer(20), 8, 4, false)
 	var schedulingWrites atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
@@ -102,6 +105,7 @@ func TestRecoveryDoesNotEnableTrafficWhenModeChangesAfterParameterWrite(t *testi
 }
 
 func TestManualRestoreStopsWhenModeChangesDuringRemoteRead(t *testing.T) {
+	t.Parallel()
 	_, fixture := newUpstreamCapacityWriteFixture(t, writeCapacityPointer(20), 4, 4, true)
 	var restoring atomic.Bool
 	var restoreWrites atomic.Int32
@@ -151,6 +155,7 @@ func (store *cleanupAuthorizationStore) RecordRuntimeEvent(ctx context.Context, 
 }
 
 func TestCleanupRevokedImmediatelyBeforeSendingIsSkippedWithoutClaimingWrite(t *testing.T) {
+	t.Parallel()
 	for _, active := range []bool{false, true} {
 		t.Run(map[bool]string{false: "already paused", true: "needs predisable"}[active], func(t *testing.T) {
 			_, fixture := newUpstreamCapacityWriteFixture(t, writeCapacityPointer(20), 4, 4, active)

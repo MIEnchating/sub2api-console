@@ -1,17 +1,31 @@
-import { useId, useState, type ReactElement } from "react";
+import { useId, useMemo, useState, type ReactElement } from "react";
 import { ChevronDown, ChevronUp } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import { DataTablePagination } from "@/components/data-table/pagination";
+import { useClientPagination } from "@/hooks/use-client-pagination";
+
+const mappingPageSize = 20;
 
 export function TemplateModelMapping(props: { mapping: unknown; compact?: boolean }): ReactElement {
   const id = useId();
   const [expanded, setExpanded] = useState(false);
-  const entries =
-    typeof props.mapping === "object" && props.mapping !== null
-      ? Object.entries(props.mapping)
-      : [];
+  const entries = useMemo(
+    () =>
+      typeof props.mapping === "object" && props.mapping !== null
+        ? Object.entries(props.mapping)
+        : [],
+    [props.mapping],
+  );
+  const pagination = useClientPagination(entries, mappingPageSize);
   const collapsible = props.compact && entries.length > 3;
-  const visible = collapsible && !expanded ? entries.slice(0, 3) : entries;
+  const collapsed = collapsible && !expanded;
+  const visible = collapsed ? entries.slice(0, 3) : pagination.visibleItems;
+  const showPagination =
+    !collapsed && entries.length > Math.min(mappingPageSize, pagination.pageSize);
+  let toggleLabel = `展开全部 ${entries.length} 条映射`;
+  if (entries.length > mappingPageSize) toggleLabel = `展开 ${entries.length} 条映射（分页）`;
+  if (expanded) toggleLabel = "收起映射";
   return (
     <section
       aria-label="模型映射"
@@ -53,6 +67,16 @@ export function TemplateModelMapping(props: { mapping: unknown; compact?: boolea
               ))}
             </tbody>
           </table>
+          {showPagination && (
+            <DataTablePagination
+              currentPage={pagination.currentPage}
+              totalPages={pagination.totalPages}
+              totalItems={entries.length}
+              pageSize={pagination.pageSize}
+              onPageChange={pagination.setCurrentPage}
+              onPageSizeChange={pagination.setPageSize}
+            />
+          )}
           {collapsible && (
             <div className="border-t px-2 py-1">
               <Button
@@ -61,10 +85,13 @@ export function TemplateModelMapping(props: { mapping: unknown; compact?: boolea
                 className="w-full text-muted-foreground"
                 aria-expanded={expanded}
                 aria-controls={id}
-                onClick={() => setExpanded(!expanded)}
+                onClick={() => {
+                  pagination.setCurrentPage(1);
+                  setExpanded(!expanded);
+                }}
               >
                 {expanded ? <ChevronUp aria-hidden="true" /> : <ChevronDown aria-hidden="true" />}
-                {expanded ? "收起映射" : `展开全部 ${entries.length} 条映射`}
+                {toggleLabel}
               </Button>
             </div>
           )}

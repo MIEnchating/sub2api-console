@@ -1,14 +1,13 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import { FieldError } from "@/components/field-error";
-import { useQuery } from "@tanstack/react-query";
+import { useDictionary } from "@/hooks/use-dictionary-order";
+import { DictionaryReadState } from "@/components/dictionary-read-state";
 import { Save } from "lucide-react";
 import { useEffect, useRef } from "react";
 import { useForm } from "react-hook-form";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { groupPlatformOptions } from "@/features/accounts/lib/account-labels";
-import { api } from "@/api";
 import { orderedDictionaryOptions } from "@/lib/domain-dictionaries";
 import { SettingsFooter } from "./settings-footer";
 import {
@@ -60,10 +59,7 @@ export function PlatformProbeModelsForm(props: {
   disabled?: boolean;
   onSubmit: (models: Record<string, string>) => void | Promise<void>;
 }) {
-  const platformDictionary = useQuery({
-    queryKey: ["dictionaries", "platform"],
-    queryFn: () => api.dictionaries("platform"),
-  });
+  const platformDictionary = useDictionary("platform");
   const form = useForm<PlatformProbeModelsValues>({
     resolver: zodResolver(platformProbeModelsSchema),
     defaultValues: platformProbeModelFormValues(props.models),
@@ -78,11 +74,8 @@ export function PlatformProbeModelsForm(props: {
     if (isDirty) return;
     form.reset(platformProbeModelFormValues(props.models));
   }, [form, isDirty, props.models]);
-  const platformOptions = orderedDictionaryOptions(
-    platformDictionary.data?.items,
-    groupPlatformOptions,
-  ).flatMap((option) =>
-    isPlatformProbeKey(option.value) ? [{ ...option, value: option.value }] : [],
+  const platformOptions = orderedDictionaryOptions(platformDictionary.data?.items).flatMap(
+    (option) => (isPlatformProbeKey(option.value) ? [{ ...option, value: option.value }] : []),
   );
 
   return (
@@ -101,6 +94,11 @@ export function PlatformProbeModelsForm(props: {
         data-slot="settings-scroll"
         className="grid min-h-0 flex-1 content-start gap-x-4 gap-y-3 overflow-y-auto overscroll-contain px-3 py-3 sm:grid-cols-2 lg:grid-cols-3"
       >
+        <DictionaryReadState kind="platform">
+          {platformOptions.length === 0 ? (
+            <p className="text-sm text-muted-foreground">暂无可配置的平台</p>
+          ) : null}
+        </DictionaryReadState>
         {platformOptions.map((platform) => {
           const error = form.formState.errors[platform.value]?.message;
           return (

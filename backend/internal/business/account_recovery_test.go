@@ -6,6 +6,7 @@ import (
 )
 
 func TestAccountRecoveryReadbackPreservesEngineGatesAndClearsManualOverrides(t *testing.T) {
+	t.Parallel()
 	store := openPolicyStore(t)
 	ctx := context.Background()
 	if _, err := store.db.ExecContext(ctx, `INSERT INTO accounts(id,name,schedulable,routing_state,metadata_json,updated_at) VALUES('41','recovering',0,'fused','{"status":"active"}','now')`); err != nil {
@@ -35,6 +36,7 @@ func TestAccountRecoveryReadbackPreservesEngineGatesAndClearsManualOverrides(t *
 }
 
 func TestIncompleteRecoveryPayloadDoesNotExposeInvalidProgress(t *testing.T) {
+	t.Parallel()
 	store := openPolicyStore(t)
 	ctx := context.Background()
 	if _, err := store.db.ExecContext(ctx, `INSERT INTO accounts(id,name,metadata_json,updated_at) VALUES('41','recovering','{}','now')`); err != nil {

@@ -72,6 +72,7 @@ func upstreamCapacityAccount(id string, current, limit int64) business.RoutingAc
 }
 
 func TestUpstreamConcurrencyDistributesFiniteCapacityByStableAccountID(t *testing.T) {
+	t.Parallel()
 	first, second, third := upstreamCapacityAccount("41", 1, 10), upstreamCapacityAccount("42", 1, 10), upstreamCapacityAccount("43", 1, 10)
 	repository := upstreamCapacityFixture(t, third, second, first)
 	result, err := routing.NewService(repository).Calculate(context.Background(), routing.Scope{}, true)
@@ -86,6 +87,7 @@ func TestUpstreamConcurrencyDistributesFiniteCapacityByStableAccountID(t *testin
 }
 
 func TestUpstreamConcurrencyReservesManualPausedAndOutOfScopeAccountsOnce(t *testing.T) {
+	t.Parallel()
 	first, manual, paused, outside := upstreamCapacityAccount("41", 1, 10), upstreamCapacityAccount("42", 2, 10), upstreamCapacityAccount("43", 2, 10), upstreamCapacityAccount("44", 2, 10)
 	priority := int64(1)
 	manual.ManualPriority = &priority
@@ -104,6 +106,7 @@ func TestUpstreamConcurrencyReservesManualPausedAndOutOfScopeAccountsOnce(t *tes
 }
 
 func TestUpstreamConcurrencyDoesNotSpendReductionBeforeReadback(t *testing.T) {
+	t.Parallel()
 	first, second := upstreamCapacityAccount("41", 8, 10), upstreamCapacityAccount("42", 2, 10)
 	repository := upstreamCapacityFixture(t, first, second)
 	result, err := routing.NewService(repository).Calculate(context.Background(), routing.Scope{}, true)
@@ -127,6 +130,7 @@ func TestUpstreamConcurrencyDoesNotSpendReductionBeforeReadback(t *testing.T) {
 }
 
 func TestUpstreamConcurrencyUnknownCapacityPreservesCurrentSetting(t *testing.T) {
+	t.Parallel()
 	account := upstreamCapacityAccount("41", 90, 100)
 	account.UpstreamConcurrencyLimit = nil
 	repository := upstreamCapacityFixture(t, account)
@@ -143,6 +147,7 @@ func TestUpstreamConcurrencyUnknownCapacityPreservesCurrentSetting(t *testing.T)
 }
 
 func TestUpstreamConcurrencyInsufficientCapacityNeverWritesUnlimitedZero(t *testing.T) {
+	t.Parallel()
 	repository := upstreamCapacityFixture(t, upstreamCapacityAccount("41", 2, 1), upstreamCapacityAccount("42", 2, 1))
 	result, err := routing.NewService(repository).Calculate(context.Background(), routing.Scope{}, true)
 	if err != nil {
@@ -159,6 +164,7 @@ func TestUpstreamConcurrencyInsufficientCapacityNeverWritesUnlimitedZero(t *test
 }
 
 func TestUpstreamConcurrencyUsesSchedulingStrategyToGiveCheaperAccountsMoreCapacity(t *testing.T) {
+	t.Parallel()
 	first, second := upstreamCapacityAccount("41", 1, 16), upstreamCapacityAccount("42", 1, 16)
 	expensive := "4"
 	second.Multiplier = &expensive
@@ -180,6 +186,7 @@ func TestUpstreamConcurrencyUsesSchedulingStrategyToGiveCheaperAccountsMoreCapac
 }
 
 func TestUpstreamConcurrencyConfirmedPauseWaitsForSafeCapacityThenResumesWithoutOscillation(t *testing.T) {
+	t.Parallel()
 	first, second := upstreamCapacityAccount("41", 2, 1), upstreamCapacityAccount("42", 2, 1)
 	repository := upstreamCapacityFixture(t, first, second)
 	if _, err := repository.UpdatePolicy(context.Background(), map[string]any{"auto_apply": map[string]any{"schedulable": true, "concurrency": true}}, "test"); err != nil {
@@ -237,6 +244,7 @@ func applyUpstreamCapacityReadback(repository *upstreamCapacityRepository, resul
 }
 
 func TestUpstreamConcurrencyRecoveryRequiresBothAutomaticWriteSwitches(t *testing.T) {
+	t.Parallel()
 	for _, flags := range []struct {
 		name        string
 		schedulable bool
@@ -266,6 +274,7 @@ func TestUpstreamConcurrencyRecoveryRequiresBothAutomaticWriteSwitches(t *testin
 }
 
 func TestUpstreamConcurrencyBudgetRemainsBoundedByGlobalCapacity(t *testing.T) {
+	t.Parallel()
 	first, unrelated := upstreamCapacityAccount("41", 1, 20), upstreamCapacityAccount("42", 90, 100)
 	unrelated.UpstreamID = "upstream-2"
 	unrelated.GroupName, unrelated.GroupID = "", nil
@@ -281,6 +290,7 @@ func TestUpstreamConcurrencyBudgetRemainsBoundedByGlobalCapacity(t *testing.T) {
 }
 
 func TestUpstreamConcurrencyCooldownCannotFundAnotherAccountsExpansion(t *testing.T) {
+	t.Parallel()
 	repository := upstreamCapacityFixture(t, upstreamCapacityAccount("41", 8, 10), upstreamCapacityAccount("42", 2, 10))
 	repository.previous = []business.PreviousRoutingDecision{{AccountID: "41", GroupName: "codex", State: "unknown", LastApplyAt: time.Now().UTC()}}
 	result, err := routing.NewService(repository).Calculate(context.Background(), routing.Scope{}, true)
@@ -293,6 +303,7 @@ func TestUpstreamConcurrencyCooldownCannotFundAnotherAccountsExpansion(t *testin
 }
 
 func TestUpstreamConcurrencySharedAccountAcrossGroupsReceivesOneQuota(t *testing.T) {
+	t.Parallel()
 	first, second := upstreamCapacityAccount("41", 1, 10), upstreamCapacityAccount("42", 1, 10)
 	copy := first
 	group := "8"
@@ -312,6 +323,7 @@ func TestUpstreamConcurrencySharedAccountAcrossGroupsReceivesOneQuota(t *testing
 }
 
 func TestUpstreamConcurrencyUnknownProtectedAccountPreventsExpansion(t *testing.T) {
+	t.Parallel()
 	first, other := upstreamCapacityAccount("41", 1, 10), upstreamCapacityAccount("42", 1, 10)
 	other.Concurrency = nil
 	repository := upstreamCapacityFixture(t, first, other)
@@ -326,6 +338,7 @@ func TestUpstreamConcurrencyUnknownProtectedAccountPreventsExpansion(t *testing.
 }
 
 func TestUpstreamConcurrencyUnlimitedUserLimitRetainsGlobalCap(t *testing.T) {
+	t.Parallel()
 	repository := upstreamCapacityFixture(t, upstreamCapacityAccount("41", 90, 0))
 	result, err := routing.NewService(repository).Calculate(context.Background(), routing.Scope{}, true)
 	if err != nil {
@@ -337,6 +350,7 @@ func TestUpstreamConcurrencyUnlimitedUserLimitRetainsGlobalCap(t *testing.T) {
 }
 
 func TestUpstreamConcurrencyRecoveryKeepsManualAndCostWallBlocks(t *testing.T) {
+	t.Parallel()
 	for _, scenario := range []string{"manual", "cost-wall"} {
 		t.Run(scenario, func(t *testing.T) {
 			account := upstreamCapacityAccount("41", 1, 10)
@@ -371,6 +385,7 @@ func TestUpstreamConcurrencyRecoveryKeepsManualAndCostWallBlocks(t *testing.T) {
 }
 
 func TestUpstreamConcurrencyDisabledCapacityControlsRestoreOrdinaryScheduling(t *testing.T) {
+	t.Parallel()
 	account := upstreamCapacityAccount("41", 1, 10)
 	disabled := false
 	account.Schedulable, account.EffectiveState = &disabled, "concurrency_limited"
@@ -388,6 +403,7 @@ func TestUpstreamConcurrencyDisabledCapacityControlsRestoreOrdinaryScheduling(t 
 }
 
 func TestUpstreamConcurrencyNewlyEnabledAccountAlsoRequiresBothWriteSwitches(t *testing.T) {
+	t.Parallel()
 	account := upstreamCapacityAccount("41", 1, 10)
 	disabled := false
 	account.Schedulable = &disabled
@@ -402,6 +418,7 @@ func TestUpstreamConcurrencyNewlyEnabledAccountAlsoRequiresBothWriteSwitches(t *
 }
 
 func TestUpstreamConcurrencyStaleObservationCannotExpandOrResume(t *testing.T) {
+	t.Parallel()
 	for _, paused := range []bool{false, true} {
 		name := "active account"
 		if paused {
@@ -431,6 +448,7 @@ func TestUpstreamConcurrencyStaleObservationCannotExpandOrResume(t *testing.T) {
 }
 
 func TestUpstreamConcurrencyPartialAutomaticWriteFlagsKeepPreviewButBlockExecution(t *testing.T) {
+	t.Parallel()
 	for _, flags := range []struct {
 		name        string
 		schedulable bool
@@ -474,6 +492,7 @@ func TestUpstreamConcurrencyPartialAutomaticWriteFlagsKeepPreviewButBlockExecuti
 }
 
 func TestUpstreamConcurrencyEqualWeightUsesNumericStableIDsForSurvivalAndRemainders(t *testing.T) {
+	t.Parallel()
 	for _, limit := range []int64{1, 5} {
 		name := "survival selection"
 		if limit == 5 {

@@ -7,6 +7,7 @@ import (
 )
 
 func TestRevenueCatalogUsesConsoleAccountsGroupsAndStableBindings(t *testing.T) {
+	t.Parallel()
 	store, err := Open(filepath.Join(t.TempDir(), "revenue.sqlite3"))
 	if err != nil {
 		t.Fatal(err)

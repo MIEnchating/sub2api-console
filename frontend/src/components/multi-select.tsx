@@ -16,6 +16,8 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import type { DictionaryKind } from "@/api";
+import { DictionaryReadState } from "@/components/dictionary-read-state";
 import * as React from "react";
 
 import {
@@ -46,8 +48,10 @@ type MultiSelectProps = {
   title?: string;
   searchPlaceholder?: string;
   emptyText?: string;
+  dictionaryKind?: DictionaryKind;
   clearText?: string;
   unknownValueLabel?: string;
+  selectedValueLabel?: (value: string) => string;
   className?: string;
   ariaLabel?: string;
   id?: string;
@@ -129,10 +133,16 @@ export function MultiSelect(props: MultiSelectProps) {
     () => new Map(props.options.map((option) => [option.value, option])),
     [props.options],
   );
-  const selectedLabel = (value: string) => labelMap.get(value) ?? props.unknownValueLabel ?? value;
+  const selectedLabel = (value: string) =>
+    labelMap.get(value) ?? props.selectedValueLabel?.(value) ?? props.unknownValueLabel ?? value;
   const items = React.useMemo(
-    () => [...new Set([...props.options.map((option) => option.value), ...props.selected])],
-    [props.options, props.selected],
+    () => [
+      ...new Set([
+        ...props.options.map((option) => option.value),
+        ...(props.dictionaryKind ? [] : props.selected),
+      ]),
+    ],
+    [props.options, props.selected, props.dictionaryKind],
   );
   const handleValueChange = (values: string[]) => {
     const next = props.singleSelect && values.length > 0 ? [values.at(-1)!] : values;
@@ -158,6 +168,7 @@ export function MultiSelect(props: MultiSelectProps) {
       }}
       disabled={props.disabled}
       filter={(value, query) => {
+        if (props.dictionaryKind && !optionMap.has(value)) return false;
         const option = { value, label: selectedLabel(value) };
         return matchesMultiSelectOption(option, query);
       }}
@@ -270,7 +281,15 @@ export function MultiSelect(props: MultiSelectProps) {
             )}
           </ComboboxCollection>
         </ComboboxList>
-        <ComboboxEmpty>{props.emptyText ?? "没有匹配的选项"}</ComboboxEmpty>
+        <ComboboxEmpty>
+          {props.dictionaryKind ? (
+            <DictionaryReadState kind={props.dictionaryKind}>
+              {props.emptyText ?? "没有匹配的选项"}
+            </DictionaryReadState>
+          ) : (
+            (props.emptyText ?? "没有匹配的选项")
+          )}
+        </ComboboxEmpty>
         <MultiSelectClearAction
           text={props.clearText ?? "清空筛选"}
           disabled={

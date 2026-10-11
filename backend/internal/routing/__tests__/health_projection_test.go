@@ -11,6 +11,7 @@ import (
 )
 
 func TestProjectHealthNewEvidenceUpdatesScoresWithoutPersistingOrCompounding(t *testing.T) {
+	t.Parallel()
 	store, db := healthEvidenceStore(t)
 	service := routing.NewService(store)
 	now := time.Now().UTC()
@@ -72,6 +73,7 @@ func TestProjectHealthNewEvidenceUpdatesScoresWithoutPersistingOrCompounding(t *
 }
 
 func TestProjectHealthEvidenceSelectionMatchesScheduling(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		name          string
 		trafficResult string
@@ -135,6 +137,7 @@ func TestProjectHealthEvidenceSelectionMatchesScheduling(t *testing.T) {
 }
 
 func TestProjectHealthNoFreshSamplesReturnsEmptyScores(t *testing.T) {
+	t.Parallel()
 	for _, expired := range []bool{false, true} {
 		t.Run(fmt.Sprintf("expired_%t", expired), func(t *testing.T) {
 			store, _ := healthEvidenceStore(t)

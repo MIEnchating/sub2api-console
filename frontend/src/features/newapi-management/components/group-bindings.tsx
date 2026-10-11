@@ -157,8 +157,20 @@ export function NewAPIGroupBindings(props: Props) {
     const previous = sourceDrafts.current;
     const next = createDraftBindings(props.groups, props.localGroups, props.bindings);
     sourceDrafts.current = next;
-    setDrafts((current) =>
-      Object.fromEntries(
+    setDrafts((current) => {
+      const editedRatios = new Map<string, string>();
+      for (const [id, draft] of Object.entries(current)) {
+        const baseline = Object.hasOwn(previous, id) ? previous[id] : undefined;
+        if (
+          Object.hasOwn(next, id) &&
+          draft.localGroupId &&
+          baseline &&
+          draft.sub2APIRatio !== baseline.sub2APIRatio
+        ) {
+          editedRatios.set(draft.localGroupId, draft.sub2APIRatio);
+        }
+      }
+      return Object.fromEntries(
         Object.entries(next).map(([id, incoming]) => {
           const baseline = Object.hasOwn(previous, id) ? previous[id] : undefined;
           const draft = Object.hasOwn(current, id) ? current[id] : undefined;
@@ -168,10 +180,21 @@ export function NewAPIGroupBindings(props: Props) {
             (baseline.localGroupId !== draft.localGroupId ||
               baseline.sub2APIRatio !== draft.sub2APIRatio ||
               baseline.syncRatio !== draft.syncRatio);
-          return [id, edited ? draft : incoming];
+          const merged = edited ? draft : incoming;
+          const currentRatio =
+            merged.localGroupId === incoming.localGroupId
+              ? incoming.sub2APIRatio
+              : merged.sub2APIRatio;
+          return [
+            id,
+            {
+              ...merged,
+              sub2APIRatio: editedRatios.get(merged.localGroupId) ?? currentRatio,
+            },
+          ];
         }),
-      ),
-    );
+      );
+    });
   }, [props.bindings, props.groups, props.localGroups]);
 
   function save() {
@@ -260,7 +283,10 @@ export function NewAPIGroupBindings(props: Props) {
                                 sub2APIRatio:
                                   value === unboundGroupValue
                                     ? ""
-                                    : (props.localGroups.find((item) => item.id === value)?.ratio ??
+                                    : (Object.values(current).find(
+                                        (item) => item.localGroupId === value,
+                                      )?.sub2APIRatio ??
+                                      props.localGroups.find((item) => item.id === value)?.ratio ??
                                       ""),
                                 syncRatio: value === unboundGroupValue ? false : draft.syncRatio,
                               },
@@ -270,7 +296,7 @@ export function NewAPIGroupBindings(props: Props) {
                           <SelectTrigger aria-label={`${group.name} 的 Sub2API 分组`}>
                             <SelectValue />
                           </SelectTrigger>
-                          <SelectContent>
+                          <SelectContent dictionaryKind="group">
                             <SelectItem value={unboundGroupValue}>不绑定</SelectItem>
                             {orderedLocalGroups.map((localGroup) => (
                               <SelectItem key={localGroup.id} value={localGroup.id}>

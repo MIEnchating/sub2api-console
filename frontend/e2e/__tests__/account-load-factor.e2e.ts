@@ -72,6 +72,21 @@ test("空负载账号回显跟随并发，键盘切换模式且保存不会固�
   await page.keyboard.press("Space");
   await expect(follow).not.toBeChecked();
   await expect(load).toBeEnabled();
+  for (const field of [
+    { label: "优先级", error: "请输入正整数" },
+    { label: "并发上限", error: "请输入正整数" },
+    { label: "负载因子", error: "负载因子必须大于或等于 1" },
+  ]) {
+    const input = dialog.getByRole("spinbutton", { name: field.label, exact: true });
+    await input.fill("");
+    await dialog.getByRole("button", { name: "保存", exact: true }).click();
+    await expect(input).toHaveAttribute("aria-invalid", "true");
+    await expect(input).toHaveAccessibleDescription(field.error);
+    expect(submitted).toBeNull();
+    await input.fill("2");
+    await expect(input).toHaveAttribute("aria-invalid", "false");
+    await expect(dialog.getByText(field.error, { exact: true })).toHaveCount(0);
+  }
   await load.fill("7");
   await follow.focus();
   await page.keyboard.press("Space");

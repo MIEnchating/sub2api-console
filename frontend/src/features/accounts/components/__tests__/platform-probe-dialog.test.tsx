@@ -1,3 +1,4 @@
+import { seedDictionaries, dictionaryItems } from "@/test/dictionary-fixtures";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -58,6 +59,11 @@ function completedTask(): Task {
   };
 }
 
+const platformDictionary = dictionaryItems("platform", [
+  { value: "openai", name: "OpenAI" },
+  { value: "openai-compatible", name: "openai-compatible" },
+]);
+
 describe("平台模型探活", () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -65,12 +71,15 @@ describe("平台模型探活", () => {
 
   it("按平台精确聚合可探活账号并排除手动控制账号", () => {
     expect(
-      platformProbeOptions([
-        account("41", "OpenAI"),
-        account("42", "openai"),
-        account("43", "openai-compatible"),
-        account("44", "openai", 1),
-      ]),
+      platformProbeOptions(
+        [
+          account("41", "OpenAI"),
+          account("42", "openai"),
+          account("43", "openai-compatible"),
+          account("44", "openai", 1),
+        ],
+        platformDictionary,
+      ),
     ).toEqual([
       { value: "openai", label: "OpenAI", accountCount: 2 },
       { value: "openai-compatible", label: "openai-compatible", accountCount: 1 },
@@ -79,9 +88,11 @@ describe("平台模型探活", () => {
 
   it("模型字段是普通文本输入且显示平台账号范围", () => {
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    seedDictionaries(queryClient);
     const view = render(
       <QueryClientProvider client={queryClient}>
         <PlatformProbeDialog
+          platformDictionary={platformDictionary}
           open
           accounts={[account("41", "openai"), account("42", "openai")]}
           onOpenChange={() => undefined}
@@ -100,9 +111,11 @@ describe("平台模型探活", () => {
 
   it("平台探活表单按视口限制宽高并将操作栏保留在滚动正文外", () => {
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    seedDictionaries(queryClient);
     render(
       <QueryClientProvider client={queryClient}>
         <PlatformProbeDialog
+          platformDictionary={platformDictionary}
           open
           accounts={[account("41", "openai")]}
           onOpenChange={() => undefined}
@@ -135,6 +148,7 @@ describe("平台模型探活", () => {
     const taskRead = vi.spyOn(api, "task");
     const onOpenChange = vi.fn();
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    seedDictionaries(queryClient);
     queryClient.setQueryData<TaskSummary[]>(
       ["tasks"],
       Array.from({ length: 20 }, (_, index) => ({
@@ -152,6 +166,7 @@ describe("平台模型探活", () => {
     render(
       <QueryClientProvider client={queryClient}>
         <PlatformProbeDialog
+          platformDictionary={platformDictionary}
           open
           accounts={[account("41", "openai")]}
           onOpenChange={onOpenChange}

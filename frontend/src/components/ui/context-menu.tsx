@@ -18,7 +18,7 @@ function ContextMenuContent({ className, ...props }: MenuPrimitive.Popup.Props) 
         <ContextMenuPrimitive.Popup
           data-slot="context-menu-content"
           className={cn(
-            "bg-popover text-popover-foreground ring-foreground/10 min-w-40 max-w-(--available-width) overflow-y-auto rounded-lg p-1 shadow-md ring-1 outline-none",
+            "bg-popover text-popover-foreground ring-foreground/10 min-w-40 max-h-(--available-height) max-w-(--available-width) overflow-y-auto overscroll-contain rounded-lg p-1 shadow-md ring-1 outline-none",
             className,
           )}
           {...props}

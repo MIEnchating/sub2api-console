@@ -13,6 +13,7 @@ import (
 
 	"github.com/MIEnchating/sub2api-console/backend/internal/business"
 	"github.com/MIEnchating/sub2api-console/backend/internal/evidence"
+	"github.com/MIEnchating/sub2api-console/backend/internal/taskcontext"
 )
 
 type blockingExecutor struct {
@@ -141,6 +142,35 @@ func (r *executionLeaseLosingRepository) RenewInspectionLease(ctx context.Contex
 type blockingAcquireRepository struct {
 	*business.Store
 	entered chan struct{}
+}
+
+type blockingHistoryRepository struct {
+	*business.Store
+	started chan struct{}
+	release chan struct{}
+}
+
+type monitoringReadExecutor struct {
+	started chan struct{}
+}
+
+func (e *monitoringReadExecutor) Execute(context.Context, business.AutoInspectionConfig) (ExecutionResult, error) {
+	return ExecutionResult{}, nil
+}
+
+func (e *monitoringReadExecutor) MonitoringConfigured(context.Context) (bool, error) {
+	close(e.started)
+	return true, nil
+}
+
+func (r *blockingHistoryRepository) InspectionHeartbeats(ctx context.Context, limit int) ([]business.InspectionHeartbeat, error) {
+	close(r.started)
+	select {
+	case <-r.release:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	return r.Store.InspectionHeartbeats(ctx, limit)
 }
 
 func (r *blockingAcquireRepository) AcquireInspectionLease(
@@ -313,7 +343,7 @@ func TestStopContextHonorsCancellationAndCanBeRetried(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(history) != 1 || history[0].Status != "cancelled" {
+	if len(history) != 1 || history[0].Status != "failed" || history[0].Error == nil || *history[0].Error != taskcontext.ErrInterrupted.Error() {
 		t.Fatalf("shutdown heartbeat = %#v", history)
 	}
 }
@@ -681,6 +711,40 @@ func TestStatusPublishesConfirmedMonitoringAvailability(t *testing.T) {
 	}
 	if !status.MonitoringEnabled || status.MonitoringCheckedAt == nil {
 		t.Fatalf("monitoring availability was not published: %#v", status)
+	}
+}
+
+func TestStatusStartsMonitoringReadBeforeHistoryCompletes(t *testing.T) {
+	store := openInspectionRepository(t)
+	repository := &blockingHistoryRepository{Store: store, started: make(chan struct{}), release: make(chan struct{})}
+	executor := &monitoringReadExecutor{started: make(chan struct{})}
+	scheduler, err := NewScheduler(repository, executor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, statusErr := scheduler.Status(context.Background())
+		done <- statusErr
+	}()
+	select {
+	case <-repository.started:
+	case <-time.After(time.Second):
+		t.Fatal("history read did not start")
+	}
+	select {
+	case <-executor.started:
+	case <-time.After(time.Second):
+		t.Fatal("monitoring configuration read waited for history")
+	}
+	close(repository.release)
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("status remained blocked after history release")
 	}
 }
 

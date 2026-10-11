@@ -74,6 +74,7 @@ func readOAuthResponse(body io.Reader, completeOnEvent bool, onFirstOutput ...fu
 			deltas.WriteString(delta)
 			if delta != "" && outputCallback != nil {
 				outputCallback()
+				outputCallback = nil
 			}
 		case "response.output_text.done", "output_text.done":
 			if deltas.Len() == 0 {

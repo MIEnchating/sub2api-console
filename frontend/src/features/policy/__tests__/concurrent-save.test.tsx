@@ -1,3 +1,4 @@
+import { seedDictionaries } from "@/test/dictionary-fixtures";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { expect, it, vi } from "vitest";
@@ -85,6 +86,7 @@ it("其他页面新增暂停账号后保存未修改的守护范围，应保留�
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false, staleTime: Infinity } },
   });
+  seedDictionaries(client);
   const initial = structuredClone(policy);
   client.setQueryData(["policy"], initial);
   client.setQueryData(["config"], { probes_enabled: true });
@@ -141,6 +143,7 @@ it("已有本地修改时保留原版本并展示并发冲突，不用新版本�
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false, staleTime: Infinity } },
   });
+  seedDictionaries(client);
   const initial = structuredClone(policy);
   client.setQueryData(["policy"], initial);
   client.setQueryData(["config"], { probes_enabled: true });

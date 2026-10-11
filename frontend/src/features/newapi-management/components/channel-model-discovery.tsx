@@ -1,7 +1,8 @@
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { api, type NewAPIChannel } from "@/api";
+import type { NewAPIChannel } from "@/api";
 import { QueryErrorToast } from "@/components/query-error-toast";
+import { readCommonChannelModels } from "../lib/channel-model-discovery";
 import { NewAPIChannelModelDialog } from "./channel-model-dialog";
 
 export function ChannelModelDiscovery(props: {
@@ -17,15 +18,7 @@ export function ChannelModelDiscovery(props: {
       props.platformId,
       props.channels.map((channel) => [channel.id, channel.version]),
     ],
-    queryFn: async ({ signal }): Promise<string[]> => {
-      // Only models supported by every selected channel can be added in one batch.
-      let common: string[] | undefined;
-      for (const channel of props.channels) {
-        const result = await api.availableNewAPIChannelModels(props.platformId, channel, signal);
-        common = common ? common.filter((model) => result.models.includes(model)) : result.models;
-      }
-      return common ?? [];
-    },
+    queryFn: ({ signal }) => readCommonChannelModels(props.platformId, props.channels, signal),
     retry: false,
     refetchOnWindowFocus: false,
     gcTime: 0,

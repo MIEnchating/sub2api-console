@@ -60,6 +60,7 @@ type maintenanceAttempt struct {
 	Workspace                  string         `json:"workspace"`
 	User                       string         `json:"user"`
 	SourceRunID                string         `json:"source_run_id,omitempty"`
+	SourceDocumentKey          string         `json:"source_document_key,omitempty"`
 	SourceRevision             int64          `json:"source_revision,omitempty"`
 	ConfigurationVersion       string         `json:"configuration_version"`
 	CredentialVersion          string         `json:"credential_version"`
@@ -115,8 +116,18 @@ func (s *Service) Maintenance(ctx context.Context, owner string) (Maintenance, e
 	if err != nil {
 		return Maintenance{}, err
 	}
-	value, err := s.readMaintenance(ctx, target)
-	return value.Public, err
+	value := defaultMaintenance().Public
+	raw, revision, err := s.private.WorkbenchDocumentPublic(ctx, "maintenance:"+targetKey(target))
+	if err != nil {
+		return Maintenance{}, err
+	}
+	if len(raw) > 0 {
+		if err := decodePrivate(raw, &value); err != nil {
+			return Maintenance{}, errors.New("自动维护配置无法读取")
+		}
+	}
+	value.Revision = revision
+	return value, nil
 }
 func validateMaintenance(input MaintenanceSettings) error {
 	if input.IntervalMinutes < 1 || input.IntervalMinutes > 1440 || input.CooldownMinutes < 0 || input.CooldownMinutes > 1440 || len(input.GroupIDs) > 500 {
@@ -184,7 +195,7 @@ func (s *Service) PreviewMaintenance(ctx context.Context, owner string, input Ma
 	preview := MaintenancePreview{ID: newID(), Settings: input, Accounts: accounts, ExpiresAt: time.Now().UTC().Add(previewLifetime)}
 	value := privateMaintenancePreview{Public: preview, Owner: owner, Target: target, ConfigRevision: current.Public.Revision, ScopeVersion: version}
 	key := "maintenance-preview:" + owner
-	_, revision, err := s.private.WorkbenchDocument(ctx, key)
+	revision, err := s.private.WorkbenchDocumentRevision(ctx, key)
 	if err != nil {
 		return MaintenancePreview{}, err
 	}

@@ -1,45 +1,47 @@
 import { useMutation } from "@tanstack/react-query";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { toast } from "sonner";
 
 import { api, type GroupStatus } from "@/api";
-import { operationErrorMessage } from "@/lib/operation-feedback";
+import { notifyOperationError } from "@/lib/operation-feedback";
 import { groupBatchActions, type GroupBatchAction } from "../constants";
 
 type GroupTarget = { id: string; name: string };
 type BatchRequest = { action: GroupBatchAction; targets: GroupTarget[] };
-type BatchFailure = { target: GroupTarget; message: string };
 
 export function useGroupBatchActions(invalidate: () => Promise<unknown>) {
   const [selectedIDs, setSelectedIDs] = useState<Set<string>>(() => new Set());
   const [request, setRequest] = useState<BatchRequest | null>(null);
-  const [failures, setFailures] = useState<BatchFailure[]>([]);
-  const [completed, setCompleted] = useState(0);
+  const [failed, setFailed] = useState(false);
+  const submitting = useRef(false);
   const mutation = useMutation({
+    retry: false,
+    networkMode: "always",
     mutationFn: async (value: BatchRequest) => {
-      const failed: BatchFailure[] = [];
-      let succeeded = 0;
-      // Each endpoint updates the same policy document; serialize writes.
-      for (const target of value.targets) {
-        try {
-          if (value.action === "reset") await api.clearGroupPolicy(target.id);
-          else await api.setGroupExcluded(target.id, value.action === "exclude");
-          succeeded += 1;
-        } catch (error) {
-          failed.push({ target, message: operationErrorMessage(error, "分组操作失败，请重试") });
-        }
-        setCompleted(succeeded + failed.length);
-      }
-      return { failed, succeeded };
+      await api.batchGroupPolicy(
+        value.targets.map((target) => target.id),
+        value.action,
+      );
+      return { succeeded: value.targets.length };
     },
     onSuccess: async (result, value) => {
-      setFailures(result.failed);
-      setSelectedIDs(new Set(result.failed.map((failure) => failure.target.id)));
-      await invalidate();
-      if (result.failed.length === 0) {
-        setRequest(null);
-        toast.success(`${result.succeeded} 个分组已${groupBatchActions[value.action].label}`);
-      }
+      setFailed(false);
+      setSelectedIDs(new Set());
+      void invalidate().catch((error: unknown) =>
+        notifyOperationError(error, "分组已保存，刷新失败，请刷新列表"),
+      );
+      setRequest(null);
+      toast.success(`${result.succeeded} 个分组已${groupBatchActions[value.action].label}`);
+    },
+    onError: (error, value) => {
+      setFailed(true);
+      notifyOperationError(error, "批量操作未获成功确认，请核对分组状态后重试", {
+        context: "批量操作未获成功确认，请核对分组状态后重试",
+      });
+      setSelectedIDs(new Set(value.targets.map((target) => target.id)));
+    },
+    onSettled: () => {
+      submitting.current = false;
     },
   });
 
@@ -64,17 +66,16 @@ export function useGroupBatchActions(invalidate: () => Promise<unknown>) {
       group.id ? [{ id: group.id, name: group.name }] : [],
     );
     if (mutation.isPending || targets.length === 0) return;
-    setFailures([]);
-    setCompleted(0);
+    setFailed(false);
     setRequest({ action, targets });
   }
 
   function submit(): void {
-    if (!request || mutation.isPending) return;
-    const targets = failures.length ? failures.map((failure) => failure.target) : request.targets;
+    if (!request || mutation.isPending || submitting.current) return;
+    submitting.current = true;
+    const targets = request.targets;
     setRequest({ ...request, targets });
-    setFailures([]);
-    setCompleted(0);
+    setFailed(false);
     mutation.mutate({ action: request.action, targets });
   }
 
@@ -85,8 +86,7 @@ export function useGroupBatchActions(invalidate: () => Promise<unknown>) {
   return {
     selectedIDs,
     request,
-    failures,
-    completed,
+    failed,
     pending: mutation.isPending,
     select,
     clearSelection,

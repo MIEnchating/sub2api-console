@@ -10,7 +10,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { CustomAnimationModelField } from "./custom-animation-model-field";
 import type { CustomAnimationForm } from "../lib/animation-schema";
 
 const platforms = [
@@ -19,7 +18,6 @@ const platforms = [
 ] as const;
 
 const fields = [
-  { name: "timeout_seconds", label: "请求超时（秒）", type: "number", placeholder: "120" },
   { name: "base_url", label: "Base URL", type: "url", placeholder: "https://api.example.com/v1" },
   { name: "api_key", label: "API Key", type: "password", placeholder: "输入 API Key" },
 ] as const;
@@ -30,58 +28,75 @@ export function CustomAnimationFields(props: {
 }): ReactElement {
   const orderedPlatforms = useDictionaryOrder("platform", platforms, (platform) => platform.value);
   return (
-    <fieldset
-      disabled={props.disabled}
-      className="grid min-w-0 grid-cols-2 gap-x-3 gap-y-2 xl:grid-cols-[8rem_9rem_minmax(0,1fr)_minmax(0,1fr)_minmax(14rem,1.2fr)]"
-    >
-      <div className="min-w-0 space-y-1">
-        <label htmlFor="custom-animation-platform" className="text-sm font-medium">
-          接口类型
-        </label>
-        <Controller
-          control={props.form.control}
-          name="platform"
-          render={({ field }) => (
-            <Select value={field.value} onValueChange={field.onChange} disabled={props.disabled}>
-              <SelectTrigger id="custom-animation-platform" ref={field.ref} onBlur={field.onBlur}>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {orderedPlatforms.map((platform) => (
-                  <SelectItem key={platform.value} value={platform.value}>
-                    {platform.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          )}
-        />
+    <fieldset disabled={props.disabled} className="min-w-0">
+      <div
+        role="group"
+        aria-label="接口配置"
+        className="grid min-w-0 grid-cols-1 gap-3 lg:grid-cols-[12rem_minmax(0,1.2fr)_minmax(0,1fr)]"
+      >
+        <div className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)] items-center gap-x-2 gap-y-1.5">
+          <label
+            htmlFor="custom-animation-platform"
+            className="whitespace-nowrap text-xs font-medium"
+          >
+            接口类型
+          </label>
+          <Controller
+            control={props.form.control}
+            name="platform"
+            render={({ field }) => (
+              <Select
+                value={field.value}
+                onValueChange={field.onChange}
+                disabled={props.disabled}
+                itemToStringLabel={(value) =>
+                  orderedPlatforms.find((platform) => platform.value === value)?.label ??
+                  platforms.find((platform) => platform.value === value)?.label ??
+                  value
+                }
+              >
+                <SelectTrigger id="custom-animation-platform" ref={field.ref} onBlur={field.onBlur}>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent dictionaryKind="platform">
+                  {orderedPlatforms.map((platform) => (
+                    <SelectItem key={platform.value} value={platform.value}>
+                      {platform.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            )}
+          />
+        </div>
+        {fields.map((field) => {
+          const error = props.form.formState.errors[field.name];
+          const id = `custom-animation-${field.name}`;
+          return (
+            <div
+              key={field.name}
+              className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)] items-center gap-x-2 gap-y-1.5"
+            >
+              <label htmlFor={id} className="whitespace-nowrap text-xs font-medium">
+                {field.label}
+              </label>
+              <Input
+                id={id}
+                type={field.type}
+                placeholder={field.placeholder}
+                autoComplete="off"
+                spellCheck={false}
+                {...props.form.register(field.name)}
+                aria-invalid={!!error}
+                aria-describedby={error ? `${id}-error` : undefined}
+              />
+              {error ? (
+                <FieldError className="col-start-2" id={`${id}-error`} message={error.message} />
+              ) : null}
+            </div>
+          );
+        })}
       </div>
-      {fields.map((field) => {
-        const error = props.form.formState.errors[field.name];
-        const id = `custom-animation-${field.name}`;
-        return (
-          <div key={field.name} className="min-w-0 space-y-1">
-            <label htmlFor={id} className="text-sm font-medium">
-              {field.label}
-            </label>
-            <Input
-              id={id}
-              type={field.type}
-              placeholder={field.placeholder}
-              autoComplete="off"
-              spellCheck={false}
-              min={field.type === "number" ? 5 : undefined}
-              max={field.type === "number" ? 120 : undefined}
-              {...props.form.register(field.name, { valueAsNumber: field.type === "number" })}
-              aria-invalid={!!error}
-              aria-describedby={error ? `${id}-error` : undefined}
-            />
-            {error ? <FieldError id={`${id}-error`} message={error.message} /> : null}
-          </div>
-        );
-      })}
-      <CustomAnimationModelField form={props.form} disabled={props.disabled} />
     </fieldset>
   );
 }

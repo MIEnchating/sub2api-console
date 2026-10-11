@@ -11,6 +11,7 @@ import (
 )
 
 func TestHighTrafficRecoveryKeepsHoldEvidenceBeyondSampleCountLimit(t *testing.T) {
+	t.Parallel()
 	store, db := healthEvidenceStore(t)
 	if _, err := db.Exec(`UPDATE accounts SET routing_state='degraded' WHERE id='41'`); err != nil {
 		t.Fatal(err)
@@ -34,6 +35,7 @@ func TestHighTrafficRecoveryKeepsHoldEvidenceBeyondSampleCountLimit(t *testing.T
 }
 
 func TestRecoveryHoldRejectsInterruptionsOutsideTheBoundedHealthCache(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		name    string
 		result  string
@@ -71,6 +73,7 @@ func TestRecoveryHoldRejectsInterruptionsOutsideTheBoundedHealthCache(t *testing
 }
 
 func TestRecoveryHoldTimeEvidenceStillRespectsFuseStartAndFreshness(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		name  string
 		fused bool

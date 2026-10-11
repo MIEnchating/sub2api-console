@@ -362,6 +362,12 @@ export function NewAPIPriceComparison(props: { snapshot: NewAPIRemoteSnapshot })
   const [results, setResults] = useState<Map<string, PlatformPriceComparisonStatus>>(new Map());
   const [search, setSearch] = useState("");
   const [dialogModel, setDialogModel] = useState<NewAPIModelPrice | null>(null);
+  useEffect(() => {
+    setResults(new Map());
+    setDialogModel(null);
+    const availableModels = new Set(props.snapshot.models.map((model) => model.model));
+    setSelectedModels((current) => current.filter((model) => availableModels.has(model)));
+  }, [props.snapshot.models, props.snapshot.upstream_prices]);
   const selectedUpstream =
     upstreams.find((upstream) => upstream.host === selectedUpstreamHost) ?? null;
   const filteredModels = useMemo(() => {

@@ -3,6 +3,7 @@ import { renderToStaticMarkup as renderMarkup } from "react-dom/server";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render as renderComponent } from "@testing-library/react";
 import type { ReactElement } from "react";
+import { standardDictionaryFixtures, seedDictionaries } from "./dictionary-fixtures";
 import type { DictionaryKind } from "@/api";
 
 const clients: QueryClient[] = [];
@@ -11,7 +12,9 @@ afterEach(() => clients.splice(0).forEach((client) => client.clear()));
 // Seed the real query cache so consumers exercise ordering without external requests.
 export function render(
   element: ReactElement,
-  dictionaries: Partial<Record<DictionaryKind, Array<{ value: string; name?: string }>>> = {},
+  dictionaries: Partial<
+    Record<DictionaryKind, Array<{ value: string; name?: string }>>
+  > = standardDictionaryFixtures,
 ) {
   const client = new QueryClient({ defaultOptions: { queries: { enabled: false } } });
   clients.push(client);
@@ -31,8 +34,12 @@ export function render(
   };
 }
 
-export function renderToStaticMarkup(element: ReactElement): string {
+export function renderToStaticMarkup(
+  element: ReactElement,
+  dictionaries = standardDictionaryFixtures,
+): string {
   const client = new QueryClient({ defaultOptions: { queries: { enabled: false } } });
   clients.push(client);
+  seedDictionaries(client, dictionaries);
   return renderMarkup(<QueryClientProvider client={client}>{element}</QueryClientProvider>);
 }

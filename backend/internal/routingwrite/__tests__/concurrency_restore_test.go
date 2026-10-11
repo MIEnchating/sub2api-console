@@ -41,6 +41,7 @@ func concurrencyRestoreFixture(t *testing.T) (*routingwrite.Service, *upstreamCa
 }
 
 func TestDisabledCapacityRestoresManagedConcurrencyAndStillAllocatesLoad(t *testing.T) {
+	t.Parallel()
 	service, fixture, target := concurrencyRestoreFixture(t)
 	if target.Concurrency == nil || *target.Concurrency != 100 {
 		t.Fatalf("disabled capacity retained stale managed reduction: %+v", target)
@@ -65,6 +66,7 @@ func TestDisabledCapacityRestoresManagedConcurrencyAndStillAllocatesLoad(t *test
 }
 
 func TestConcurrencyRestorationRejectsChangedScopeBaselineOrRemoteValue(t *testing.T) {
+	t.Parallel()
 	for _, scenario := range []string{"remote edited", "remote paused", "target changed", "baseline removed", "capacity reenabled", "monitor mode", "readback mismatch"} {
 		t.Run(scenario, func(t *testing.T) {
 			service, fixture, target := concurrencyRestoreFixture(t)

@@ -1,0 +1,892 @@
+{
+  "note": "路径分组仅定位阅读证据；约定业务范围已收口，43/42个业务模块和前端15个未完成的旧解释已撤回。当前仅冻结日志10项阅读记录缺口；核验器仍退出1。不是100%逐文件复审或远端CI通过声明。",
+  "modules": [
+    {
+      "path": "frontend/src/features/logs",
+      "total": 20,
+      "reviewed": 10,
+      "pending": 6,
+      "changed": 4
+    },
+    {
+      "path": ".github/release-notes",
+      "total": 14,
+      "reviewed": 14,
+      "pending": 0,
+      "changed": 0
+    },
+    {
+      "path": ".github/scripts",
+      "total": 17,
+      "reviewed": 17,
+      "pending": 0,
+      "changed": 0
+    },
+    {
+      "path": "+4",
+      "total": 1,
+      "reviewed": 1,
+      "pending": 0,
+      "changed": 0
+    },
+    {
+      "path": ".env.example",
+      "total": 1,
+      "reviewed": 1,
+      "pending": 0,
+      "changed": 0
+    },
+    {
+      "path": ".github/workflows",
+      "total": 3,
+      "reviewed": 3,
+      "pending": 0,
+      "changed": 0
+    },
+    {
+      "path": "AGENTS.md",
+      "total": 1,
+      "reviewed": 1,
+      "pending": 0,
+      "changed": 0
+    },
+    {
+      "path": "README.md",
+      "total": 1,
+      "reviewed": 1,
+      "pending": 0,
+      "changed": 0
+    },
+    {
+      "path": "backend/Dockerfile",
+      "total": 1,
+      "reviewed": 1,
+      "pending": 0,
+      "changed": 0
+    },
+    {
+      "path": "backend/cmd",
+      "total": 4,
+      "reviewed": 4,
+      "pending": 0,
+      "changed": 0
+    },
+    {
+      "path": "backend/docker-entrypoint.sh",
+      "total": 1,
+      "reviewed": 1,
+      "pending": 0,
+      "changed": 0
+    },
+    {
+      "path": "backend/go.mod",
+      "total": 1,
+      "reviewed": 1,
+      "pending": 0,
+      "changed": 0
+    },
+    {
+      "path": "backend/go.sum",
+      "total": 1,
+      "reviewed": 1,
+      "pending": 0,
+      "changed": 0
+    },
+    {
+      "path": "docker-compose.yml",
+      "total": 1,
+      "reviewed": 1,
+      "pending": 0,
+      "changed": 0
+    },
+    {
+      "path": "docs/database-performance.md",
+      "total": 1,
+      "reviewed": 1,
+      "pending": 0,
+      "changed": 0
+    },
+    {
+      "path": "docs/reviews",
+      "total": 41,
+      "reviewed": 41,
+      "pending": 0,
+      "changed": 0
+    },
+    {
+      "path": "frontend/STYLE_GUIDE.md",
+      "total": 1,
+      "reviewed": 1,
+      "pending": 0,
+      "changed": 0
+    },
+    {
+      "path": "frontend/bun.lock",
+      "total": 1,
+      "reviewed": 1,
+      "pending": 0,
+      "changed": 0
+    },
+    {
+      "path": "frontend/package.json",
+      "total": 1,
+      "reviewed": 1,
+      "pending": 0,
+      "changed": 0
+    },
+    {
+      "path": ".dockerignore",
+      "total": 1,
+      "reviewed": 1,
+      "pending": 0,
+      "changed": 0
+    },
+    {
+      "path": ".githooks/pre-commit",
+      "total": 1,
+      "reviewed": 1,
+      "pending": 0,
+      "changed": 0
+    },
+    {
+      "path": ".gitignore",
+      "total": 1,
+      "reviewed": 1,
+      "pending": 0,
+      "changed": 0
+    },
+    {
+      "path": "backend/.dockerignore",
+      "total": 1,
+      "reviewed": 1,
+      "pending": 0,
+      "changed": 0
+    },
+    {
+      "path": "backend/internal/accountautomation",
+      "total": 25,
+      "reviewed": 25,
+      "pending": 0,
+      "changed": 0
+    },
+    {
+      "path": "backend/internal/accountdelete",
+      "total": 4,
+      "reviewed": 4,
+      "pending": 0,
+      "changed": 0
+    },
+    {
+      "path": "backend/internal/accountops",
+      "total": 29,
+      "reviewed": 29,
+      "pending": 0,
+      "changed": 0
+    },
+    {
+      "path": "backend/internal/accountquality",
+      "total": 2,
+      "reviewed": 2,
+      "pending": 0,
+      "changed": 0
+    },
+    {
+      "path": "backend/internal/accountworkbench",
+      "total": 88,
+      "reviewed": 88,
+      "pending": 0,
+      "changed": 0
+    },
+    {
+      "path": "backend/internal/adminclient",
+      "total": 24,
+      "reviewed": 24,
+      "pending": 0,
+      "changed": 0
+    },
+    {
+      "path": "backend/internal/alerting",
+      "total": 2,
+      "reviewed": 2,
+      "pending": 0,
+      "changed": 0
+    },
+    {
+      "path": "backend/internal/api",
+      "total": 89,
+      "reviewed": 89,
+      "pending": 0,
+      "changed": 0
+    },
+    {
+      "path": "backend/internal/authrecovery",
+      "total": 9,
+      "reviewed": 9,
+      "pending": 0,
+      "changed": 0
+    },
+    {
+      "path": "backend/internal/browserlogin",
+      "total": 47,
+      "reviewed": 47,
+      "pending": 0,
+      "changed": 0
+    },
+    {
+      "path": "backend/internal/business",
+      "total": 255,
+      "reviewed": 255,
+      "pending": 0,
+      "changed": 0
+    },
+    {
+      "path": "backend/internal/config",
+      "total": 2,
+      "reviewed": 2,
+      "pending": 0,
+      "changed": 0
+    },
+    {
+      "path": "backend/internal/configstore",
+      "total": 53,
+      "reviewed": 53,
+      "pending": 0,
+      "changed": 0
+    },
+    {
+      "path": "backend/internal/decimalutil",
+      "total": 1,
+      "reviewed": 1,
+      "pending": 0,
+      "changed": 0
+    },
+    {
+      "path": "backend/internal/evidence",
+      "total": 22,
+      "reviewed": 22,
+      "pending": 0,
+      "changed": 0
+    },
+    {
+      "path": "backend/internal/inspection",
+      "total": 15,
+      "reviewed": 15,
+      "pending": 0,
+      "changed": 0
+    },
+    {
+      "path": "backend/internal/logs",
+      "total": 12,
+      "reviewed": 12,
+      "pending": 0,
+      "changed": 0
+    },
+    {
+      "path": "backend/internal/management",
+      "total": 18,
+      "reviewed": 18,
+      "pending": 0,
+      "changed": 0
+    },
+    {
+      "path": "backend/internal/modelcheck",
+      "total": 103,
+      "reviewed": 103,
+      "pending": 0,
+      "changed": 0
+    },
+    {
+      "path": "backend/internal/mutationguard",
+      "total": 2,
+      "reviewed": 2,
+      "pending": 0,
+      "changed": 0
+    },
+    {
+      "path": "backend/internal/naming",
+      "total": 2,
+      "reviewed": 2,
+      "pending": 0,
+      "changed": 0
+    },
+    {
+      "path": "backend/internal/newapimanagement",
+      "total": 44,
+      "reviewed": 44,
+      "pending": 0,
+      "changed": 0
+    },
+    {
+      "path": "backend/internal/notification",
+      "total": 10,
+      "reviewed": 10,
+      "pending": 0,
+      "changed": 0
+    },
+    {
+      "path": "backend/internal/notificationtarget",
+      "total": 4,
+      "reviewed": 4,
+      "pending": 0,
+      "changed": 0
+    },
+    {
+      "path": "backend/internal/officialpricing",
+      "total": 57,
+      "reviewed": 57,
+      "pending": 0,
+      "changed": 0
+    },
+    {
+      "path": "backend/internal/onboarding",
+      "total": 33,
+      "reviewed": 33,
+      "pending": 0,
+      "changed": 0
+    },
+    {
+      "path": "backend/internal/opstraffic",
+      "total": 5,
+      "reviewed": 5,
+      "pending": 0,
+      "changed": 0
+    },
+    {
+      "path": "backend/internal/pricing",
+      "total": 18,
+      "reviewed": 18,
+      "pending": 0,
+      "changed": 0
+    },
+    {
+      "path": "backend/internal/probe",
+      "total": 28,
+      "reviewed": 28,
+      "pending": 0,
+      "changed": 0
+    },
+    {
+      "path": "backend/internal/protocolsdk",
+      "total": 6,
+      "reviewed": 6,
+      "pending": 0,
+      "changed": 0
+    },
+    {
+      "path": "backend/internal/redact",
+      "total": 2,
+      "reviewed": 2,
+      "pending": 0,
+      "changed": 0
+    },
+    {
+      "path": "backend/internal/routing",
+      "total": 73,
+      "reviewed": 73,
+      "pending": 0,
+      "changed": 0
+    },
+    {
+      "path": "backend/internal/routingwrite",
+      "total": 44,
+      "reviewed": 44,
+      "pending": 0,
+      "changed": 0
+    },
+    {
+      "path": "backend/internal/runtimepolicy",
+      "total": 2,
+      "reviewed": 2,
+      "pending": 0,
+      "changed": 0
+    },
+    {
+      "path": "backend/internal/sqliteutil",
+      "total": 7,
+      "reviewed": 7,
+      "pending": 0,
+      "changed": 0
+    },
+    {
+      "path": "backend/internal/systeminfo",
+      "total": 2,
+      "reviewed": 2,
+      "pending": 0,
+      "changed": 0
+    },
+    {
+      "path": "backend/internal/targetguard",
+      "total": 3,
+      "reviewed": 3,
+      "pending": 0,
+      "changed": 0
+    },
+    {
+      "path": "backend/internal/taskcontext",
+      "total": 1,
+      "reviewed": 1,
+      "pending": 0,
+      "changed": 0
+    },
+    {
+      "path": "backend/internal/taskrecovery",
+      "total": 7,
+      "reviewed": 7,
+      "pending": 0,
+      "changed": 0
+    },
+    {
+      "path": "backend/internal/taskrunner",
+      "total": 6,
+      "reviewed": 6,
+      "pending": 0,
+      "changed": 0
+    },
+    {
+      "path": "backend/internal/tasksettings",
+      "total": 2,
+      "reviewed": 2,
+      "pending": 0,
+      "changed": 0
+    },
+    {
+      "path": "backend/internal/taskstore",
+      "total": 44,
+      "reviewed": 44,
+      "pending": 0,
+      "changed": 0
+    },
+    {
+      "path": "backend/internal/upstreamauth",
+      "total": 2,
+      "reviewed": 2,
+      "pending": 0,
+      "changed": 0
+    },
+    {
+      "path": "backend/internal/upstreamconfig",
+      "total": 17,
+      "reviewed": 17,
+      "pending": 0,
+      "changed": 0
+    },
+    {
+      "path": "backend/internal/upstreamdelete",
+      "total": 4,
+      "reviewed": 4,
+      "pending": 0,
+      "changed": 0
+    },
+    {
+      "path": "backend/internal/upstreamdetect",
+      "total": 2,
+      "reviewed": 2,
+      "pending": 0,
+      "changed": 0
+    },
+    {
+      "path": "backend/internal/upstreamerror",
+      "total": 2,
+      "reviewed": 2,
+      "pending": 0,
+      "changed": 0
+    },
+    {
+      "path": "backend/internal/upstreamsync",
+      "total": 22,
+      "reviewed": 22,
+      "pending": 0,
+      "changed": 0
+    },
+    {
+      "path": "backend/internal/uptimekuma",
+      "total": 49,
+      "reviewed": 49,
+      "pending": 0,
+      "changed": 0
+    },
+    {
+      "path": "backend/internal/usagequality",
+      "total": 2,
+      "reviewed": 2,
+      "pending": 0,
+      "changed": 0
+    },
+    {
+      "path": "backend/internal/workbenchprovider",
+      "total": 19,
+      "reviewed": 19,
+      "pending": 0,
+      "changed": 0
+    },
+    {
+      "path": "backend/scripts",
+      "total": 1,
+      "reviewed": 1,
+      "pending": 0,
+      "changed": 0
+    },
+    {
+      "path": "docs/account-live-traffic.md",
+      "total": 1,
+      "reviewed": 1,
+      "pending": 0,
+      "changed": 0
+    },
+    {
+      "path": "docs/animation-retry.md",
+      "total": 1,
+      "reviewed": 1,
+      "pending": 0,
+      "changed": 0
+    },
+    {
+      "path": "docs/background-task-recovery.md",
+      "total": 1,
+      "reviewed": 1,
+      "pending": 0,
+      "changed": 0
+    },
+    {
+      "path": "docs/deployment.md",
+      "total": 1,
+      "reviewed": 1,
+      "pending": 0,
+      "changed": 0
+    },
+    {
+      "path": "docs/dictionary-inventory.md",
+      "total": 1,
+      "reviewed": 1,
+      "pending": 0,
+      "changed": 0
+    },
+    {
+      "path": "docs/frontend-refresh-audit.md",
+      "total": 1,
+      "reviewed": 1,
+      "pending": 0,
+      "changed": 0
+    },
+    {
+      "path": "docs/loading-interactions.md",
+      "total": 1,
+      "reviewed": 1,
+      "pending": 0,
+      "changed": 0
+    },
+    {
+      "path": "frontend/.dockerignore",
+      "total": 1,
+      "reviewed": 1,
+      "pending": 0,
+      "changed": 0
+    },
+    {
+      "path": "frontend/.prettierignore",
+      "total": 1,
+      "reviewed": 1,
+      "pending": 0,
+      "changed": 0
+    },
+    {
+      "path": "frontend/Dockerfile",
+      "total": 1,
+      "reviewed": 1,
+      "pending": 0,
+      "changed": 0
+    },
+    {
+      "path": "frontend/STYLE-GUIDE.md",
+      "total": 1,
+      "reviewed": 1,
+      "pending": 0,
+      "changed": 0
+    },
+    {
+      "path": "frontend/STYLE_AUDIT.md",
+      "total": 1,
+      "reviewed": 1,
+      "pending": 0,
+      "changed": 0
+    },
+    {
+      "path": "frontend/docker-entrypoint.d",
+      "total": 1,
+      "reviewed": 1,
+      "pending": 0,
+      "changed": 0
+    },
+    {
+      "path": "frontend/e2e",
+      "total": 188,
+      "reviewed": 188,
+      "pending": 0,
+      "changed": 0
+    },
+    {
+      "path": "frontend/eslint.config.mjs",
+      "total": 1,
+      "reviewed": 1,
+      "pending": 0,
+      "changed": 0
+    },
+    {
+      "path": "frontend/index.html",
+      "total": 1,
+      "reviewed": 1,
+      "pending": 0,
+      "changed": 0
+    },
+    {
+      "path": "frontend/knip.json",
+      "total": 1,
+      "reviewed": 1,
+      "pending": 0,
+      "changed": 0
+    },
+    {
+      "path": "frontend/nginx.conf",
+      "total": 1,
+      "reviewed": 1,
+      "pending": 0,
+      "changed": 0
+    },
+    {
+      "path": "frontend/playwright.config.ts",
+      "total": 1,
+      "reviewed": 1,
+      "pending": 0,
+      "changed": 0
+    },
+    {
+      "path": "frontend/public",
+      "total": 6,
+      "reviewed": 6,
+      "pending": 0,
+      "changed": 0
+    },
+    {
+      "path": "frontend/rsbuild.config.ts",
+      "total": 1,
+      "reviewed": 1,
+      "pending": 0,
+      "changed": 0
+    },
+    {
+      "path": "frontend/scripts",
+      "total": 1,
+      "reviewed": 1,
+      "pending": 0,
+      "changed": 0
+    },
+    {
+      "path": "frontend/src",
+      "total": 130,
+      "reviewed": 130,
+      "pending": 0,
+      "changed": 0
+    },
+    {
+      "path": "frontend/src/components",
+      "total": 154,
+      "reviewed": 154,
+      "pending": 0,
+      "changed": 0
+    },
+    {
+      "path": "frontend/src/features/account-workbench",
+      "total": 67,
+      "reviewed": 67,
+      "pending": 0,
+      "changed": 0
+    },
+    {
+      "path": "frontend/src/features/accounts",
+      "total": 129,
+      "reviewed": 129,
+      "pending": 0,
+      "changed": 0
+    },
+    {
+      "path": "frontend/src/features/alert-policy",
+      "total": 18,
+      "reviewed": 18,
+      "pending": 0,
+      "changed": 0
+    },
+    {
+      "path": "frontend/src/features/alerts",
+      "total": 14,
+      "reviewed": 14,
+      "pending": 0,
+      "changed": 0
+    },
+    {
+      "path": "frontend/src/features/auth",
+      "total": 9,
+      "reviewed": 9,
+      "pending": 0,
+      "changed": 0
+    },
+    {
+      "path": "frontend/src/features/auto-inspection",
+      "total": 16,
+      "reviewed": 16,
+      "pending": 0,
+      "changed": 0
+    },
+    {
+      "path": "frontend/src/features/config",
+      "total": 53,
+      "reviewed": 53,
+      "pending": 0,
+      "changed": 0
+    },
+    {
+      "path": "frontend/src/features/groups",
+      "total": 24,
+      "reviewed": 24,
+      "pending": 0,
+      "changed": 0
+    },
+    {
+      "path": "frontend/src/features/model-check",
+      "total": 165,
+      "reviewed": 165,
+      "pending": 0,
+      "changed": 0
+    },
+    {
+      "path": "frontend/src/features/newapi-management",
+      "total": 126,
+      "reviewed": 126,
+      "pending": 0,
+      "changed": 0
+    },
+    {
+      "path": "frontend/src/features/overview",
+      "total": 8,
+      "reviewed": 8,
+      "pending": 0,
+      "changed": 0
+    },
+    {
+      "path": "frontend/src/features/policy",
+      "total": 38,
+      "reviewed": 38,
+      "pending": 0,
+      "changed": 0
+    },
+    {
+      "path": "frontend/src/features/pricing",
+      "total": 37,
+      "reviewed": 37,
+      "pending": 0,
+      "changed": 0
+    },
+    {
+      "path": "frontend/src/features/profile",
+      "total": 6,
+      "reviewed": 6,
+      "pending": 0,
+      "changed": 0
+    },
+    {
+      "path": "frontend/src/features/request-trace",
+      "total": 9,
+      "reviewed": 9,
+      "pending": 0,
+      "changed": 0
+    },
+    {
+      "path": "frontend/src/features/setup",
+      "total": 5,
+      "reviewed": 5,
+      "pending": 0,
+      "changed": 0
+    },
+    {
+      "path": "frontend/src/features/system-info",
+      "total": 19,
+      "reviewed": 19,
+      "pending": 0,
+      "changed": 0
+    },
+    {
+      "path": "frontend/src/features/traffic-ranking",
+      "total": 9,
+      "reviewed": 9,
+      "pending": 0,
+      "changed": 0
+    },
+    {
+      "path": "frontend/src/features/upstreams",
+      "total": 121,
+      "reviewed": 121,
+      "pending": 0,
+      "changed": 0
+    },
+    {
+      "path": "frontend/src/features/uptime-kuma",
+      "total": 81,
+      "reviewed": 81,
+      "pending": 0,
+      "changed": 0
+    },
+    {
+      "path": "frontend/src/features/vault",
+      "total": 6,
+      "reviewed": 6,
+      "pending": 0,
+      "changed": 0
+    },
+    {
+      "path": "frontend/test-nginx-proxy.sh",
+      "total": 1,
+      "reviewed": 1,
+      "pending": 0,
+      "changed": 0
+    },
+    {
+      "path": "frontend/testdata",
+      "total": 1,
+      "reviewed": 1,
+      "pending": 0,
+      "changed": 0
+    },
+    {
+      "path": "frontend/tsconfig.json",
+      "total": 1,
+      "reviewed": 1,
+      "pending": 0,
+      "changed": 0
+    },
+    {
+      "path": "frontend/vitest.config.ts",
+      "total": 1,
+      "reviewed": 1,
+      "pending": 0,
+      "changed": 0
+    },
+    {
+      "path": "output/imagegen",
+      "total": 6,
+      "reviewed": 6,
+      "pending": 0,
+      "changed": 0
+    },
+    {
+      "path": "third_party/account-workbench",
+      "total": 1,
+      "reviewed": 1,
+      "pending": 0,
+      "changed": 0
+    }
+  ],
+  "classification": "review_evidence_gaps_only",
+  "checkedAt": "2026-10-11T09:49:54.514Z",
+  "remainingBusinessModules": 0,
+  "confirmedOpenDefects": 0,
+  "missingRequiredChecks": 0
+}

@@ -58,6 +58,10 @@ func (store *recordingTasks) ModelCheckHistory(ctx context.Context, _ time.Time)
 	return store.ListBySkill(ctx, "sub2api-model-check", 10000)
 }
 
+func (store *recordingTasks) AnimationHistory(ctx context.Context) ([]taskstore.Task, error) {
+	return store.ListBySkill(ctx, "sub2api-model-animation", 10000)
+}
+
 func TestAccountStatusesUseLatestModelCheckResultPerAccount(t *testing.T) {
 	store := &recordingTasks{tasks: []taskstore.Task{
 		{
@@ -416,10 +420,13 @@ func TestPrepareRejectsMissingAndUnsupportedSelections(t *testing.T) {
 
 func TestPrepareAllowsManualPriorityAccounts(t *testing.T) {
 	priority := int64(3)
+	row := business.AccountStatus{ID: "41", Name: "人工账号", ManualPriority: &priority}
 	service, err := New(
 		&recordingTasks{terminal: make(chan taskstore.Task, 1)},
 		&fakeCredentials{},
-		fakeAccounts{rows: []business.AccountStatus{{ID: "41", Name: "人工账号", ManualPriority: &priority}}},
+		fakeAccounts{rows: []business.AccountStatus{row}, details: map[string]*business.AccountDetail{
+			"41": {AccountStatus: row},
+		}},
 		&fakeKeyRevealer{secret: "key"},
 	)
 	if err != nil {

@@ -7,6 +7,7 @@ import (
 )
 
 func TestAuthRecoveryProjectionDoesNotGuessWWWIdentity(t *testing.T) {
+	t.Parallel()
 	store, err := Open(filepath.Join(t.TempDir(), "business.sqlite3"))
 	if err != nil {
 		t.Fatal(err)
@@ -37,6 +38,7 @@ func TestAuthRecoveryProjectionDoesNotGuessWWWIdentity(t *testing.T) {
 }
 
 func TestAuthRecoveryProjectionResolvesExplicitStableAlias(t *testing.T) {
+	t.Parallel()
 	store, err := Open(filepath.Join(t.TempDir(), "business.sqlite3"))
 	if err != nil {
 		t.Fatal(err)

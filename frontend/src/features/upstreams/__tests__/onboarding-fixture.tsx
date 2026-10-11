@@ -1,3 +1,4 @@
+import { seedDictionaries } from "@/test/dictionary-fixtures";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   createMemoryHistory,
@@ -197,6 +198,11 @@ export function renderOnboarding(
     history: createMemoryHistory({ initialEntries: [url] }),
   });
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  seedDictionaries(client, {
+    group: (groupOverrides ?? groups).flatMap((group) =>
+      group.id ? [{ value: group.id, name: group.name }] : [],
+    ),
+  });
   if (options?.cacheEntryConfiguration) {
     client.setQueryData(["upstream-configuration", upstream.host], configuredUpstream);
   }

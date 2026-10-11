@@ -1,3 +1,4 @@
+import { dictionaryResponse } from "./fixtures/dictionaries";
 import { expect, test } from "@playwright/test";
 
 const modelPrices = [{ model: "model-a", input_ratio: "0.5", completion_ratio: "4" }];
@@ -16,9 +17,14 @@ test.beforeEach(async ({ page }) => {
     const path = new URL(route.request().url()).pathname;
     const fixtures: Record<string, unknown> = {
       "/api/preferences/navigation": { hidden_item_ids: [], version: "test" },
-      "/api/dictionaries": { items: [] },
+      "/api/dictionaries": dictionaryResponse(route.request().url(), [
+        { value: "6", name: "标准" },
+      ]),
       "/api/newapi/platforms/primary/channels": { items: [], total: 0 },
       "/api/newapi/platforms/primary/channel-groups": { version: "1", groups: [] },
+      "/api/newapi/platforms/primary/groups": {
+        groups: [{ id: "default", name: "默认", ratio: "1" }],
+      },
       "/api/setup/status": { initialized: true, configuration_errors: [] },
       "/api/auth/session": { authenticated: true, username: "刷新回归测试" },
       "/api/inspection/automation": {

@@ -12,7 +12,7 @@ export function AccountWorkbenchPage(props: {
 }): ReactElement {
   switch (props.tab) {
     case "accounts":
-      return <AccountList />;
+      return <AccountList onStarted={props.onStarted} />;
     case "templates":
       return <TemplateList />;
     case "records":

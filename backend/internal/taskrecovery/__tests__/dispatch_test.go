@@ -12,7 +12,7 @@ import (
 	"github.com/MIEnchating/sub2api-console/backend/internal/taskstore"
 )
 
-func pendingTask(t *testing.T) (*taskstore.Store, []taskstore.Task) {
+func pendingTask(t *testing.T) (*taskstore.Store, []taskstore.RecoveryRef) {
 	t.Helper()
 	store, err := taskstore.Open(filepath.Join(t.TempDir(), "tasks.db"))
 	if err != nil {

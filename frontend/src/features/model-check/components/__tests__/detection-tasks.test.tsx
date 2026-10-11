@@ -1,3 +1,4 @@
+import { seedDictionaries } from "@/test/dictionary-fixtures";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -33,6 +34,8 @@ function setup(values: DetectionTask[] = [plan], failSave = false) {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false, staleTime: Infinity } },
   });
+  seedDictionaries(client, { group: [{ value: "7", name: "测试分组" }] });
+  seedDictionaries(client, { group: [{ value: "7", name: "测试分组" }] });
   clients.push(client);
   client.setQueryData(["model-detection-tasks"], values);
   client.setQueryData(["groups"], [{ id: "7", name: "测试分组" }]);
@@ -72,7 +75,7 @@ function setup(values: DetectionTask[] = [plan], failSave = false) {
   );
   return requests;
 }
-it("编辑分组任务可设置多轮终端和多个自动时间并保留版本", async () => {
+it("编辑旧组合任务移除终端选项并保留版本和多个自动时间", async () => {
   const requests = setup();
   const user = userEvent.setup();
   await user.click(screen.getByRole("button", { name: "编辑" }));
@@ -86,9 +89,10 @@ it("编辑分组任务可设置多轮终端和多个自动时间并保留版本"
   await user.type(model, "edited-model");
   expect(within(dialog).getByRole("checkbox", { name: "前置检测" })).toBeChecked();
   expect(within(dialog).getByLabelText("每天检测时间 2（北京时间）")).toHaveValue("20:00");
-  fireEvent.change(within(dialog).getByRole("spinbutton", { name: "终端检测轮数" }), {
-    target: { value: "5" },
-  });
+  expect(within(dialog).queryByRole("checkbox", { name: "终端检测" })).not.toBeInTheDocument();
+  expect(
+    within(dialog).queryByRole("spinbutton", { name: "终端检测轮数" }),
+  ).not.toBeInTheDocument();
   await user.click(within(dialog).getByRole("checkbox", { name: "自动检测" }));
   await user.click(within(dialog).getByRole("button", { name: "保存任务" }));
   const confirm = screen.getByRole("dialog", { name: "确认自动检测任务" });
@@ -101,7 +105,8 @@ it("编辑分组任务可设置多轮终端和多个自动时间并保留版本"
       version: 2,
       group_ids: ["7"],
       model: "edited-model",
-      terminal_rounds: 5,
+      terminal: false,
+      terminal_rounds: 0,
       concurrency: 6,
       automatic: true,
       daily_times: ["09:00", "20:00"],
@@ -150,7 +155,6 @@ it("取消所有检测项时阻止保存，键盘选择前置检测后仅提交�
   expect(animation).toBeChecked();
   await user.click(animation);
   await user.click(screen.getByRole("checkbox", { name: "前置检测" }));
-  await user.click(screen.getByRole("checkbox", { name: "终端检测" }));
   await user.click(screen.getByRole("button", { name: "保存任务" }));
   expect(await screen.findByText("请至少选择一项检测内容")).toBeVisible();
   expect(requests.filter((item) => item.method === "PUT")).toHaveLength(0);
@@ -234,4 +238,12 @@ it("立即执行分组计划后登记系统信息后台任务，不包含完整�
   expect(clients[0].getQueryData(["tasks"])).not.toEqual([
     expect.objectContaining({ result: expect.anything() }),
   ]);
+});
+
+it("旧纯终端任务禁用立即执行并允许编辑选择有效阶段", async () => {
+  setup([{ ...plan, animation: false, precheck: false, automatic: false }]);
+  expect(screen.getByRole("button", { name: "立即执行" })).toBeDisabled();
+  await userEvent.setup().click(screen.getByRole("button", { name: "编辑" }));
+  expect(screen.getByRole("checkbox", { name: "动画检测" })).not.toBeChecked();
+  expect(screen.queryByRole("checkbox", { name: "终端检测" })).not.toBeInTheDocument();
 });

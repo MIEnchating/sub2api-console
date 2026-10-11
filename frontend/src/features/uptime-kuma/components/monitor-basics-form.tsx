@@ -1,6 +1,6 @@
 import { Controller, type UseFormReturn } from "react-hook-form";
 import type { KumaMonitor } from "@/api";
-import { FormField } from "@/App";
+import { FormField } from "@/components/form-field";
 import { Input } from "@/components/ui/input";
 import {
   Select,
@@ -24,8 +24,8 @@ export function MonitorBasicsForm(props: {
   const form = props.form;
   const monitorTypes = useDictionaryOrder(
     "kuma_monitor_type",
-    Object.entries(monitorTypeLabels),
-    (item) => item[0],
+    Object.entries(monitorTypeLabels).map(([value, label]) => ({ value, label })),
+    (item) => item.value,
   );
   const type = form.watch("type");
   return (
@@ -68,13 +68,17 @@ export function MonitorBasicsForm(props: {
                     form.setValue("template_auth_override", false);
                   }}
                   disabled={props.pending || !!props.monitor}
-                  itemToStringLabel={(value) => monitorTypeLabels[value] ?? value}
+                  itemToStringLabel={(value) =>
+                    monitorTypes.find((option) => option.value === value)?.label ??
+                    monitorTypeLabels[value] ??
+                    value
+                  }
                 >
                   <SelectTrigger id="kuma-monitor-type" onBlur={field.onBlur} ref={field.ref}>
                     <SelectValue />
                   </SelectTrigger>
-                  <SelectContent>
-                    {monitorTypes.map(([value, label]) => (
+                  <SelectContent dictionaryKind="kuma_monitor_type">
+                    {monitorTypes.map(({ value, label }) => (
                       <SelectItem key={value} value={value}>
                         {label}
                       </SelectItem>

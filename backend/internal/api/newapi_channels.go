@@ -154,3 +154,17 @@ func (s *Server) saveNewAPIChannelGroups(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, groups)
 }
+
+func (s *Server) lookupNewAPIChannels(c *gin.Context) {
+	if s.newAPIManagement == nil {
+		writeError(c, http.StatusServiceUnavailable, "渠道管理服务不可用")
+		return
+	}
+	result, err := s.newAPIManagement.LookupChannels(c.Request.Context(), c.Param("platform_id"), c.QueryArray("id"))
+	if err != nil {
+		writeNewAPIError(c, err, http.StatusBadGateway)
+		return
+	}
+	c.Header("Cache-Control", "no-store")
+	c.JSON(http.StatusOK, result)
+}

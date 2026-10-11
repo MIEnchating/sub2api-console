@@ -1,0 +1,3 @@
+backend/internal/accountops/model_sync.go	ce28a4784b39d907726fc148a4d5880ac774c704618f87c208362e5b7373d3a4	fixed	全文复审；模型发现启动保持零进度，按已处理账号比例更新；模型应用及探活多阶段进度仍待独立核验，不宣称提速。
+backend/internal/accountops/pool_mode_sync.go	54497aabebd581e72b0fdbd0a85ff6c13e69031de70f76fae3e2754abe6cb966	fixed	全文复审；池模式同步启动及中途进度对应实际结果数量，安全互斥、写后确认、失败与终态契约保持；共享目标互斥对吞吐的影响待评估。
+backend/internal/accountops/__tests__/batch_progress_test.go	e5f7502c4028227e453c488918e63e7a8f2fa5e954a5dd4dce8e3c7f62def2a9	fixed	全文审查；真实临时业务库与任务库、受控本地HTTP请求保护未完成时零进度、两项完成一项时50%、全部成功或部分失败后100%；按实际首个请求控制后续请求，不依赖账号抢锁顺序。

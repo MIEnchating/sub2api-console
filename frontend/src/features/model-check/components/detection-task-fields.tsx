@@ -1,6 +1,8 @@
+import { useDictionaryOrder } from "@/hooks/use-dictionary-order";
 import type { ReactElement } from "react";
 import type { UseFormReturn } from "react-hook-form";
 import { Input } from "@/components/ui/input";
+import { AnimationPromptDialog } from "./animation-prompt-dialog";
 import { Checkbox } from "@/components/ui/checkbox";
 import { FieldError } from "@/components/field-error";
 import { MultiSelect } from "@/components/multi-select";
@@ -16,7 +18,8 @@ export function DetectionTaskFields(props: {
 }): ReactElement {
   const form = props.form;
   const errors = form.formState.errors;
-  const groupOptions = props.groups.flatMap((group) =>
+  const groups = useDictionaryOrder("group", props.groups, (group) => group.id ?? "");
+  const groupOptions = groups.flatMap((group) =>
     group.id ? [{ value: group.id, label: `${group.name}（ID ${group.id}）` }] : [],
   );
   return (
@@ -30,6 +33,7 @@ export function DetectionTaskFields(props: {
         <div className="space-y-1 text-sm">
           <p>检测分组</p>
           <MultiSelect
+            dictionaryKind="group"
             ariaLabel="检测分组"
             options={groupOptions}
             selected={form.watch("group_ids")}
@@ -72,6 +76,7 @@ export function DetectionTaskFields(props: {
           <FieldError message={errors.timeout_seconds?.message} />
         </div>
       </div>
+      {form.watch("animation") ? <AnimationPromptDialog disabled={props.pending} /> : null}
       <div className="min-w-0 space-y-1">
         <label className="block space-y-1 text-sm">
           同时检测账号数

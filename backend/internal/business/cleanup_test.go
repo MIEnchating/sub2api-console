@@ -7,6 +7,7 @@ import (
 )
 
 func TestDeleteAccountProjectionRemovesBindingsRuntimeDataAndPolicyReferences(t *testing.T) {
+	t.Parallel()
 	store := openPolicyStore(t)
 	ctx := context.Background()
 	if _, err := store.db.ExecContext(ctx, `
@@ -74,6 +75,7 @@ func TestDeleteAccountProjectionRemovesBindingsRuntimeDataAndPolicyReferences(t 
 }
 
 func TestDeleteAccountProjectionWithScopeRemovesOnlyStableIdentityKeyProjection(t *testing.T) {
+	t.Parallel()
 	store := openPolicyStore(t)
 	ctx := context.Background()
 	if _, err := store.db.ExecContext(ctx, `
@@ -139,6 +141,7 @@ func TestDeleteAccountProjectionWithScopeRemovesOnlyStableIdentityKeyProjection(
 }
 
 func TestReconcileDeletedUpstreamKeyProjectionIsScopedAndIdempotent(t *testing.T) {
+	t.Parallel()
 	store := openPolicyStore(t)
 	ctx := context.Background()
 	if _, err := store.db.ExecContext(ctx, `
@@ -194,6 +197,7 @@ func TestReconcileDeletedUpstreamKeyProjectionIsScopedAndIdempotent(t *testing.T
 }
 
 func TestReconcileDeletedUpstreamKeyProjectionRechecksExclusiveScope(t *testing.T) {
+	t.Parallel()
 	store := openPolicyStore(t)
 	ctx := context.Background()
 	if _, err := store.db.ExecContext(ctx, `
@@ -243,6 +247,7 @@ func TestReconcileDeletedUpstreamKeyProjectionRechecksExclusiveScope(t *testing.
 }
 
 func TestReconcileDeletedUnboundUpstreamKeyProjectionIsScopedAndRechecksReferences(t *testing.T) {
+	t.Parallel()
 	store := openPolicyStore(t)
 	ctx := context.Background()
 	if _, err := store.db.ExecContext(ctx, `
@@ -309,6 +314,7 @@ func TestReconcileDeletedUnboundUpstreamKeyProjectionIsScopedAndRechecksReferenc
 }
 
 func TestConfirmAccountDeleteScopeRejectsSharedBindingAndPendingOnboarding(t *testing.T) {
+	t.Parallel()
 	store := openPolicyStore(t)
 	ctx := context.Background()
 	if _, err := store.db.ExecContext(ctx, `

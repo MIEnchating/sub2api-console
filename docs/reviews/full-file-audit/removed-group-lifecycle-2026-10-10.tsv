@@ -1,0 +1,4 @@
+frontend/src/features/upstreams/components/removed-group-accounts-dialog.tsx	a74ab36bc2e76212255fd3dce186fb0d716fe51facae9df324fc57fd3dab372a	fixed	按稳定范围隔离任务状态；卸载阻断未发送删除；查询取消与后台任务保留
+frontend/src/features/upstreams/components/__tests__/removed-group-lifecycle.test.tsx	3203265a7d303e477ad27167ca5eb17f078b8c711eccec2288d92da119aed58a	reviewed	7项生命周期回归覆盖复核中卸载、切换范围、查询取消与已发送请求迟到返回
+frontend/src/features/upstreams/components/__tests__/removed-group-accounts-dialog.test.tsx	ab37fdcd6f2d7d9cc0053716bdd6778264144f0868afc0cdad947dfc7b6642e1	reviewed	范围变化、提交复核、成功任务与50项上限兼容
+frontend/src/features/upstreams/components/upstream-group-history.tsx	c3b5a94b4ab49318cdfeaac351c3acfe958ceee0e8d647ec98167906dc5849c9	reviewed	完整读取历史入口和稳定分组身份传递，本轮不改动

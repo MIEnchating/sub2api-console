@@ -29,7 +29,9 @@ func (s *Store) DeleteTerminalBySkill(ctx context.Context, skill string, selecte
 			return errors.New("处理记录选择或版本无效，请刷新后重新选择")
 		}
 		seen[item.ID] = true
-		result, err := tx.ExecContext(ctx, `DELETE FROM tasks WHERE id=? AND skill=? AND updated_at=? AND status IN ('succeeded','partial','failed','cancelled')`, item.ID, skill, updated.UTC().Format(storageTimeLayout))
+		// Stable ID limits the lookup to one task. Normalize legacy timestamps
+		// only for comparison; equivalent offsets/precision are the same version.
+		result, err := tx.ExecContext(ctx, `DELETE FROM tasks WHERE id=? AND skill=? AND console_history_time(updated_at)=? AND status IN ('succeeded','partial','failed','cancelled')`, item.ID, skill, updated.UTC().Format(storageTimeLayout))
 		if err != nil {
 			return err
 		}

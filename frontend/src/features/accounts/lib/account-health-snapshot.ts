@@ -5,7 +5,7 @@ import type { AccountStatus } from "@/api";
 
 export const healthTimestampSchema = z.string().datetime();
 
-function healthTimestampOrder(value: string): string {
+export function healthTimestampOrder(value: string): string {
   // Go emits UTC RFC3339Nano with variable precision; Date truncates to milliseconds.
   return value.replace(/(?:\.(\d+))?Z$/, (_suffix, fraction: string | undefined) => {
     return `.${(fraction ?? "").padEnd(9, "0")}Z`;

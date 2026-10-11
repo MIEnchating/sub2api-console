@@ -16,6 +16,7 @@ func restorationAccount(id string) business.RoutingAccount {
 }
 
 func TestDisabledCapacityRestoresAllOwnedReductionsButPreservesProtectedValues(t *testing.T) {
+	t.Parallel()
 	for _, scenario := range []string{"disabled", "outside selected upstream", "account override off", "upstream override off", "manual priority", "paused", "external value", "external ownership", "missing baseline", "original one", "unknown current", "unlimited current", "capacity enabled"} {
 		t.Run(scenario, func(t *testing.T) {
 			account := restorationAccount("41")
@@ -75,6 +76,7 @@ func TestDisabledCapacityRestoresAllOwnedReductionsButPreservesProtectedValues(t
 }
 
 func TestRestorationReservesCapacityBeforeAllocatingSelectedSibling(t *testing.T) {
+	t.Parallel()
 	account := restorationAccount("41")
 	original := int64(8)
 	account.BaselineConcurrency = &original
@@ -90,6 +92,7 @@ func TestRestorationReservesCapacityBeforeAllocatingSelectedSibling(t *testing.T
 }
 
 func TestRestorationComputesFollowingLoadAgainstRestoredConcurrency(t *testing.T) {
+	t.Parallel()
 	zero := "0"
 	for _, load := range []*string{nil, &zero} {
 		account := restorationAccount("41")
@@ -109,6 +112,7 @@ func TestRestorationComputesFollowingLoadAgainstRestoredConcurrency(t *testing.T
 }
 
 func TestRestorationUsesStablePrimaryGroupCapacityPolicyAcrossMemberships(t *testing.T) {
+	t.Parallel()
 	for _, primaryScaling := range []bool{false, true} {
 		first := restorationAccount("41")
 		second := first
@@ -131,6 +135,7 @@ func TestRestorationUsesStablePrimaryGroupCapacityPolicyAcrossMemberships(t *tes
 }
 
 func TestRestorationYieldsToPendingAbnormalCleanup(t *testing.T) {
+	t.Parallel()
 	store, db := healthEvidenceStore(t)
 	if _, err := store.UpdatePolicy(t.Context(), map[string]any{"advanced_policy": map[string]any{
 		"scaling": map[string]any{"enabled": false}, "upstream_concurrency": map[string]any{"enabled": false},

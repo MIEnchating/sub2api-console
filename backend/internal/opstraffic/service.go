@@ -29,8 +29,7 @@ type TargetStore interface {
 }
 
 type AccountStore interface {
-	Accounts(context.Context) ([]business.AccountStatus, error)
-	Account(context.Context, string) (*business.AccountDetail, error)
+	AccountLogLabels(context.Context, []string) (map[string]*business.AccountLogLabel, error)
 }
 
 type Service struct {
@@ -83,21 +82,13 @@ func (s *Service) SearchSystemLogs(ctx context.Context, query SystemLogQuery) (b
 	result := business.SystemLogPage{
 		Items: make([]business.UsageRecord, 0, len(page.Items)), Total: page.Total, Page: page.Page, PageSize: page.PageSize,
 	}
-	accountNames := map[string]*string{}
-	if s.accounts != nil {
-		accounts, accountErr := s.accounts.Accounts(searchCtx)
-		if accountErr == nil {
-			for _, account := range accounts {
-				accountNames[account.ID] = stringPointer(account.Name)
-			}
-		}
-	}
+	labels := s.accountLogLabels(searchCtx, page.Items)
 	for index, row := range page.Items {
 		recordID := int64(index + 1)
 		if parsedID, parseErr := strconv.ParseInt(strings.TrimSpace(text(row["id"])), 10, 64); parseErr == nil && parsedID > 0 {
 			recordID = parsedID
 		}
-		result.Items = append(result.Items, systemLogRecord(recordID, row, nil, accountNames[accountIDFromRow(row)]))
+		result.Items = append(result.Items, systemLogRecord(recordID, row, nil, accountLogName(labels[accountIDFromRow(row)])))
 	}
 	return result, nil
 }
@@ -153,35 +144,22 @@ func (s *Service) RequestTrace(ctx context.Context, requestID string) (business.
 	}
 
 	accountID := accountIDFromRow(matchedRows[0])
-	if !positiveID(accountID) {
-		return result, nil
-	}
-	result.AccountID = stringPointer(accountID)
-	var detail *business.AccountDetail
-	if s.accounts != nil {
-		detail, _ = s.accounts.Account(traceCtx, accountID)
-	}
-	if detail != nil {
-		result.AccountName = stringPointer(detail.Name)
-	}
-	details := map[string]*business.AccountDetail{accountID: detail}
+	labels := s.accountLogLabels(traceCtx, matchedRows)
 	for index, row := range matchedRows {
-		rowAccountID := accountIDFromRow(row)
-		rowDetail, found := details[rowAccountID]
-		if !found && s.accounts != nil && positiveID(rowAccountID) {
-			rowDetail, _ = s.accounts.Account(traceCtx, rowAccountID)
-			details[rowAccountID] = rowDetail
-		}
-		var rowName *string
-		if rowDetail != nil {
-			rowName = stringPointer(rowDetail.Name)
-		}
+		rowDetail := labels[accountIDFromRow(row)]
+		rowName := accountLogName(rowDetail)
 		if fromSystemLogs {
 			result.Records[index] = systemLogRecord(result.Records[index].ID, row, rowDetail, rowName)
 		} else {
 			result.Records[index] = usageRecord(result.Records[index].ID, row, rowDetail, rowName)
 		}
 	}
+	if !positiveID(accountID) {
+		return result, nil
+	}
+	result.AccountID = stringPointer(accountID)
+	detail := labels[accountID]
+	result.AccountName = accountLogName(detail)
 
 	errorCtx, cancelErrors := context.WithTimeout(traceCtx, traceAuxiliaryRequestTimeout)
 	errorRows, err := client.RequestErrors(errorCtx, accountID, recentErrorLookbackMinutes, 20)
@@ -192,10 +170,47 @@ func (s *Service) RequestTrace(ctx context.Context, requestID string) (business.
 		}
 		return result, nil
 	}
-	for index, row := range errorRows {
-		result.RecentErrors = append(result.RecentErrors, usageRecord(int64(index+1), row, detail, result.AccountName))
+	for _, row := range errorRows {
+		if accountIDFromRow(row) != accountID || !strings.EqualFold(strings.TrimSpace(text(row["kind"])), "error") {
+			continue
+		}
+		result.RecentErrors = append(result.RecentErrors, usageRecord(int64(len(result.RecentErrors)+1), row, detail, result.AccountName))
 	}
 	return result, nil
+}
+
+func (s *Service) accountLogLabels(ctx context.Context, rows []map[string]any) map[string]*business.AccountLogLabel {
+	if s.accounts == nil {
+		return nil
+	}
+	seen := make(map[string]struct{})
+	ids := make([]string, 0, len(rows))
+	for _, row := range rows {
+		id := accountIDFromRow(row)
+		if !positiveID(id) {
+			continue
+		}
+		if _, exists := seen[id]; !exists {
+			seen[id] = struct{}{}
+			ids = append(ids, id)
+		}
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	// Optional display metadata must not hide otherwise readable remote logs.
+	labels, err := s.accounts.AccountLogLabels(ctx, ids)
+	if err != nil {
+		return nil
+	}
+	return labels
+}
+
+func accountLogName(label *business.AccountLogLabel) *string {
+	if label == nil {
+		return nil
+	}
+	return stringPointer(label.Name)
 }
 
 func systemLogsByRequestID(ctx context.Context, client *adminclient.Client, requestID string) ([]map[string]any, error) {
@@ -296,18 +311,12 @@ func isAccountTestError(row map[string]any) bool {
 	return strings.HasPrefix(message, "account test error:")
 }
 
-func systemLogRecord(id int64, row map[string]any, detail *business.AccountDetail, accountName *string) business.UsageRecord {
+func systemLogRecord(id int64, row map[string]any, detail *business.AccountLogLabel, accountName *string) business.UsageRecord {
 	extra, _ := row["extra"].(map[string]any)
 	level := strings.ToLower(strings.TrimSpace(text(row["level"])))
 	isError := level == "error" || level == "fatal" || level == "panic" || level == "dpanic"
 	message := optionalText(row["message"])
-	accountID := optionalText(row["account_id"])
-	if accountID == nil {
-		accountID = optionalText(extra["account_id"])
-	}
-	if accountID == nil {
-		accountID = optionalText(accountIDFromTestPath(row))
-	}
+	accountID := optionalText(accountIDFromRow(row))
 	duration := optionalText(extra["latency_ms"])
 	if duration == nil {
 		duration = optionalText(extra["duration_ms"])
@@ -340,9 +349,9 @@ func (s *Service) adminClient(ctx context.Context) (*adminclient.Client, error) 
 	}, nil)
 }
 
-func usageRecord(id int64, row map[string]any, detail *business.AccountDetail, accountName *string) business.UsageRecord {
+func usageRecord(id int64, row map[string]any, detail *business.AccountLogLabel, accountName *string) business.UsageRecord {
 	extra, _ := row["extra"].(map[string]any)
-	accountID := optionalText(row["account_id"])
+	accountID := optionalText(accountIDFromRow(row))
 	groupName := groupName(row, detail)
 	kind := strings.ToLower(strings.TrimSpace(text(row["kind"])))
 	isError := kind == "error"
@@ -382,7 +391,7 @@ func usageAvailable(row, extra map[string]any) bool {
 	return usageField(row, extra, "input_tokens", "prompt_tokens", "output_tokens", "completion_tokens", "cache_read_tokens", "cache_read_input_tokens", "cache_creation_tokens", "cache_write_tokens") != nil
 }
 
-func groupName(row map[string]any, detail *business.AccountDetail) *string {
+func groupName(row map[string]any, detail *business.AccountLogLabel) *string {
 	if detail == nil {
 		return nil
 	}

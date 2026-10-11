@@ -62,10 +62,11 @@ func TestHistoricalScoresDoNotExtendCurrentSafetyStreaks(t *testing.T) {
 			}
 			current, _ := selectRoutingEvidence(rows, now, 2*time.Hour, 15*time.Minute, 60)
 			history := selectScoringHistory(rows, current, now, 24*time.Hour, 60)
-			health, err := scoreRoutingHealth(current, history, testPolicy())
+			config, err := parseScoringConfig(testPolicy())
 			if err != nil {
 				t.Fatal(err)
 			}
+			health := scoreRoutingHealth(current, history, config)
 			if health.SampleCount != 3 || len(health.Events) != 1 {
 				t.Fatalf("historical scores leaked into current evidence: %+v", health)
 			}
@@ -98,10 +99,11 @@ func TestScoringHistoryKeepsCurrentTrafficPreferenceAndPerformanceFresh(t *testi
 			}
 			current, performance := selectRoutingEvidence(rows, now, 2*time.Hour, 15*time.Minute, 60)
 			history := selectScoringHistory(rows, current, now, 24*time.Hour, 60)
-			health, err := scoreRoutingHealth(current, history, testPolicy())
+			config, err := parseScoringConfig(testPolicy())
 			if err != nil {
 				t.Fatal(err)
 			}
+			health := scoreRoutingHealth(current, history, config)
 			if health.SampleCount != tc.count {
 				t.Fatalf("wrong history source: %+v", history)
 			}
@@ -123,19 +125,17 @@ func TestHistoricalSuccessCannotDiluteFreshFatalProbe(t *testing.T) {
 	}
 	current, _ := selectRoutingEvidence(rows, now, 2*time.Hour, 15*time.Minute, 60)
 	history := selectScoringHistory(rows, current, now, 24*time.Hour, 60)
-	health, err := scoreRoutingHealth(current, history, testPolicy())
+	config, err := parseScoringConfig(testPolicy())
 	if err != nil {
 		t.Fatal(err)
 	}
+	health := scoreRoutingHealth(current, history, config)
 	if !health.Fatal || health.HealthScore != 0 || health.SampleCount != 2 {
 		t.Fatalf("historical success diluted fatal evidence: %+v", health)
 	}
 	current, _ = selectRoutingEvidence(rows, now.Add(time.Hour), 2*time.Hour, 15*time.Minute, 60)
 	history = selectScoringHistory(rows, current, now.Add(time.Hour), 24*time.Hour, 60)
-	health, err = scoreRoutingHealth(current, history, testPolicy())
-	if err != nil {
-		t.Fatal(err)
-	}
+	health = scoreRoutingHealth(current, history, config)
 	if health.Fatal || health.SampleCount != 0 {
 		t.Fatalf("stale fatal evidence was reapplied: %+v", health)
 	}

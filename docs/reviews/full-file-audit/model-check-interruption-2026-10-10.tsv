@@ -1,0 +1,4 @@
+backend/internal/modelcheck/__tests__/behavior_interruption_test.go	be9a900580ea9fb9efa370ed82d32fe99acd2a3307d16167e8e5b65f09608bab	reviewed	全文阅读；真实任务与临时库保护人工取消、执行失败及服务停止时已完成检测结果、执行元数据和持久化终态，存储边界触发中断，无固定等待。
+frontend/src/features/model-check/components/__tests__/interrupted-results.test.tsx	36b265b0b11d3d4e4aec3c8a1931211ca36a201ea974fe62e5ca0f4bc2435f0b	reviewed	全文阅读；取消和失败保留已有明细及真实终态，失败原因可见，空结果不显示明细表，21项结果可分页。
+frontend/e2e/__tests__/interrupted-model-check.e2e.ts	574b4eef73aa86b4abead4b19228f36558be4cbc36829b9ff8a6b33fd4533849	reviewed	全文阅读；拦截全部API并构建隔离组件，覆盖桌面浅色及320px手机深色的中断终态、明细、键盘分页和无横向溢出；临时bundle结束清理。
+frontend/e2e/__tests__/fixtures/interrupted-model-check.tsx	4515a28c607196e27bdc715df17e1ec50ec3ec9614dfd0c2010a12b241fa5f14	reviewed	全文阅读；21项已完成检测的无凭据隔离夹具，按URL区分取消及失败，不写服务端或浏览器存储。

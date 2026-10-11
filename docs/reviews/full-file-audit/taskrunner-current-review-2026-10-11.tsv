@@ -1,0 +1,1 @@
+backend/internal/taskrunner/runner_test.go	4f52329cda3ace5ef32e64ad877f5082c1073528bf3e8388fd59dd3a96329222	reviewed	匹配基线阅读队列槽释放后启动与超过容量拒绝两项回归，结合 NewQueued/GoTask 同步占位与队列边界；通过 channel 驱动完成，time.After 仅失败超时；未扩展为旧测试清理。 基线 c57e626bff3546eea8d67ffaf40cc6889d96d389 / 4f590c79a80faa5b83f3adbd5647fc32631357b1c94d45accd1cfabfa2ed8567，原记录 backend-domains.tsv。 本轮未确认新增缺陷，无业务/测试修改，未重复执行检查。

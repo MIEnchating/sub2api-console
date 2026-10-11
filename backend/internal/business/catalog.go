@@ -19,31 +19,42 @@ import (
 )
 
 type UpstreamHost struct {
-	UpstreamID             string   `json:"upstream_id"`
-	Host                   string   `json:"host"`
-	Hosts                  []string `json:"hosts"`
-	BaseURL                string   `json:"base_url"`
-	AccountBaseURL         string   `json:"account_base_url"`
-	Name                   string   `json:"name"`
-	UpstreamType           string   `json:"upstream_type"`
-	AccountCount           int64    `json:"account_count"`
-	GroupCount             int64    `json:"group_count"`
-	AuthStatus             string   `json:"auth_status"`
-	RawBalance             *string  `json:"raw_balance"`
-	Balance                *string  `json:"balance"`
-	DisplayBalance         *string  `json:"display_balance"`
-	BalanceUnit            *string  `json:"balance_unit"`
-	RechargeRate           string   `json:"recharge_rate"`
-	BalanceStatus          string   `json:"balance_status"`
-	CheckedAt              *string  `json:"checked_at"`
-	LastAuthSuccessMethod  *string  `json:"last_auth_success_method"`
-	LastAuthRecoveryMethod *string  `json:"last_auth_recovery_method"`
-	LastAuthSuccessAt      *string  `json:"last_auth_success_at"`
-	ConcurrencyLimit       *int64   `json:"concurrency_limit"`
-	ConcurrencyStatus      string   `json:"concurrency_status"`
-	ConcurrencyCheckedAt   *string  `json:"concurrency_checked_at"`
-	AllocatedConcurrency   *int64   `json:"allocated_concurrency"`
-	TargetConcurrency      *int64   `json:"target_concurrency"`
+	Spending               *UpstreamSpending             `json:"spending"`
+	RequestCount           int64                         `json:"request_count"`
+	RequestWindowDays      int                           `json:"request_window_days"`
+	AccountRequestUsage    []UpstreamAccountRequestUsage `json:"account_request_usage"`
+	UpstreamID             string                        `json:"upstream_id"`
+	Host                   string                        `json:"host"`
+	Hosts                  []string                      `json:"hosts"`
+	BaseURL                string                        `json:"base_url"`
+	AccountBaseURL         string                        `json:"account_base_url"`
+	Name                   string                        `json:"name"`
+	UpstreamType           string                        `json:"upstream_type"`
+	AccountCount           int64                         `json:"account_count"`
+	GroupCount             int64                         `json:"group_count"`
+	AuthStatus             string                        `json:"auth_status"`
+	RawBalance             *string                       `json:"raw_balance"`
+	Balance                *string                       `json:"balance"`
+	DisplayBalance         *string                       `json:"display_balance"`
+	BalanceUnit            *string                       `json:"balance_unit"`
+	RechargeRate           string                        `json:"recharge_rate"`
+	BalanceStatus          string                        `json:"balance_status"`
+	CheckedAt              *string                       `json:"checked_at"`
+	LastAuthSuccessMethod  *string                       `json:"last_auth_success_method"`
+	LastAuthRecoveryMethod *string                       `json:"last_auth_recovery_method"`
+	LastAuthSuccessAt      *string                       `json:"last_auth_success_at"`
+	ConcurrencyLimit       *int64                        `json:"concurrency_limit"`
+	ConcurrencyStatus      string                        `json:"concurrency_status"`
+	ConcurrencyCheckedAt   *string                       `json:"concurrency_checked_at"`
+	AllocatedConcurrency   *int64                        `json:"allocated_concurrency"`
+	TargetConcurrency      *int64                        `json:"target_concurrency"`
+}
+
+type UpstreamAccountRequestUsage struct {
+	AccountID    string  `json:"account_id"`
+	AccountName  string  `json:"account_name"`
+	RequestCount int64   `json:"request_count"`
+	Share        float64 `json:"share"`
 }
 
 type UpstreamSummary struct {
@@ -94,22 +105,22 @@ func optionalMetadataText(metadata map[string]any, key string) *string {
 }
 
 type GroupPolicyOverride struct {
-	Enabled            *bool    `json:"enabled,omitempty"`
-	Strategy           *string  `json:"strategy,omitempty"`
-	MinPoolSize        *int64   `json:"min_pool_size,omitempty"`
-	WeightBudget       *int64   `json:"weight_budget,omitempty"`
-	BalancedPriceRatio *float64 `json:"balanced_price_ratio,omitempty"`
-	BreakerEnabled     *bool    `json:"breaker_enabled,omitempty"`
-	RecoveryEnabled    *bool    `json:"recovery_enabled,omitempty"`
-	WeightsEnabled     *bool    `json:"weights_enabled,omitempty"`
-	ScalingEnabled     *bool    `json:"scaling_enabled,omitempty"`
-	ProbeEnabled       *bool    `json:"probe_enabled,omitempty"`
-	ProbeInterval      *int64   `json:"probe_interval_seconds,omitempty"`
-	ProbeModel         *string  `json:"probe_model,omitempty"`
-	AnimationEnabled   *bool    `json:"animation_enabled,omitempty"`
+	Enabled                 *bool    `json:"enabled,omitempty"`
+	Strategy                *string  `json:"strategy,omitempty"`
+	MinPoolSize             *int64   `json:"min_pool_size,omitempty"`
+	WeightBudget            *int64   `json:"weight_budget,omitempty"`
+	BalancedPriceRatio      *float64 `json:"balanced_price_ratio,omitempty"`
+	BreakerEnabled          *bool    `json:"breaker_enabled,omitempty"`
+	RecoveryEnabled         *bool    `json:"recovery_enabled,omitempty"`
+	WeightsEnabled          *bool    `json:"weights_enabled,omitempty"`
+	ScalingEnabled          *bool    `json:"scaling_enabled,omitempty"`
+	ProbeEnabled            *bool    `json:"probe_enabled,omitempty"`
+	ProbeInterval           *int64   `json:"probe_interval_seconds,omitempty"`
+	ProbeModel              *string  `json:"probe_model,omitempty"`
+	AnimationEnabled        *bool    `json:"animation_enabled,omitempty"`
 	AnimationPassMultiplier *float64 `json:"animation_pass_multiplier,omitempty"`
 	AnimationFailMultiplier *float64 `json:"animation_fail_multiplier,omitempty"`
-	AnimationFailureAction *string `json:"animation_failure_action,omitempty"`
+	AnimationFailureAction  *string  `json:"animation_failure_action,omitempty"`
 }
 
 type GroupStatus struct {
@@ -146,33 +157,75 @@ type GroupStatus struct {
 }
 
 func (s *Store) Upstreams(ctx context.Context) (UpstreamSummary, error) {
-	identityHosts, err := upstreamIdentityHostSets(ctx, s.db)
-	if err != nil {
-		return UpstreamSummary{}, err
+	return s.readUpstreams(ctx, nil)
+}
+
+// UpstreamConfigurationHost shares the catalog's balance and capacity rules,
+// but does not aggregate traffic or unrelated upstreams for an editor read.
+func (s *Store) UpstreamConfigurationHost(ctx context.Context, host string) (*UpstreamHost, error) {
+	host = canonicalHost(host)
+	summary, err := s.readUpstreams(ctx, &host)
+	if err != nil || len(summary.Hosts) == 0 {
+		return nil, err
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT h.upstream_id,u.host,u.base_url,u.upstream_type,u.auth_status,
+	return &summary.Hosts[0], nil
+}
+
+func (s *Store) readUpstreams(ctx context.Context, configurationHost *string) (UpstreamSummary, error) {
+	var requestUsage map[string][]UpstreamAccountRequestUsage
+	var requestCounts, accountCounts, groupCounts map[string]int64
+	var identityHosts map[string][]string
+	var upstreamID *string
+	var err error
+	if configurationHost == nil {
+		requestUsage, requestCounts, err = s.upstreamAccountRequestUsage(ctx)
+		if err != nil {
+			return UpstreamSummary{}, err
+		}
+		identityHosts, err = upstreamIdentityHostSets(ctx, s.db)
+		if err != nil {
+			return UpstreamSummary{}, err
+		}
+		accountCounts, err = countByString(ctx, s.db, `SELECT bi.upstream_id,COUNT(DISTINCT b.local_account_id)
+			FROM binding_identities bi JOIN bindings b ON b.id=bi.binding_id GROUP BY bi.upstream_id`)
+		if err != nil {
+			return UpstreamSummary{}, err
+		}
+		groupCounts, err = countByString(ctx, s.db, `SELECT host,COUNT(*) FROM upstream_groups GROUP BY host`)
+		if err != nil {
+			return UpstreamSummary{}, err
+		}
+	} else {
+		var id string
+		err = s.db.QueryRowContext(ctx, `SELECT upstream_id FROM upstream_identity_hosts WHERE host=? AND is_primary=1`, *configurationHost).Scan(&id)
+		if errors.Is(err, sql.ErrNoRows) {
+			return UpstreamSummary{Hosts: []UpstreamHost{}}, nil
+		}
+		if err != nil {
+			return UpstreamSummary{}, err
+		}
+		upstreamID = &id
+	}
+	query := `SELECT h.upstream_id,u.host,u.base_url,u.upstream_type,u.auth_status,
 		u.balance,u.raw_balance,u.mapped_balance,u.checked_at,u.metadata_json,
 		COALESCE(r.recharge_rate,'1')
 		FROM upstreams u JOIN upstream_identity_hosts h ON h.host=u.host
-		LEFT JOIN recharge_rates r ON r.host=u.host WHERE h.is_primary=1 ORDER BY u.host`)
+		LEFT JOIN recharge_rates r ON r.host=u.host WHERE h.is_primary=1`
+	arguments := []any{}
+	if configurationHost != nil {
+		query += ` AND u.host=?`
+		arguments = append(arguments, *configurationHost)
+	}
+	rows, err := s.db.QueryContext(ctx, query+` ORDER BY u.host`, arguments...)
 	if err != nil {
 		return UpstreamSummary{}, err
 	}
 	defer rows.Close()
-	accountCounts, err := countByString(ctx, s.db, `SELECT bi.upstream_id,COUNT(DISTINCT b.local_account_id)
-		FROM binding_identities bi JOIN bindings b ON b.id=bi.binding_id GROUP BY bi.upstream_id`)
+	derivedNames, err := s.derivedUpstreamNames(ctx, configurationHost)
 	if err != nil {
 		return UpstreamSummary{}, err
 	}
-	groupCounts, err := countByString(ctx, s.db, `SELECT host,COUNT(*) FROM upstream_groups GROUP BY host`)
-	if err != nil {
-		return UpstreamSummary{}, err
-	}
-	derivedNames, err := s.derivedUpstreamNames(ctx)
-	if err != nil {
-		return UpstreamSummary{}, err
-	}
-	concurrencyTotals, err := s.upstreamConcurrencyTotals(ctx)
+	concurrencyTotals, err := s.upstreamConcurrencyTotals(ctx, upstreamID)
 	if err != nil {
 		return UpstreamSummary{}, err
 	}
@@ -189,6 +242,19 @@ func (s *Store) Upstreams(ctx context.Context) (UpstreamSummary, error) {
 			return UpstreamSummary{}, err
 		}
 		metadata, metadataErr := decodeObject(metadataRaw)
+		spending, spendingErr := readUpstreamSpending(metadata)
+		if spendingErr != nil {
+			return UpstreamSummary{}, spendingErr
+		}
+		if spending != nil {
+			item.Spending = &spending.UpstreamSpending
+		}
+		item.AccountRequestUsage = requestUsage[item.UpstreamID]
+		if item.AccountRequestUsage == nil {
+			item.AccountRequestUsage = []UpstreamAccountRequestUsage{}
+		}
+		item.RequestCount = requestCounts[item.UpstreamID]
+		item.RequestWindowDays = 30
 		concurrency := readUpstreamConcurrency(item.UpstreamType, metadata)
 		item.ConcurrencyLimit, item.ConcurrencyStatus, item.ConcurrencyCheckedAt = concurrency.limit, concurrency.status, concurrency.checkedAt
 		total := concurrencyTotals[item.UpstreamID]
@@ -255,6 +321,60 @@ func (s *Store) Upstreams(ctx context.Context) (UpstreamSummary, error) {
 	}
 	result.RecoveryRequired = result.TotalHosts - result.AuthenticatedHosts
 	return result, nil
+}
+
+func (s *Store) upstreamAccountRequestUsage(ctx context.Context) (map[string][]UpstreamAccountRequestUsage, map[string]int64, error) {
+	end := time.Now().UTC()
+	start := end.Add(-30 * 24 * time.Hour)
+	rows, err := s.db.QueryContext(ctx, `WITH bound_accounts AS (
+		SELECT DISTINCT bi.upstream_id,a.id,a.name
+		FROM binding_identities bi JOIN bindings b ON b.id=bi.binding_id
+		JOIN accounts a ON a.id=b.local_account_id
+	), traffic_requests AS (
+		SELECT account_id,request_id
+		FROM usage_records
+		WHERE LOWER(source)='traffic' AND observed_at>=? AND observed_at<=?
+			AND TRIM(request_id)<>'' AND account_id IS NOT NULL
+		GROUP BY account_id,request_id
+	)
+	SELECT ba.upstream_id,ba.id,ba.name,COUNT(rr.request_id)
+	FROM bound_accounts ba LEFT JOIN traffic_requests rr ON rr.account_id=ba.id
+	GROUP BY ba.upstream_id,ba.id,ba.name ORDER BY ba.upstream_id,ba.name,ba.id`,
+		start.Format(healthSampleTimeLayout), end.Format(healthSampleTimeLayout))
+	if err != nil {
+		return nil, nil, err
+	}
+	type accountCount struct {
+		upstreamID string
+		usage      UpstreamAccountRequestUsage
+	}
+	counts := make([]accountCount, 0)
+	totals := make(map[string]int64)
+	for rows.Next() {
+		var upstreamID string
+		var usage UpstreamAccountRequestUsage
+		if err := rows.Scan(&upstreamID, &usage.AccountID, &usage.AccountName, &usage.RequestCount); err != nil {
+			rows.Close()
+			return nil, nil, err
+		}
+		counts = append(counts, accountCount{upstreamID: upstreamID, usage: usage})
+		totals[upstreamID] += usage.RequestCount
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, nil, err
+	}
+	result := make(map[string][]UpstreamAccountRequestUsage)
+	for _, count := range counts {
+		if total := totals[count.upstreamID]; total > 0 {
+			count.usage.Share = float64(count.usage.RequestCount) * 100 / float64(total)
+		}
+		result[count.upstreamID] = append(result[count.upstreamID], count.usage)
+	}
+	return result, totals, nil
 }
 
 func (s *Store) UpstreamGroups(ctx context.Context, host string, includeBound bool) ([]UpstreamGroup, error) {
@@ -446,15 +566,51 @@ func (s *Store) upstreamBoundAccounts(ctx context.Context, host string) (map[str
 }
 
 func (s *Store) Groups(ctx context.Context) ([]GroupStatus, error) {
+	return s.groups(ctx, "")
+}
+
+func (s *Store) groups(ctx context.Context, targetID string) ([]GroupStatus, error) {
 	control, err := s.readPolicyDocument(ctx, s.db, "control-plane")
 	if err != nil {
 		return nil, err
 	}
-	accounts, err := s.groupAccountProjections(ctx)
+	var accounts []accountProjection
+	if targetID == "" {
+		accounts, err = s.groupAccountProjections(ctx)
+	} else {
+		var groupName string
+		if err := s.db.QueryRowContext(ctx, `SELECT name FROM local_groups WHERE remote_id=?`, targetID).Scan(&groupName); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return nil, fmt.Errorf("%w：分组 ID %s", ErrGroupNotFound, targetID)
+			}
+			return nil, err
+		}
+		accounts, err = s.groupAccountProjectionsForGroup(ctx, groupName)
+	}
 	if err != nil {
 		return nil, err
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT name,remote_id,platform,rate_multiplier,strategy,strategy_source FROM local_groups ORDER BY name`)
+	// Keep account order and exact membership names without copying projections per group.
+	managedMemberships := make(map[string][]int)
+	for index := range accounts {
+		if len(accounts[index].Groups) == 0 || !groupAccountMetadataManaged(accounts[index], control) {
+			continue
+		}
+		for membership, name := range accounts[index].Groups {
+			if membership > 0 && name == accounts[index].Groups[membership-1] {
+				continue
+			}
+			managedMemberships[name] = append(managedMemberships[name], index)
+		}
+	}
+	query := `SELECT name,remote_id,platform,rate_multiplier,strategy,strategy_source FROM local_groups`
+	arguments := []any{}
+	if targetID != "" {
+		query += ` WHERE remote_id=?`
+		arguments = append(arguments, targetID)
+	}
+	query += ` ORDER BY name`
+	rows, err := s.db.QueryContext(ctx, query, arguments...)
 	if err != nil {
 		return nil, err
 	}
@@ -482,15 +638,8 @@ func (s *Store) Groups(ctx context.Context) ([]GroupStatus, error) {
 		item.WeightBudget = effectiveGroupWeightBudget(control, item.Override)
 		minPoolSize := effectiveGroupMinPoolSize(control, item.Override)
 		minPoolScore := effectiveGroupMinPoolScore(control)
-		managedAccounts := make([]accountProjection, 0)
-		for index := range accounts {
-			if !containsString(accounts[index].Groups, item.Name) {
-				continue
-			}
-			if !groupAccountMetadataManaged(accounts[index], control) {
-				continue
-			}
-			managedAccounts = append(managedAccounts, accounts[index])
+		var totalScore float64
+		for _, index := range managedMemberships[item.Name] {
 			item.AccountCount++
 			switch {
 			case accounts[index].Schedulable == nil:
@@ -501,10 +650,17 @@ func (s *Store) Groups(ctx context.Context) ([]GroupStatus, error) {
 				item.SchedulingClosed++
 			}
 			classifyGroupAccount(&item, accounts[index], now)
+			item.AvailableAccounts += availableGroupAccounts(accounts[index:index+1], item.Name, minPoolScore, now)
+			if accounts[index].HealthScore != nil {
+				item.ScoredAccounts++
+				totalScore += *accounts[index].HealthScore
+			}
 		}
-		item.AvailableAccounts = availableGroupAccounts(managedAccounts, item.Name, minPoolScore, now)
 		item.NeedsAttention = max(int64(0), item.DegradedAccounts-item.RateLimitedAccounts) + item.FusedAccounts + item.PausedAccounts + item.DisabledAccounts + item.ExcludedAccounts
-		item.AverageHealthScore = averageGroupScores(managedAccounts, item.Name, &item.ScoredAccounts)
+		if item.ScoredAccounts > 0 {
+			average := mathRoundOne(totalScore / float64(item.ScoredAccounts))
+			item.AverageHealthScore = &average
+		}
 		item.Status = groupRuntimeStatus(item, groupExplicitlyExcluded(control, item.ID), minPoolSize)
 		result = append(result, item)
 	}
@@ -574,9 +730,14 @@ func countByString(ctx context.Context, db policyQueryer, query string, argument
 	return result, rows.Err()
 }
 
-func (s *Store) derivedUpstreamNames(ctx context.Context) (map[string]string, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT upstream_host,name FROM accounts
-		WHERE upstream_host IS NOT NULL AND name<>''`)
+func (s *Store) derivedUpstreamNames(ctx context.Context, host *string) (map[string]string, error) {
+	query := `SELECT upstream_host,name FROM accounts WHERE upstream_host IS NOT NULL AND name<>''`
+	arguments := []any{}
+	if host != nil {
+		query += ` AND upstream_host=?`
+		arguments = append(arguments, *host)
+	}
+	rows, err := s.db.QueryContext(ctx, query, arguments...)
 	if err != nil {
 		return nil, err
 	}
@@ -1053,25 +1214,6 @@ func groupAccountMetadataManaged(account accountProjection, control map[string]a
 		}
 	}
 	return true
-}
-
-func averageGroupScores(accounts []accountProjection, groupName string, count *int64) *float64 {
-	values := []float64{}
-	for _, account := range accounts {
-		if containsString(account.Groups, groupName) && account.HealthScore != nil {
-			values = append(values, *account.HealthScore)
-		}
-	}
-	*count = int64(len(values))
-	if len(values) == 0 {
-		return nil
-	}
-	total := 0.0
-	for _, value := range values {
-		total += value
-	}
-	result := mathRoundOne(total / float64(len(values)))
-	return &result
 }
 
 func groupRuntimeStatus(group GroupStatus, excluded bool, minPoolSize int64) string {

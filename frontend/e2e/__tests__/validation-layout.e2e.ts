@@ -103,7 +103,7 @@ test("动画检测错误显示在字段下方且无重叠，清除错误后恢�
         running: false,
         traffic_collection: { enabled: false },
       },
-      "/api/dictionaries": [],
+      "/api/dictionaries": { items: [] },
       "/api/accounts": Array.from({ length: 25 }, (_, index) => ({
         ...account,
         id: String(41 + index),
@@ -126,7 +126,7 @@ test("动画检测错误显示在字段下方且无重叠，清除错误后恢�
   await expect(first).toBeVisible();
   const start = page.getByRole("button", { name: /开始检测/ });
   const operations = page.getByRole("group", { name: "动画检测操作", exact: true });
-  const settings = page.getByRole("group", { name: "动画筛选与模型", exact: true });
+  const settings = page.getByRole("group", { name: "动画检测设置", exact: true });
   await expect(operations.getByRole("button", { name: "清空选择" })).toBeInViewport();
   await expect(operations.getByRole("button", { name: "全选账号" })).toBeInViewport();
   await expect(page.locator('[data-slot="animation-settings-feedback"]')).toHaveCount(0);
@@ -184,7 +184,12 @@ test("动画检测错误显示在字段下方且无重叠，清除错误后恢�
   expect(await region.boundingBox()).toEqual(regionBox);
   await page.getByRole("button", { name: "全选账号" }).click();
   await expect(start).toHaveText("开始检测（25 个账号）");
-  expect(await start.boundingBox()).toEqual(startBox);
+  const selectedBox = (await start.boundingBox())!;
+  // 账号数增加时按钮按文字扩宽，保留行高、纵向位置和右侧对齐。
+  expect(selectedBox.height).toBe(startBox!.height);
+  expect(selectedBox.y).toBe(startBox!.y);
+  expect(selectedBox.x + selectedBox.width).toBe(startBox!.x + startBox!.width);
+  expect(await start.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
     true,
   );
@@ -198,6 +203,7 @@ async function openAnimationLayoutFixture(page: Page): Promise<void> {
       ...pageFixtures,
       "/api/setup/status": { initialized: true, configuration_errors: [] },
       "/api/auth/session": { authenticated: true, username: "布局测试" },
+      "/api/dictionaries": { items: [] },
       "/api/accounts": [{ ...account, id: "41", name: "布局账号", platform: "openai" }],
       "/api/model-checks/capabilities": { claude_standards: [], sol_models: [] },
       "/api/model-checks/account-statuses": [],
@@ -212,20 +218,21 @@ async function openAnimationLayoutFixture(page: Page): Promise<void> {
   await page.goto("/animation-check");
 }
 
-test("动画工具栏在桌面合并筛选与模型，窄屏换行并保留卡片可滚动区域", async ({ page }) => {
+test("动画模型参数位于操作栏，窄屏换行并保留卡片可滚动区域", async ({ page }) => {
   await openAnimationLayoutFixture(page);
-  const settings = page.getByRole("group", { name: "动画筛选与模型", exact: true });
+  const settings = page.getByRole("group", { name: "动画检测设置", exact: true });
   const search = settings.getByRole("textbox", { name: "搜索动画检测账号", exact: true });
-  const model = settings.getByRole("combobox", { name: "检测模型", exact: true });
+  const operations = settings.getByRole("group", { name: "动画检测操作", exact: true });
+  const model = operations.getByRole("combobox", { name: "检测模型", exact: true });
   await expect(model).toBeVisible();
   const modelBox = (await model.boundingBox())!;
   const searchBox = (await search.boundingBox())!;
+  expect(modelBox.y).toBeGreaterThan(searchBox.y + searchBox.height);
   if (page.viewportSize()!.width >= 1024) {
-    expect(Math.abs(modelBox.y - searchBox.y)).toBeLessThanOrEqual(1);
+    const start = operations.getByRole("button", { name: /开始检测/ });
+    expect(Math.abs((await start.boundingBox())!.y - modelBox.y)).toBeLessThanOrEqual(1);
     expect(modelBox.width).toBeLessThanOrEqual(300);
-    expect((await settings.boundingBox())!.height).toBeLessThanOrEqual(82);
   } else {
-    expect(modelBox.y).toBeGreaterThan(searchBox.y + searchBox.height);
     const region = page.getByRole("region", { name: "动画账号卡片", exact: true });
     expect((await region.boundingBox())!.height).toBeGreaterThanOrEqual(320);
     expect(await region.evaluate((element) => getComputedStyle(element).overflowY)).toBe("visible");

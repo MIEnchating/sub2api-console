@@ -1,14 +1,18 @@
 import type { ReactElement } from "react";
 import type { AnimationResult } from "@/api";
+import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
 const tokenFormat = new Intl.NumberFormat("zh-CN");
 
-export function formatTokens(value: number | undefined): string {
+function formatTokens(value: number | undefined): string {
   return value === undefined ? "未返回" : tokenFormat.format(value);
 }
 
-export function ResultTokenMetrics(props: { result?: AnimationResult }): ReactElement {
+export function ResultTokenMetrics(props: {
+  result?: AnimationResult;
+  detailed?: boolean;
+}): ReactElement {
   const usage = props.result?.usage;
   const duration = props.result?.generation_duration_ms;
   const output = usage?.output_tokens;
@@ -30,16 +34,42 @@ export function ResultTokenMetrics(props: { result?: AnimationResult }): ReactEl
     }
   }
   return (
-    <dl className="grid w-full min-w-0 grid-cols-4 gap-x-2 text-xs tabular-nums">
+    <dl
+      role="group"
+      aria-label="用量与性能"
+      className={cn(
+        "grid w-full min-w-0 text-xs tabular-nums",
+        props.detailed
+          ? "grid-cols-2 gap-x-4 gap-y-4 rounded-lg border bg-muted/20 p-4 sm:grid-cols-3"
+          : "grid-cols-4 gap-x-2",
+      )}
+    >
       <Metric label="输入 Token" value={props.result ? formatTokens(usage?.input_tokens) : "—"} />
       <Metric label="输出 Token" value={props.result ? formatTokens(output) : "—"} />
+      {props.detailed ? (
+        <Metric
+          label="推理 Token"
+          value={formatTokens(usage?.reasoning_tokens)}
+          title="推理 Token 属于输出用量，不重复计入总计"
+        />
+      ) : null}
       <Metric label="总计 Token" value={props.result ? formatTokens(total) : "—"} />
       <Metric label="TPS（计算）" value={tps} title={reason} />
+      {props.detailed ? (
+        <Metric
+          label="耗时"
+          value={
+            props.result && props.result.duration_ms > 0
+              ? `${(props.result.duration_ms / 1000).toFixed(1)} 秒`
+              : "未记录"
+          }
+        />
+      ) : null}
     </dl>
   );
 }
 
-export function Metric(props: { label: string; value: string; title?: string }): ReactElement {
+function Metric(props: { label: string; value: string; title?: string }): ReactElement {
   const content = (
     <div className="min-w-0 space-y-1" aria-label={props.title}>
       <dt className="text-muted-foreground">{props.label}</dt>

@@ -1,8 +1,9 @@
+import { dictionaryResponse } from "./fixtures/dictionaries";
 import { expect, test } from "@playwright/test";
 import type { DetectionTask } from "../../src/api";
 import { pageFixtures } from "./fixtures/page-shell";
 
-test("分组任务可保存多时间与多轮、直接启动并逐轮查看结果", async ({ page }) => {
+test("分组任务仅选择动画和前置检测、保存多时间并查看运行结果", async ({ page }) => {
   let plans: DetectionTask[] = [];
   const runs: unknown[] = [];
   const run = {
@@ -15,44 +16,24 @@ test("分组任务可保存多时间与多轮、直接启动并逐轮查看结�
     created_at: "2026-09-23T00:00:00Z",
     updated_at: "2026-09-23T00:00:30Z",
     result: {
-      completed: 2,
-      total: 2,
+      completed: 1,
+      total: 1,
       group_ids_by_account: { "41": ["7"] },
-      checks: [
+      animations: [
         {
           account_id: "41",
           account_name: "测试账号",
-          model: "test-model",
-          request_id: "request",
-          verdict: "suspected",
+          model: "managed-model",
+          request_id: "precheck-1",
+          mode: "precheck",
+          status: "succeeded",
+          precheck: {
+            verdict: "passed",
+            profile_version: "v1",
+            questions: [{ id: "candy", verdict: "passed", answer: "21", request_id: "precheck-1" }],
+          },
           duration_ms: 30,
           completed_at: "2026-09-23T00:00:30Z",
-          round_results: [
-            {
-              round: 1,
-              request_id: "round-1",
-              verdict: "normal",
-              response: "第一轮正常回答",
-              duration_ms: 10,
-              completed_at: "2026-09-23T00:00:10Z",
-            },
-            {
-              round: 2,
-              request_id: "round-2",
-              verdict: "suspected",
-              response: "第二轮未延续工具上下文",
-              duration_ms: 10,
-              completed_at: "2026-09-23T00:00:20Z",
-            },
-            {
-              round: 3,
-              request_id: "round-3",
-              verdict: "error",
-              error: "第三轮请求失败",
-              duration_ms: 10,
-              completed_at: "2026-09-23T00:00:30Z",
-            },
-          ],
         },
       ],
     },
@@ -73,6 +54,10 @@ test("分组任务可保存多时间与多轮、直接启动并逐轮查看结�
     }
     const fixtures: Record<string, unknown> = {
       ...pageFixtures,
+      "/api/dictionaries": dictionaryResponse(route.request().url(), [
+        { value: "7", name: "主分组" },
+        { value: "8", name: "备用分组" },
+      ]),
       "/api/setup/status": { initialized: true, configuration_errors: [] },
       "/api/auth/session": { authenticated: true, username: "test" },
       "/api/accounts": [],
@@ -89,6 +74,7 @@ test("分组任务可保存多时间与多轮、直接启动并逐轮查看结�
     else await route.fulfill({ json: fixtures[path] ?? [] });
   });
   await page.goto("/animation-check");
+  await expect(page.getByRole("tab", { name: "终端续接检测" })).toHaveCount(0);
   await page.getByRole("tab", { name: "任务管理", exact: true }).click();
   await page.getByRole("button", { name: "新增任务" }).click();
   const editor = page.getByRole("dialog", { name: "新增检测任务" });
@@ -104,8 +90,8 @@ test("分组任务可保存多时间与多轮、直接启动并逐轮查看结�
   await expect(editor.getByText("请至少选择一项检测内容")).toBeVisible();
   expect(plans).toEqual([]);
   await editor.getByRole("checkbox", { name: "前置检测", exact: true }).check();
-  await editor.getByRole("checkbox", { name: "终端检测", exact: true }).check();
-  await editor.getByRole("spinbutton", { name: "终端检测轮数" }).fill("3");
+  await expect(editor.getByRole("checkbox", { name: "终端检测", exact: true })).toHaveCount(0);
+  await expect(editor.getByRole("spinbutton", { name: "终端检测轮数" })).toHaveCount(0);
   await editor.getByRole("checkbox", { name: "自动检测", exact: true }).check();
   await editor.getByRole("radio", { name: "每天定时" }).check();
   await editor.getByLabel("每天检测时间（北京时间）", { exact: true }).fill("09:00");
@@ -120,10 +106,9 @@ test("分组任务可保存多时间与多轮、直接启动并逐轮查看结�
       return { x: rect.x, y: rect.y };
     }),
   );
-  expect(bounds).toHaveLength(3);
+  expect(bounds).toHaveLength(2);
   if (test.info().project.name === "desktop-light") {
     expect(bounds[0].y).toBe(bounds[1].y);
-    expect(bounds[1].y).toBe(bounds[2].y);
     expect((await editor.boundingBox())!.width).toBeGreaterThan(900);
   } else {
     expect(bounds[1].y).toBeGreaterThan(bounds[0].y);
@@ -134,7 +119,8 @@ test("分组任务可保存多时间与多轮、直接启动并逐轮查看结�
   await page.screenshot({ path: test.info().outputPath("detection-task-editor.png") });
   await editor.getByRole("button", { name: "保存任务" }).click();
   const confirmation = page.getByRole("dialog", { name: "确认自动检测任务" });
-  await expect(confirmation).toContainText("终端检测 3 轮");
+  await expect(confirmation).toContainText("前置检测");
+  await expect(confirmation).not.toContainText("终端检测");
   await expect(confirmation).toContainText("09:00、20:00");
   await expect(confirmation).not.toContainText("动画检测");
   await confirmation.getByRole("button", { name: "确认保存并开启" }).click();
@@ -143,8 +129,8 @@ test("分组任务可保存多时间与多轮、直接启动并逐轮查看结�
     group_ids: ["7", "8"],
     animation: false,
     precheck: true,
-    terminal: true,
-    terminal_rounds: 3,
+    terminal: false,
+    terminal_rounds: 0,
     automatic: true,
     daily_times: ["09:00", "20:00"],
   });
@@ -159,13 +145,8 @@ test("分组任务可保存多时间与多轮、直接启动并逐轮查看结�
   await page.getByRole("button", { name: "运行详情" }).click();
   const details = page.getByRole("dialog", { name: "检测任务运行详情" });
   await expect(details).not.toContainText("动画检测");
-  await expect(details.getByRole("heading", { name: "逐轮检测结果（3 轮）" })).toBeVisible();
-  const second = details.locator("summary").filter({ hasText: "第 2 轮" });
-  await second.focus();
-  await page.keyboard.press("Enter");
-  await expect(details.getByText("第二轮未延续工具上下文")).toBeVisible();
-  await details.locator("summary").filter({ hasText: "第 3 轮" }).click();
-  await expect(details.getByText("第三轮请求失败")).toBeVisible();
+  await expect(details).not.toContainText("终端检测");
+  await expect(details.getByRole("group", { name: "前置检测 · 通过" })).toBeVisible();
   expect(await details.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
-  await page.screenshot({ path: test.info().outputPath("detection-task-rounds.png") });
+  await page.screenshot({ path: test.info().outputPath("detection-task-details.png") });
 });

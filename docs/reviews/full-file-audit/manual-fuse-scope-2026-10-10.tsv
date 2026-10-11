@@ -1,0 +1,3 @@
+backend/internal/business/manual_fuse_alert.go	c826067659c0f4409a2e45e96b659c80cccff9f443aa61f4e6c7c9cd43d9ae21	fixed	全文复审；人工熔断ID先通过JSON参数限制账号范围再联结聚合，保留调度分组优先、最小成员分组回退、空分组、ID排序及禁用/空范围；无schema变更。
+backend/internal/business/__tests__/manual_fuse_scope_test.go	f49c83bf3c2bfc63c8e7f903c0961bafa008aed21638df921813780ea17f1dba	reviewed	全文阅读；真实临时库保护稳定ID、多来源分组、重复/缺失ID、空范围、1100项范围和取消无写入；改前也通过，属于兼容回归而非缺陷复现。
+backend/internal/business/__tests__/manual_fuse_scope_benchmark_test.go	5b74e3794f3cc12ecdb7d47c6a645dac339bf2ec1122f05ef4fc118aae4c1c65	reviewed	全文阅读；一万账号四万成员中选两账号，完整告警评估含数据库提交，准备及预热不计时，检查实际发现数，不作为生产延迟或数据库峰值内存证据。

@@ -89,6 +89,10 @@ func TestAutomaticInspectionRestartsWithOriginalIDAndCurrentCatalog(t *testing.T
 	if err != nil || len(pending) != 1 {
 		t.Fatalf("pending: %#v %v", pending, err)
 	}
+	recoveryTask, err := tasks.RecoveryTask(context.Background(), pending[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
 	scheduler, err := inspection.NewScheduler(store, runner)
 	if err != nil {
 		t.Fatal(err)
@@ -96,7 +100,7 @@ func TestAutomaticInspectionRestartsWithOriginalIDAndCurrentCatalog(t *testing.T
 	service := inspection.NewManualService(scheduler, runner, tasks)
 	pool := &recoveryRunner{}
 	service.UseTaskRunner(pool)
-	if err := service.ResumeTask(context.Background(), pending[0]); err != nil {
+	if err := service.ResumeTask(context.Background(), recoveryTask); err != nil {
 		t.Fatal(err)
 	}
 	pool.run(context.Background())

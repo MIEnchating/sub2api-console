@@ -4,7 +4,9 @@ import {
   formatTrafficCachePercent,
   formatTrafficLatency,
   formatTrafficTokens,
+  normalizeTrafficSearchQuery,
   trafficAccountMatches,
+  trafficAccountMatchesNormalized,
   trafficStabilityLabel,
 } from "../lib/traffic-ranking";
 import { rankingFixture } from "./fixtures";
@@ -72,6 +74,13 @@ describe("流量指标展示", () => {
     expect(trafficAccountMatches(rankingFixture.accounts[0], "API.EXAMPLE")).toBe(true);
     expect(trafficAccountMatches(rankingFixture.accounts[0], "codex")).toBe(true);
     expect(trafficAccountMatches(rankingFixture.accounts[0], "missing")).toBe(false);
+  });
+
+  it("已规范化查询词路径与公开匹配函数保持一致", () => {
+    const query = normalizeTrafficSearchQuery("  API.EXAMPLE  ");
+    expect(trafficAccountMatchesNormalized(rankingFixture.accounts[0], query)).toBe(
+      trafficAccountMatches(rankingFixture.accounts[0], "  API.EXAMPLE  "),
+    );
   });
 
   it("延迟超过一秒时使用秒单位，缺失值保留为空", () => {

@@ -8,6 +8,7 @@ import (
 )
 
 func TestPricingCatalogReadsOnlyConsoleAccountAndGroupProjection(t *testing.T) {
+	t.Parallel()
 	store := openPricingCatalogStore(t)
 	catalog, err := store.PricingCatalog(context.Background())
 	if err != nil {
@@ -31,6 +32,7 @@ func TestPricingCatalogReadsOnlyConsoleAccountAndGroupProjection(t *testing.T) {
 }
 
 func TestPricingCatalogDerivesMissingAccountPlatformFromCurrentGroups(t *testing.T) {
+	t.Parallel()
 	store := openPricingCatalogStore(t)
 	if _, err := store.db.Exec(`INSERT INTO accounts(id,name,multiplier,metadata_json,updated_at)
 		VALUES('43','missing-platform','0.2','{}','now');
@@ -55,6 +57,7 @@ func TestPricingCatalogDerivesMissingAccountPlatformFromCurrentGroups(t *testing
 }
 
 func TestPricingCatalogDoesNotDerivePlatformFromMixedCurrentGroups(t *testing.T) {
+	t.Parallel()
 	store := openPricingCatalogStore(t)
 	if _, err := store.db.Exec(`INSERT INTO accounts(id,name,multiplier,metadata_json,updated_at)
 		VALUES('44','mixed-platform','0.2','{}','now');
@@ -81,6 +84,7 @@ func TestPricingCatalogDoesNotDerivePlatformFromMixedCurrentGroups(t *testing.T)
 }
 
 func TestSyncPricingAccountGroupsUpdatesOnlyConfirmedLocalMemberships(t *testing.T) {
+	t.Parallel()
 	store := openPricingCatalogStore(t)
 	ctx := context.Background()
 	result, err := store.SyncPricingAccountGroups(ctx, map[string][]string{"41": {"7", "6", "7"}}, "operator")
@@ -128,6 +132,7 @@ func TestSyncPricingAccountGroupsUpdatesOnlyConfirmedLocalMemberships(t *testing
 }
 
 func TestPricingChangeRecordsKeepLegacyAggregateEvents(t *testing.T) {
+	t.Parallel()
 	store := openPricingCatalogStore(t)
 	if _, err := store.db.Exec(`INSERT INTO runtime_events(source_id,event_type,created_at,status,summary,payload_json)
 		VALUES(-20,'pricing.groups.synced','2026-09-03T08:00:00Z','succeeded','旧价格同步','{"actor":"scheduler","accounts":2,"group_links":3}')`); err != nil {
@@ -144,6 +149,7 @@ func TestPricingChangeRecordsKeepLegacyAggregateEvents(t *testing.T) {
 }
 
 func TestPricingBackupCapturesStableAccountGroupMemberships(t *testing.T) {
+	t.Parallel()
 	store := openPricingCatalogStore(t)
 	backup, err := store.CreatePricingBackup(context.Background(), "调价前", "operator")
 	if err != nil {
@@ -167,6 +173,7 @@ func TestPricingBackupCapturesStableAccountGroupMemberships(t *testing.T) {
 }
 
 func TestPricingBackupRejectsBlankOrDuplicateNames(t *testing.T) {
+	t.Parallel()
 	store := openPricingCatalogStore(t)
 	if _, err := store.CreatePricingBackup(context.Background(), " ", "operator"); err == nil {
 		t.Fatal("blank backup name was accepted")
@@ -180,6 +187,7 @@ func TestPricingBackupRejectsBlankOrDuplicateNames(t *testing.T) {
 }
 
 func TestDeletePricingBackupRemovesBackupAndAccountSnapshots(t *testing.T) {
+	t.Parallel()
 	store := openPricingCatalogStore(t)
 	backup, err := store.CreatePricingBackup(context.Background(), "待删除", "operator")
 	if err != nil {

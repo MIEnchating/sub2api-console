@@ -1,3 +1,4 @@
+import { seedDictionaries } from "@/test/dictionary-fixtures";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderToStaticMarkup } from "react-dom/server";
 import { render, screen, fireEvent } from "@testing-library/react";
@@ -125,6 +126,7 @@ const config: RuntimeConfig = {
 
 function renderPolicyPage(snapshot: PolicySnapshot = policy) {
   const queryClient = new QueryClient();
+  seedDictionaries(queryClient, { group: [{ value: "6", name: "codex" }] });
   queryClient.setQueryData(["policy"], snapshot);
   queryClient.setQueryData(["config"], config);
   return renderToStaticMarkup(
@@ -136,7 +138,8 @@ function renderPolicyPage(snapshot: PolicySnapshot = policy) {
 
 function renderPolicyStatic(element: ReactElement) {
   const queryClient = new QueryClient();
-  queryClient.setQueryData(["dictionaries", "platform"], { items: [] });
+  seedDictionaries(queryClient, { group: [{ value: "6", name: "codex" }] });
+
   return renderToStaticMarkup(
     <QueryClientProvider client={queryClient}>{element}</QueryClientProvider>,
   );
@@ -361,6 +364,7 @@ describe("调度策略入口", () => {
 
   it("加载完整策略前显示稳定页面骨架", () => {
     const queryClient = new QueryClient();
+    seedDictionaries(queryClient, { group: [{ value: "6", name: "codex" }] });
     queryClient.setQueryData(["config"], config);
     const markup = renderPolicyStatic(
       <QueryClientProvider client={queryClient}>
@@ -742,6 +746,7 @@ it("延迟调序默认关闭，开启时仅增加手动控制策略字段", () =
   const queryClient = new QueryClient({
     defaultOptions: { queries: { staleTime: Infinity, retry: false } },
   });
+  seedDictionaries(queryClient, { group: [{ value: "6", name: "codex" }] });
   queryClient.setQueryData(["policy"], policy);
   queryClient.setQueryData(["config"], config);
   const view = render(

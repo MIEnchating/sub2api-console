@@ -75,6 +75,7 @@ func (r *placementRepository) addSuccesses(id string, count int, latency int, ag
 }
 
 func TestStablePlacementPromotesClearlyBetterAccountPastIntermediateNoise(t *testing.T) {
+	t.Parallel()
 	repository := placementFixture(placementAccount("41", "1", 20), placementAccount("42", "0.90", 21), placementAccount("43", "0.79", 22))
 	for _, account := range repository.accounts {
 		repository.addSuccesses(account.ID, 5, 1000, time.Second)
@@ -89,6 +90,7 @@ func TestStablePlacementPromotesClearlyBetterAccountPastIntermediateNoise(t *tes
 }
 
 func TestStablePlacementSmallPriceNoisePreservesAppliedOrderForEveryStrategy(t *testing.T) {
+	t.Parallel()
 	for _, strategy := range []string{"balanced", "price_first", "speed_first", "reliability"} {
 		t.Run(strategy, func(t *testing.T) {
 			repository := placementFixture(placementAccount("41", "1", 20), placementAccount("42", "0.95", 21))
@@ -110,6 +112,7 @@ func TestStablePlacementSmallPriceNoisePreservesAppliedOrderForEveryStrategy(t *
 }
 
 func TestStablePlacementRequiresFreshConfidenceBeforeDisplacingIncumbent(t *testing.T) {
+	t.Parallel()
 	for _, oldCount := range []int{0, 8} {
 		t.Run(fmt.Sprintf("historical_successes_%d", oldCount), func(t *testing.T) {
 			repository := placementFixture(placementAccount("41", "1", 20), placementAccount("42", "0.1", 21))
@@ -128,6 +131,7 @@ func TestStablePlacementRequiresFreshConfidenceBeforeDisplacingIncumbent(t *test
 }
 
 func TestStablePlacementPreservesPrioritySlotsWhenMembershipChanges(t *testing.T) {
+	t.Parallel()
 	for _, addNew := range []bool{false, true} {
 		t.Run(fmt.Sprintf("new_account_%t", addNew), func(t *testing.T) {
 			repository := placementFixture(placementAccount("41", "1", 20), placementAccount("43", "1", 22))
@@ -151,6 +155,7 @@ func TestStablePlacementPreservesPrioritySlotsWhenMembershipChanges(t *testing.T
 }
 
 func TestStablePlacementCoordinatesCooldownBeforeSwappingPriorities(t *testing.T) {
+	t.Parallel()
 	repository := placementFixture(placementAccount("41", "1", 20), placementAccount("42", "0.1", 21))
 	for _, account := range repository.accounts {
 		repository.addSuccesses(account.ID, 5, 1000, time.Second)
@@ -168,6 +173,7 @@ func TestStablePlacementCoordinatesCooldownBeforeSwappingPriorities(t *testing.T
 }
 
 func TestStablePlacementPromotesAfterCooldownAndKeepsConfirmedNewPosition(t *testing.T) {
+	t.Parallel()
 	repository := placementFixture(placementAccount("41", "1", 20), placementAccount("42", "0.1", 21))
 	for _, account := range repository.accounts {
 		repository.addSuccesses(account.ID, 5, 1000, time.Second)
@@ -188,6 +194,7 @@ func TestStablePlacementPromotesAfterCooldownAndKeepsConfirmedNewPosition(t *tes
 }
 
 func TestStablePlacementIncomparableModelsDoNotCreateSpeedPromotion(t *testing.T) {
+	t.Parallel()
 	repository := placementFixture(placementAccount("41", "1", 20), placementAccount("42", "1", 21))
 	repository.policy["selection"] = map[string]any{"strategy": "speed_first"}
 	repository.addSuccesses("41", 5, 4000, time.Second)
@@ -207,6 +214,7 @@ func TestStablePlacementIncomparableModelsDoNotCreateSpeedPromotion(t *testing.T
 }
 
 func TestStablePlacementMissingRateDoesNotCreatePricePromotion(t *testing.T) {
+	t.Parallel()
 	first, second := placementAccount("41", "10", 20), placementAccount("42", "1", 21)
 	second.Multiplier = nil
 	repository := placementFixture(first, second)
@@ -223,6 +231,7 @@ func TestStablePlacementMissingRateDoesNotCreatePricePromotion(t *testing.T) {
 }
 
 func TestStablePlacementUnchangedPriceSpeedHealthTradeoffsDoNotCycle(t *testing.T) {
+	t.Parallel()
 	repository := placementFixture(placementAccount("41", "0.1", 20), placementAccount("42", "0.2", 21), placementAccount("43", "1.6", 22))
 	repository.policy["selection"] = map[string]any{"strategy": "balanced"}
 	repository.policy["scoring"] = map[string]any{"short_ratio": 0.000001, "event_scores": map[string]any{"gateway_error": 50, "slow_ttfb": 90}}
@@ -259,6 +268,7 @@ func TestStablePlacementUnchangedPriceSpeedHealthTradeoffsDoNotCycle(t *testing.
 }
 
 func TestStablePlacementMissingBaselineDoesNotRepeatDegradationPenalty(t *testing.T) {
+	t.Parallel()
 	account := placementAccount("41", "1", 20)
 	account.BaselinePriority = nil
 	repository := placementFixture(account)
@@ -282,6 +292,7 @@ func TestStablePlacementMissingBaselineDoesNotRepeatDegradationPenalty(t *testin
 }
 
 func TestStablePlacementSecondaryGroupStrategyAndBudgetInfluenceAccountRank(t *testing.T) {
+	t.Parallel()
 	first, second := placementAccount("41", "1", 20), placementAccount("42", "2", 21)
 	secondaryFirst, secondarySecond := first, second
 	secondaryGroup := "8"
@@ -307,6 +318,7 @@ func TestStablePlacementSecondaryGroupStrategyAndBudgetInfluenceAccountRank(t *t
 }
 
 func TestStablePlacementConfirmedDegradationYieldsDespiteCooldownAndCheapPrice(t *testing.T) {
+	t.Parallel()
 	repository := placementFixture(placementAccount("41", "0.01", 20), placementAccount("42", "1", 21))
 	repository.addSuccesses("41", 5, 6000, time.Second)
 	repository.addSuccesses("42", 5, 4000, time.Second)
@@ -322,6 +334,7 @@ func TestStablePlacementConfirmedDegradationYieldsDespiteCooldownAndCheapPrice(t
 }
 
 func TestStablePlacementSharedCapacityKeepsIncumbentForSmallWeightNoise(t *testing.T) {
+	t.Parallel()
 	for _, reduction := range []bool{false, true} {
 		t.Run(fmt.Sprintf("reduction_only_%t", reduction), func(t *testing.T) {
 			repository := placementFixture(placementAccount("41", "1", 20), placementAccount("42", "0.95", 21))
@@ -348,6 +361,7 @@ func TestStablePlacementSharedCapacityKeepsIncumbentForSmallWeightNoise(t *testi
 }
 
 func TestStablePlacementSharedCapacityWaiterDoesNotEvictActiveAccountByOldPriority(t *testing.T) {
+	t.Parallel()
 	first, second := placementAccount("41", "1", 20), placementAccount("42", "0.95", 11)
 	paused := false
 	second.Schedulable, second.EffectiveState = &paused, "concurrency_limited"

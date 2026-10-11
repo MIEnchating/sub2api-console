@@ -66,6 +66,7 @@ func animationSuccesses(ids ...string) []business.RoutingSample {
 }
 
 func TestAnimationVerdictsAdjustWeightsWithGroupConfiguredMultipliers(t *testing.T) {
+	t.Parallel()
 	repository := &animationRoutingRepository{
 		policy:   animationPolicy("ignore", 2, 0.5),
 		accounts: []business.RoutingAccount{animationAccount("41"), animationAccount("42"), animationAccount("43")},
@@ -86,6 +87,7 @@ func TestAnimationVerdictsAdjustWeightsWithGroupConfiguredMultipliers(t *testing
 }
 
 func TestAnimationFailureActionOnlyHandlesUpstreamFailures(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		action string
 		kind   string

@@ -9,6 +9,7 @@ import (
 )
 
 func TestApplyUpstreamSyncAtomicallyReplacesCatalogAndMapsDecimalBalance(t *testing.T) {
+	t.Parallel()
 	store := upstreamSyncTestStore(t)
 	ctx := context.Background()
 	active, old := "active", "0.2"
@@ -62,6 +63,7 @@ func TestApplyUpstreamSyncAtomicallyReplacesCatalogAndMapsDecimalBalance(t *test
 }
 
 func TestApplyUpstreamSyncRoundsConvertedGroupMultiplier(t *testing.T) {
+	t.Parallel()
 	store := upstreamSyncTestStore(t)
 	ctx := context.Background()
 	if _, err := store.db.ExecContext(ctx, `UPDATE recharge_rates SET recharge_rate='10' WHERE host='api.example'`); err != nil {
@@ -87,6 +89,7 @@ func TestApplyUpstreamSyncRoundsConvertedGroupMultiplier(t *testing.T) {
 }
 
 func TestCatalogSyncDoesNotRewriteManualPriorityBinding(t *testing.T) {
+	t.Parallel()
 	store := openReadModelFixture(t)
 	ctx := context.Background()
 	if _, err := store.AssignManualPriority(ctx, "41", 3, "100", 100, false, "operator"); err != nil {
@@ -115,6 +118,7 @@ func TestCatalogSyncDoesNotRewriteManualPriorityBinding(t *testing.T) {
 }
 
 func TestApplyUpstreamSyncConfirmsMissingCatalogObjectsAfterTwoCompleteSnapshots(t *testing.T) {
+	t.Parallel()
 	store := upstreamSyncTestStore(t)
 	ctx := context.Background()
 	active, rate := "active", "0.2"
@@ -165,6 +169,7 @@ func TestApplyUpstreamSyncConfirmsMissingCatalogObjectsAfterTwoCompleteSnapshots
 }
 
 func TestApplyNameOnlySyncPreservesBalanceAndAuthenticationState(t *testing.T) {
+	t.Parallel()
 	store := upstreamSyncTestStore(t)
 	result, err := store.ApplyUpstreamSync(context.Background(), UpstreamSyncWrite{
 		Host: "api.example", NameOnly: true,
@@ -186,6 +191,7 @@ func TestApplyNameOnlySyncPreservesBalanceAndAuthenticationState(t *testing.T) {
 }
 
 func TestApplyUpstreamBalanceKeepsBalanceAtUpstreamScope(t *testing.T) {
+	t.Parallel()
 	store := upstreamSyncTestStore(t)
 	if _, err := store.db.Exec(`INSERT INTO accounts(id,name,balance,metadata_json,updated_at) VALUES
 		('11','Example-0.1',NULL,'{}','now'),('12','Example-0.2',NULL,'{}','now')`); err != nil {
@@ -211,6 +217,7 @@ func TestApplyUpstreamBalanceKeepsBalanceAtUpstreamScope(t *testing.T) {
 }
 
 func TestAccountRateObservationAndConfirmedRateUseSeparateBindingFields(t *testing.T) {
+	t.Parallel()
 	store := upstreamSyncTestStore(t)
 	if _, err := store.db.Exec(`INSERT INTO accounts(id,name,multiplier,metadata_json,updated_at) VALUES('11','Example-0.1','0.1','{}','now');
 		INSERT INTO account_groups(account_id,group_name,group_rate) VALUES('11','codex','0.1');
@@ -256,6 +263,7 @@ func TestAccountRateObservationAndConfirmedRateUseSeparateBindingFields(t *testi
 }
 
 func TestApplyUpstreamSyncRejectsInvalidCatalogWithoutPartialWrites(t *testing.T) {
+	t.Parallel()
 	store := upstreamSyncTestStore(t)
 	ctx := context.Background()
 	rate := "0.1"
@@ -280,6 +288,7 @@ func TestApplyUpstreamSyncRejectsInvalidCatalogWithoutPartialWrites(t *testing.T
 }
 
 func TestApplyUpstreamSyncRepairsMissingRechargeRate(t *testing.T) {
+	t.Parallel()
 	store := upstreamSyncTestStore(t)
 	ctx := context.Background()
 	if _, err := store.db.Exec(`DELETE FROM recharge_rates WHERE host='api.example'`); err != nil {
@@ -309,6 +318,7 @@ func TestApplyUpstreamSyncRepairsMissingRechargeRate(t *testing.T) {
 }
 
 func TestApplyUpstreamSyncInheritsRechargeRateFromStableUpstreamHost(t *testing.T) {
+	t.Parallel()
 	store := upstreamSyncTestStore(t)
 	ctx := context.Background()
 	var upstreamID string
@@ -344,6 +354,7 @@ func TestApplyUpstreamSyncInheritsRechargeRateFromStableUpstreamHost(t *testing.
 }
 
 func TestApplyUpstreamSyncForOneKeyDoesNotReconcileUnselectedCatalogRows(t *testing.T) {
+	t.Parallel()
 	store := upstreamSyncTestStore(t)
 	ctx := context.Background()
 	if _, err := store.db.Exec(`INSERT INTO upstream_groups(host,group_id,name,status,raw_rate,updated_at) VALUES
@@ -400,6 +411,7 @@ func TestApplyUpstreamSyncForOneKeyDoesNotReconcileUnselectedCatalogRows(t *test
 }
 
 func TestApplyUpstreamSyncRepairsBindingGroupFromAuthoritativeKeyCatalog(t *testing.T) {
+	t.Parallel()
 	store := upstreamSyncTestStore(t)
 	if _, err := store.db.Exec(`INSERT INTO accounts(id,name,metadata_json,updated_at) VALUES('28','pro-0.2','{}','now');
 		INSERT INTO bindings(local_account_id,upstream_host,upstream_key_id,upstream_key_name,upstream_group,upstream_group_id,local_group,metadata_json,updated_at)
@@ -439,6 +451,7 @@ func TestApplyUpstreamSyncRepairsBindingGroupFromAuthoritativeKeyCatalog(t *test
 }
 
 func TestRecordUpstreamSyncFailurePreservesLastKnownValues(t *testing.T) {
+	t.Parallel()
 	store := upstreamSyncTestStore(t)
 	if err := store.RecordUpstreamSyncFailure(context.Background(), "api.example", "all", "HTTP 401", true); err != nil {
 		t.Fatal(err)
@@ -459,6 +472,7 @@ func TestRecordUpstreamSyncFailurePreservesLastKnownValues(t *testing.T) {
 }
 
 func TestRecordBalanceFailurePreservesAuthenticationAndRateStatus(t *testing.T) {
+	t.Parallel()
 	store := upstreamSyncTestStore(t)
 	ctx := context.Background()
 	if _, err := store.db.ExecContext(ctx, `UPDATE upstreams SET auth_status='已鉴权',
@@ -484,6 +498,7 @@ func TestRecordBalanceFailurePreservesAuthenticationAndRateStatus(t *testing.T) 
 }
 
 func TestRecordCatalogFailureMarksRateFailedWithoutChangingAuthentication(t *testing.T) {
+	t.Parallel()
 	store := upstreamSyncTestStore(t)
 	ctx := context.Background()
 	if _, err := store.db.ExecContext(ctx, `UPDATE upstreams SET auth_status='已鉴权',
@@ -509,6 +524,7 @@ func TestRecordCatalogFailureMarksRateFailedWithoutChangingAuthentication(t *tes
 }
 
 func TestRecordSingleKeyFailurePreservesHostRateStatus(t *testing.T) {
+	t.Parallel()
 	store := upstreamSyncTestStore(t)
 	ctx := context.Background()
 	if _, err := store.db.ExecContext(ctx, `UPDATE upstreams SET auth_status='已鉴权',
@@ -534,6 +550,7 @@ func TestRecordSingleKeyFailurePreservesHostRateStatus(t *testing.T) {
 }
 
 func TestUpstreamGroupHistoryRecordsChangesAfterInitialCatalogBaseline(t *testing.T) {
+	t.Parallel()
 	store := upstreamSyncTestStore(t)
 	ctx := context.Background()
 	active, rate := "active", "0.2"
@@ -589,6 +606,7 @@ func TestUpstreamGroupHistoryRecordsChangesAfterInitialCatalogBaseline(t *testin
 }
 
 func TestUpstreamGroupHistoryTreatsAnEmptyCompleteCatalogAsBaseline(t *testing.T) {
+	t.Parallel()
 	store := upstreamSyncTestStore(t)
 	ctx := context.Background()
 	if _, err := store.ApplyUpstreamSync(ctx, UpstreamSyncWrite{
@@ -615,6 +633,7 @@ func TestUpstreamGroupHistoryTreatsAnEmptyCompleteCatalogAsBaseline(t *testing.T
 }
 
 func TestAllUpstreamGroupHistoryReturnsChangesAcrossStableUpstreams(t *testing.T) {
+	t.Parallel()
 	store := upstreamSyncTestStore(t)
 	ctx := context.Background()
 	if _, err := store.db.ExecContext(ctx, `INSERT INTO upstream_identities(upstream_id,created_at,updated_at)

@@ -2,8 +2,45 @@ package upstreamsync
 
 import (
 	"errors"
+	"sort"
 	"strings"
+
+	"github.com/MIEnchating/sub2api-console/backend/internal/configstore"
 )
+
+// Decode JSON first, then remove exact credentials before truncating diagnostics.
+// Longer values must win when, for example, rotated tokens share a prefix.
+func upstreamCredentialReplacer(record configstore.AuthRecord) *strings.Replacer {
+	var secrets []string
+	add := func(value string) {
+		if value = strings.TrimSpace(value); value != "" {
+			secrets = append(secrets, value)
+		}
+	}
+	for _, value := range []*string{record.AccessToken, record.RefreshToken, record.AdminKey} {
+		if value != nil {
+			add(*value)
+		}
+	}
+	for _, value := range record.Cookies {
+		add(value)
+	}
+	for key, value := range record.Headers {
+		add(value)
+		if strings.EqualFold(key, "Authorization") {
+			parts := strings.Fields(value)
+			if len(parts) == 2 && (strings.EqualFold(parts[0], "Bearer") || strings.EqualFold(parts[0], "Basic")) {
+				add(parts[1])
+			}
+		}
+	}
+	sort.Slice(secrets, func(i, j int) bool { return len(secrets[i]) > len(secrets[j]) })
+	pairs := make([]string, 0, len(secrets)*2)
+	for _, secret := range secrets {
+		pairs = append(pairs, secret, "[已隐藏]")
+	}
+	return strings.NewReplacer(pairs...)
+}
 
 var errBusinessAuthentication = errors.New("upstream business authentication failed")
 

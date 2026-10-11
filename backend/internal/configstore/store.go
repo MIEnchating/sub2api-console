@@ -134,6 +134,11 @@ func (s *Store) Close() error {
 }
 
 func (s *Store) ensureSchema(ctx context.Context) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
 	statements := []string{
 		`CREATE TABLE IF NOT EXISTS uptime_kuma_config (
 			id INTEGER PRIMARY KEY CHECK(id=1), base_url TEXT NOT NULL, api_key TEXT NOT NULL,
@@ -187,14 +192,17 @@ func (s *Store) ensureSchema(ctx context.Context) error {
 		`CREATE INDEX IF NOT EXISTS ix_console_sessions_expires_at ON console_sessions(expires_at)`,
 	}
 	for _, statement := range statements {
-		if _, err := s.db.ExecContext(ctx, statement); err != nil {
+		if _, err := tx.ExecContext(ctx, statement); err != nil {
 			return err
 		}
 	}
-	if _, err := s.db.ExecContext(ctx, `DELETE FROM settings WHERE key='runtime.probes_enabled'`); err != nil {
+	if _, err := tx.ExecContext(ctx, `DELETE FROM settings WHERE key='runtime.probes_enabled'`); err != nil {
 		return err
 	}
-	return s.removeEmptyRetiredTables(ctx)
+	if err := removeEmptyRetiredTables(ctx, tx); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (s *Store) PublicStatus(ctx context.Context) (PublicStatus, error) {
@@ -630,14 +638,14 @@ func MaskUsername(username *string) *string {
 }
 
 func (s *Store) Initialize(ctx context.Context, username string, password string, baseURL string, adminKey string) error {
-	return s.initialize(ctx, username, password, baseURL, adminKey, false)
+	return s.initialize(ctx, username, password, baseURL, adminKey, false, nil)
 }
 
 func (s *Store) InitializeLocalExport(ctx context.Context, username, password string) error {
-	return s.initialize(ctx, username, password, "", "", true)
+	return s.initialize(ctx, username, password, "", "", true, nil)
 }
 
-func (s *Store) initialize(ctx context.Context, username string, password string, baseURL string, adminKey string, localExportOnly bool) error {
+func (s *Store) initialize(ctx context.Context, username string, password string, baseURL string, adminKey string, localExportOnly bool, createSession func(*sql.Tx) error) error {
 	username = strings.TrimSpace(username)
 	adminKey = strings.TrimSpace(adminKey)
 	if textLength(username) < 2 || textLength(username) > 80 {
@@ -692,6 +700,11 @@ func (s *Store) initialize(ctx context.Context, username string, password string
 	}
 	for key, value := range updates {
 		if _, err := tx.ExecContext(ctx, `INSERT OR REPLACE INTO settings(key,value) VALUES(?,?)`, key, value); err != nil {
+			return err
+		}
+	}
+	if createSession != nil {
+		if err := createSession(tx); err != nil {
 			return err
 		}
 	}
@@ -809,6 +822,10 @@ func (s *Store) RevokeSession(ctx context.Context, token string) error {
 }
 
 func (s *Store) UpdateCredentials(ctx context.Context, currentPassword string, username string, newPassword *string) (string, error) {
+	return s.updateCredentials(ctx, currentPassword, username, newPassword, nil)
+}
+
+func (s *Store) updateCredentials(ctx context.Context, currentPassword string, username string, newPassword *string, updateSessions func(*sql.Tx, string) error) (string, error) {
 	username = strings.TrimSpace(username)
 	if textLength(username) < 2 || textLength(username) > 80 {
 		return "", errors.New("控制台账号长度必须为 2 到 80 个字符")
@@ -866,7 +883,11 @@ func (s *Store) UpdateCredentials(ctx context.Context, currentPassword string, u
 			return "", err
 		}
 	}
-	if _, err := tx.ExecContext(ctx, `DELETE FROM console_sessions`); err != nil {
+	if updateSessions == nil {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM console_sessions`); err != nil {
+			return "", err
+		}
+	} else if err := updateSessions(tx, storedUsername); err != nil {
 		return "", err
 	}
 	if err := tx.Commit(); err != nil {
@@ -1033,6 +1054,23 @@ func (s *Store) NotificationSettings(ctx context.Context) (NotificationSettings,
 
 func (s *Store) settings(ctx context.Context, keys ...string) (map[string]string, error) {
 	return settingsFrom(ctx, s.db, keys...)
+}
+
+func (s *Store) JSONSetting(ctx context.Context, key string) (string, error) {
+	var value string
+	err := s.db.QueryRowContext(ctx, `SELECT value FROM settings WHERE key=?`, key).Scan(&value)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	return value, err
+}
+
+func (s *Store) SaveJSONSetting(ctx context.Context, key, value string) error {
+	if strings.TrimSpace(key) == "" || len(value) > 4<<20 {
+		return errors.New("设置内容无效")
+	}
+	_, err := s.db.ExecContext(ctx, `INSERT OR REPLACE INTO settings(key,value) VALUES(?,?)`, key, value)
+	return err
 }
 
 func settingsFrom(ctx context.Context, queryer interface {

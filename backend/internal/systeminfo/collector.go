@@ -165,9 +165,12 @@ func parseMemory(reader io.Reader) (Storage, error) {
 		return Storage{}, fmt.Errorf("读取内存统计失败: %w", err)
 	}
 	total := values["MemTotal"]
-	available := values["MemAvailable"]
+	available, hasAvailable := values["MemAvailable"]
 	if total == 0 {
 		return Storage{}, errors.New("内存总量统计缺失")
+	}
+	if !hasAvailable {
+		return Storage{}, errors.New("可用内存统计缺失")
 	}
 	available = min(available, total)
 	used := total - available

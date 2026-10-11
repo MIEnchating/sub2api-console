@@ -10,6 +10,7 @@ import (
 )
 
 func TestAuthRecoveryProjectionStoresOnlyRedactedPublicOutcome(t *testing.T) {
+	t.Parallel()
 	store, err := Open(filepath.Join(t.TempDir(), "business.sqlite3"))
 	if err != nil {
 		t.Fatal(err)
@@ -52,6 +53,7 @@ func TestAuthRecoveryProjectionStoresOnlyRedactedPublicOutcome(t *testing.T) {
 }
 
 func TestAuthRecoveryFailureIgnoresSnapshotOlderThanCurrentUpstreamState(t *testing.T) {
+	t.Parallel()
 	store, err := Open(filepath.Join(t.TempDir(), "business.sqlite3"))
 	if err != nil {
 		t.Fatal(err)
@@ -84,6 +86,7 @@ func TestAuthRecoveryFailureIgnoresSnapshotOlderThanCurrentUpstreamState(t *test
 }
 
 func TestAuthRecoverySuccessProjectsLastSuccessfulMethod(t *testing.T) {
+	t.Parallel()
 	store, err := Open(filepath.Join(t.TempDir(), "business.sqlite3"))
 	if err != nil {
 		t.Fatal(err)
@@ -116,6 +119,7 @@ func TestAuthRecoverySuccessProjectsLastSuccessfulMethod(t *testing.T) {
 }
 
 func TestAuthRecoveryRequiredHostsAppliesRetryBackoff(t *testing.T) {
+	t.Parallel()
 	store, err := Open(filepath.Join(t.TempDir(), "business.sqlite3"))
 	if err != nil {
 		t.Fatal(err)

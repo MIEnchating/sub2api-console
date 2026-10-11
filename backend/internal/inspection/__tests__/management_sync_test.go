@@ -69,6 +69,10 @@ func TestHeartbeatSynchronizesManagementEvenWhenOtherTasksAreNotDue(t *testing.T
 				case "/api/v1/admin/groups":
 					items = []map[string]any{{"id": "7", "name": "codex"}}
 				case "/api/v1/admin/accounts":
+					if req.URL.Query().Get("page_size") != "50" {
+						http.Error(w, "large catalog response unavailable", http.StatusRequestTimeout)
+						return
+					}
 					items = []map[string]any{{"id": accountID, "name": "same-name", "group_ids": []any{"7"}, "schedulable": true, "rate_multiplier": "1"}}
 				default:
 					t.Errorf("unexpected call when no task is due: %s", req.URL.Path)

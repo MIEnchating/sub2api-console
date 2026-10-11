@@ -82,6 +82,15 @@ func (s *Store) SetAccountGroupsLocked(ctx context.Context, accountID string, en
 }
 
 func (s *Store) groupLockedAccounts(ctx context.Context, queryer policyQueryer) (map[string]struct{}, error) {
+	scope, err := s.readAccountControlScope(ctx, queryer)
+	if err != nil {
+		return nil, err
+	}
+	return controlAccountIDs(scope[groupLockedAccountIDs]), nil
+}
+
+// Share one validated scope when a reader needs multiple account protections.
+func (s *Store) readAccountControlScope(ctx context.Context, queryer policyQueryer) (map[string]any, error) {
 	document, err := s.readPolicyDocument(ctx, queryer, "control-plane")
 	if err != nil {
 		return nil, err
@@ -94,7 +103,7 @@ func (s *Store) groupLockedAccounts(ctx context.Context, queryer policyQueryer) 
 			return nil, errors.New("控制面范围配置不可读，无法确认分组锁定状态")
 		}
 	}
-	return controlAccountIDs(scope[groupLockedAccountIDs]), nil
+	return scope, nil
 }
 
 func (s *Store) requireAccountGroupsUnlocked(ctx context.Context, queryer policyQueryer, accountID string) error {

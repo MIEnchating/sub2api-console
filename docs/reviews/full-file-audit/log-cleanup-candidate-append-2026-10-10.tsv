@@ -1,0 +1,2 @@
+backend/internal/business/log_cleanup.go	666a5de9f78e208d70ace951bc9f0d86326f09a0c0a7269619e8e5087576c216	fixed	全文核对三表清理；临时候选顺序追加，显式时间排序后以末行确定游标，源rowid删除与提交后进度、包含相等时间、2000条批次和回滚规则保留。
+backend/internal/business/__tests__/log_cleanup_candidate_order_test.go	257b481caecab22fed735df98c6f6a40a48d85664509e7eeae63a61ab74fdbbd	reviewed	全文核对真实临时库兼容回归；源ID逆序、时间递增、相同时间跨批，核对三次提交计数及最终无剩余记录。

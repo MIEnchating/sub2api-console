@@ -1,0 +1,5 @@
+frontend/src/features/request-trace/components/system-log-search-panel.tsx	706996f2f2a46b49b62d208905754a21caceb38e7f6df7221ea90bac0a962f3b	fixed	全文审查查询、取消、刷新、空状态和分页；修复当前页变空后分页消失，保留返回上一页和切换每页行数入口，沿用已有取消及缓存读取实现。
+frontend/src/features/request-trace/components/trace-account-actions.tsx	3fe4d2cf05369be40fb524a5cb9eb89bec018cb4a7c46f817040cfc1696ba271	reviewed	全文核对轻量账号控制状态、稳定ID、人工保护确认、任务读取和请求取消；本轮没有新增修改，不将既有实现重复计作修复。
+frontend/src/features/request-trace/components/__tests__/pagination.test.tsx	17072edbbd09567b749dd88571d1bac571e1f2f6df0e0c9821a9ece02e4ea49e	reviewed	全文审查真实API包装及Fetch边界回归；保护第二页变空且剩余一条或零条时返回首页，以及首次空结果切换每页行数，修复前新增三例均失败。
+frontend/src/features/request-trace/components/__tests__/search-lifecycle.test.tsx	b0b7a78cd5ec188237a2a6322a1782353008f3ba7404609a68914f488763fced	fixed	全文核对取消、晚到响应、刷新保留和失败重试；刷新为空的数据夹具修正为total零，与无匹配日志预期一致。
+frontend/e2e/__tests__/request-trace-pagination.e2e.ts	f6d0ae805a5aec8559f03456924b48806b5e590cb1d18f965fa53897eacb5142	reviewed	全文审查桌面浅色和320px手机深色四项浏览器回归；全部API隔离拦截，保护空页分页、键盘返回、每页行数请求及无页面横向溢出，沿用窄屏工作区滚动。

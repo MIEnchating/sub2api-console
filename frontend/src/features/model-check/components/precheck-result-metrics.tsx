@@ -1,9 +1,7 @@
 import type { ReactElement } from "react";
 import type { AnimationResult } from "@/api";
-import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { formatTokens, Metric, ResultTokenMetrics } from "./result-token-metrics";
 
 const timeFormat = new Intl.DateTimeFormat("zh-CN", {
   month: "2-digit",
@@ -13,26 +11,17 @@ const timeFormat = new Intl.DateTimeFormat("zh-CN", {
   hour12: false,
 });
 
-export function PrecheckResultMetrics(props: {
-  result: AnimationResult;
-  detailed?: boolean;
-}): ReactElement {
+export function PrecheckResultMetrics(props: { result: AnimationResult }): ReactElement {
   const result = props.result;
   const completedAt = new Date(result.completed_at);
   const validTime = !Number.isNaN(completedAt.getTime());
   return (
-    <div
-      aria-label="前置检测统计"
-      className={cn(
-        "w-full min-w-0 shrink-0 text-xs tabular-nums",
-        props.detailed ? "space-y-3 border-t py-3" : "pt-1",
-      )}
-    >
+    <div aria-label="前置检测统计" className="w-full min-w-0 shrink-0 pt-1 text-xs tabular-nums">
       <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5">
         <span className="min-w-0 font-medium wrap-anywhere">{result.model}</span>
-        {result.reasoning_effort || props.detailed ? (
+        {result.reasoning_effort ? (
           <Badge variant="secondary" aria-label="推理强度">
-            {result.reasoning_effort || "未记录"}
+            {result.reasoning_effort}
           </Badge>
         ) : null}
         <span className="shrink-0 text-muted-foreground">
@@ -55,27 +44,6 @@ export function PrecheckResultMetrics(props: {
           </TooltipContent>
         </Tooltip>
       </div>
-      {props.detailed ? <ResultTokenMetrics result={result} /> : null}
-      {props.detailed ? (
-        <dl className="grid grid-cols-3 gap-3">
-          <Metric
-            label="耗时"
-            value={
-              result.duration_ms > 0 ? `${(result.duration_ms / 1000).toFixed(1)} 秒` : "未记录"
-            }
-          />
-          <Metric
-            label="推理 Token"
-            value={formatTokens(result.usage?.reasoning_tokens)}
-            title="推理 Token 属于输出用量，不重复计入总计"
-          />
-          <Metric
-            label="预估费用"
-            value="无法估算"
-            title="此检测记录没有对应的价格快照，无法可靠估算费用"
-          />
-        </dl>
-      ) : null}
     </div>
   );
 }

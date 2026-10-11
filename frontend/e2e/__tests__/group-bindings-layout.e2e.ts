@@ -37,7 +37,7 @@ test.beforeEach(async ({ page, colorScheme }) => {
           },
         ],
       },
-      "/api/newapi/platforms/layout/refresh": {
+      "/api/newapi/platforms/layout/groups": {
         groups,
         models: [],
         unset_models: [],

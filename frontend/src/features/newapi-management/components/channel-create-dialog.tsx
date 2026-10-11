@@ -24,14 +24,14 @@ export function ChannelCreateDialog(props: {
   onClose: () => void;
 }) {
   const client = useQueryClient();
-  const snapshot = useQuery({
-    queryKey: ["newapi-remote-snapshot", props.platformId],
-    queryFn: () => api.refreshNewAPIPlatform(props.platformId),
+  const remoteGroups = useQuery({
+    queryKey: ["newapi-remote-groups", props.platformId],
+    queryFn: ({ signal }) => api.newAPIRemoteGroups(props.platformId, signal),
     retry: false,
   });
   const vault = useQuery({
     queryKey: ["auth-recovery-config"],
-    queryFn: api.authRecoveryConfig,
+    queryFn: ({ signal }) => api.authRecoveryConfig(signal),
     retry: false,
   });
   const create = useMutation({
@@ -50,12 +50,15 @@ export function ChannelCreateDialog(props: {
     onError: (error) => notifyOperationError(error, "Sub2API 密钥创建失败"),
   });
   const models = useMutation({
-    mutationFn: async (payload: Parameters<typeof api.fetchNewAPIChannelModels>[1]) =>
-      (await api.fetchNewAPIChannelModels(props.platformId, payload)).models,
+    mutationFn: async (input: {
+      payload: Parameters<typeof api.fetchNewAPIChannelModels>[1];
+      signal?: AbortSignal;
+    }) =>
+      (await api.fetchNewAPIChannelModels(props.platformId, input.payload, input.signal)).models,
   });
   const writing = create.isPending || key.isPending;
-  const ready = !!snapshot.data && !!vault.data;
-  const loading = snapshot.isPending || vault.isPending;
+  const ready = !!remoteGroups.data && !!vault.data;
+  const loading = remoteGroups.isPending || vault.isPending;
   return (
     <Dialog
       open
@@ -71,16 +74,16 @@ export function ChannelCreateDialog(props: {
           </DialogDescription>
         </DialogHeader>
         <DialogBody>
-          {snapshot.error && (
-            <QueryErrorToast error={snapshot.error} fallback="New API 分组读取失败" />
+          {remoteGroups.error && (
+            <QueryErrorToast error={remoteGroups.error} fallback="New API 分组读取失败" />
           )}
           {vault.error && <QueryErrorToast error={vault.error} fallback="密码箱账号读取失败" />}
           {!ready && loading && <ContentLoading label="正在读取渠道创建配置" />}
           {!ready && !loading && (
             <ContentRetry
-              pending={snapshot.isFetching || vault.isFetching}
+              pending={remoteGroups.isFetching || vault.isFetching}
               onRetry={() => {
-                void snapshot.refetch();
+                void remoteGroups.refetch();
                 void vault.refetch();
               }}
             />
@@ -88,7 +91,7 @@ export function ChannelCreateDialog(props: {
           {ready && (
             <NewAPIChannelForm
               groups={props.groups}
-              newAPIGroups={snapshot.data.groups}
+              newAPIGroups={remoteGroups.data.groups}
               sub2APIBaseURL={props.baseURL}
               vaultEntries={vault.data.vault_entries}
               pending={create.isPending}
@@ -101,7 +104,7 @@ export function ChannelCreateDialog(props: {
                   key.reset();
                 }
               }}
-              onFetchModels={(payload) => models.mutateAsync(payload)}
+              onFetchModels={(payload, signal) => models.mutateAsync({ payload, signal })}
               onSubmit={async (payload) => {
                 await create.mutateAsync(payload);
               }}

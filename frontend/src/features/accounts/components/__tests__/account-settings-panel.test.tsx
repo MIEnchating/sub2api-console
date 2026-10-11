@@ -423,7 +423,7 @@ it("Sub2API 账号编辑显示独立共享并发设置，并按稳定账号 ID �
   );
   try {
     expect(await screen.findByRole("switch", { name: "上游共享并发分配" })).toBeChecked();
-    expect(read).toHaveBeenCalledWith("accounts", "41");
+    expect(read).toHaveBeenCalledWith("accounts", "41", expect.any(AbortSignal));
   } finally {
     view.unmount();
     read.mockRestore();

@@ -87,7 +87,7 @@ async function openAnimationCards(page: Page): Promise<{ schedules: AnimationSch
         running: false,
         traffic_collection: { enabled: false },
       },
-      "/api/dictionaries": [],
+      "/api/dictionaries": { items: [] },
       "/api/accounts": accounts,
       "/api/model-checks/capabilities": { claude_standards: [], sol_models: [] },
       "/api/model-checks/account-statuses": [],
@@ -111,6 +111,60 @@ test.beforeEach(async ({ page, colorScheme }) => {
     (theme) => localStorage.setItem("sub2api-console-theme", theme ?? "light"),
     colorScheme,
   );
+});
+
+test("动画与前置检测的模型参数在开始检测操作行且窄屏不溢出", async ({ page }) => {
+  await openAnimationCards(page);
+  for (const tab of ["账号检测", "前置检测"]) {
+    await page.getByRole("tab", { name: tab, exact: true }).click();
+    const filters = page.getByRole("group", { name: "动画账号筛选", exact: true });
+    const operations = page.getByRole("group", {
+      name: tab === "账号检测" ? "动画检测操作" : "前置检测操作",
+      exact: true,
+    });
+    const fields = operations.getByRole("group", { name: "动画模型参数", exact: true });
+    const filterBox = (await filters.boundingBox())!;
+    const fieldBox = (await fields.boundingBox())!;
+    expect(fieldBox.y).toBeGreaterThan(filterBox.y + filterBox.height);
+    if (page.viewportSize()!.width >= 1440) {
+      const start = operations.getByRole("button", { name: /开始检测|^前置检测（/ });
+      expect((await start.boundingBox())!.y).toBeCloseTo(fieldBox.y, 0);
+    }
+    expect(fieldBox.x + fieldBox.width).toBeLessThanOrEqual(page.viewportSize()!.width);
+    await expect(fields.getByRole("combobox", { name: "检测模型", exact: true })).toHaveValue(
+      "gpt-6-astra",
+    );
+    await expect(fields.getByRole("spinbutton", { name: "请求超时（秒）" })).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(
+      true,
+    );
+    await page.screenshot({ path: test.info().outputPath(`${tab}-toolbar.png`) });
+  }
+});
+
+test("检测操作没有空白占位，开始按钮文字保留左右内边距", async ({ page }) => {
+  await openAnimationCards(page);
+  const operations = page.getByRole("group", { name: "动画检测操作", exact: true });
+  const batch = operations.getByRole("button", { name: "批量自动检测设置" });
+  const start = operations.getByRole("button", { name: /开始检测/ });
+  const startText = await start.evaluate((button) => {
+    const range = document.createRange();
+    range.selectNodeContents(button);
+    const text = range.getBoundingClientRect();
+    const box = button.getBoundingClientRect();
+    return { left: text.left - box.left, right: box.right - text.right };
+  });
+  expect(startText.left).toBeGreaterThanOrEqual(10);
+  expect(startText.right).toBeGreaterThanOrEqual(10);
+  await expect(start).toHaveCSS("height", "32px");
+  const batchBox = (await batch.boundingBox())!;
+  const startBox = (await start.boundingBox())!;
+  if (Math.abs(startBox.y - batchBox.y) < 1) {
+    expect(startBox.x - batchBox.x - batchBox.width).toBeCloseTo(8, 0);
+  } else {
+    expect(startBox.y - batchBox.y - batchBox.height).toBeCloseTo(8, 0);
+  }
+  expect(startBox.x + startBox.width).toBeLessThanOrEqual(page.viewportSize()!.width);
 });
 
 test("动画页只显示动画结果，卡片和预览保持对齐", async ({ page }) => {
@@ -210,7 +264,10 @@ test("成功卡片重测沿用原模型，启动与完成时卡片高度稳定�
   await expect(card.getByRole("status", { name: "已开始请求，等待首字" })).toBeVisible();
   await expect(retest).toBeDisabled();
   expect(requests).toEqual([
-    { targets: [{ account_id: "1", model: "gpt-6-astra" }], timeout_seconds: 120 },
+    {
+      targets: [{ account_id: "1", model: "gpt-6-astra" }],
+      timeout_seconds: 120,
+    },
   ]);
   expect((await card.boundingBox())!.height).toBe(before.height);
   await expect(

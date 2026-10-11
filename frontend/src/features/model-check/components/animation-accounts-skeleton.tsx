@@ -45,10 +45,11 @@ export function AnimationAccountsSkeleton(): ReactElement {
           <div className="grid h-18 shrink-0 content-center gap-1.5 px-3">
             <div className="flex items-center gap-2">
               <Skeleton className="size-4 shrink-0" />
-              <Skeleton className="h-4 w-2/3" />
+              <Skeleton className="h-4 min-w-0 flex-1" />
+              <Skeleton className="h-3 w-16" />
+              <Skeleton className="h-3 w-20" />
             </div>
             <Skeleton className="h-4 w-3/4" />
-            <Skeleton className="h-3 w-full" />
           </div>
           <Skeleton className="h-[180px] w-full shrink-0 rounded-none" />
           <div className="flex h-14 shrink-0 items-center gap-2 px-3">

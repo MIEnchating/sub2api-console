@@ -5,7 +5,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { KeyRound, Save, ShieldCheck, UserRound } from "lucide-react";
 import { useForm } from "react-hook-form";
 import { toast } from "sonner";
-import { z } from "zod";
+import { profileSchema, type ProfileForm } from "../lib/profile-schema";
 
 import { api, type SessionStatus } from "@/api";
 import { ContentRetry } from "@/components/content-retry";
@@ -18,36 +18,6 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { notifyOperationError } from "@/lib/operation-feedback";
-
-const profileSchema = z
-  .object({
-    username: z.string().trim().min(2, "账号至少 2 个字符").max(80, "账号不能超过 80 个字符"),
-    current_password: z.string().min(1, "请输入当前密码"),
-    new_password: z.string().max(256, "新密码不能超过 256 个字符"),
-    confirm_password: z.string().max(256, "确认密码不能超过 256 个字符"),
-  })
-  .superRefine((value, context) => {
-    if (!value.new_password && !value.confirm_password) return;
-    if (value.new_password.length < 10) {
-      context.addIssue({ code: "custom", path: ["new_password"], message: "新密码至少 10 个字符" });
-    }
-    if (value.new_password === value.current_password) {
-      context.addIssue({
-        code: "custom",
-        path: ["new_password"],
-        message: "新密码不能与当前密码相同",
-      });
-    }
-    if (value.new_password !== value.confirm_password) {
-      context.addIssue({
-        code: "custom",
-        path: ["confirm_password"],
-        message: "两次输入的新密码不一致",
-      });
-    }
-  });
-
-type ProfileForm = z.infer<typeof profileSchema>;
 
 function Field(props: { id: string; label: string; error?: string; children: ReactNode }) {
   return (
@@ -71,8 +41,12 @@ function emptyProfileForm(username: string): ProfileForm {
 
 export function ProfilePage() {
   const pendingPayload = useRef<Parameters<typeof api.updateProfile>[0] | null>(null);
+  const submitting = useRef(false);
   const queryClient = useQueryClient();
-  const session = useQuery({ queryKey: ["session"], queryFn: api.session });
+  const session = useQuery({
+    queryKey: ["session"],
+    queryFn: ({ signal }) => api.session(signal),
+  });
   const username = session.data?.username ?? "";
   const form = useForm<ProfileForm>({
     resolver: zodResolver(profileSchema),
@@ -80,21 +54,33 @@ export function ProfilePage() {
   });
 
   useEffect(() => {
-    if (username) form.reset(emptyProfileForm(username));
+    if (username && !form.formState.isDirty) form.reset(emptyProfileForm(username));
   }, [form, username]);
 
   function saveSession(saved: SessionStatus) {
+    void queryClient.cancelQueries({ queryKey: ["session"], exact: true });
     queryClient.setQueryData(["session"], saved);
     void queryClient.invalidateQueries({ queryKey: ["setup-status"] });
     void queryClient.invalidateQueries({ queryKey: ["config"] });
   }
 
   const updateProfile = useMutation({
-    mutationFn: () => {
+    networkMode: "always",
+    retry: false,
+    gcTime: 0,
+    mutationFn: async () => {
       const payload = pendingPayload.current;
       pendingPayload.current = null;
       if (!payload) throw new Error("提交内容已失效，请重新填写后保存");
-      return api.updateProfile(payload);
+      const saved = await api.updateProfile(payload);
+      if (
+        saved?.authenticated !== true ||
+        typeof saved.username !== "string" ||
+        !saved.username.trim()
+      ) {
+        throw new Error("保存响应未确认有效会话，请重新登录核对账号资料");
+      }
+      return saved;
     },
     onSuccess: (saved) => {
       saveSession(saved);
@@ -102,10 +88,17 @@ export function ProfilePage() {
       toast.success("账号信息已保存，其他登录会话已退出");
     },
     onError: (error) => notifyOperationError(error, "账号信息保存失败"),
+    onSettled: () => {
+      submitting.current = false;
+      pendingPayload.current = null;
+      updateProfile.reset();
+    },
   });
   const unavailable = updateProfile.isPending || session.isError || !session.data?.authenticated;
   const submit = form.handleSubmit((values) => {
-    if (unavailable || pendingPayload.current) return;
+    if (unavailable || submitting.current) return;
+    submitting.current = true;
+    void queryClient.cancelQueries({ queryKey: ["session"], exact: true });
     pendingPayload.current = {
       username: values.username,
       current_password: values.current_password,

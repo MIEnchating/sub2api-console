@@ -1,0 +1,48 @@
+backend/internal/api/__tests__/account_group_input_test.go	53acab47dd23ab262aa1d682e7efb37fe92c6effea7f994ba7344933df748d20	reviewed	真实临时库和路由：四类异常封包在预检前返回 422，调度不变；旧实现进入预检返回 409，修复后通过。
+backend/internal/api/__tests__/account_health_consistency_test.go	76df2a90bb580dca45a142a8a9121842b6ce6ef0044358f51feaaf42aa73d4f9	reviewed	真实临时存储交错写入，列表/详情/SSE 评分和证据保持同一快照。 已全文阅读；验证及限制见 API 模块报告。
+backend/internal/api/__tests__/account_health_snapshot_test.go	ed27bbe5efef97d2866110ceb351b3cf738d1d7b24ef2b6fdfc7b70600190970	reviewed	评分新鲜度、无证据清空、SSE 原子状态；触发器禁止读取改变调度，含真实时钟依赖。 已全文阅读；验证及限制见 API 模块报告。
+backend/internal/api/__tests__/account_traffic_test.go	03655c73cb9c9d085c0ec524f902d638d111257bd9a23ecf3e2a4751dbace2be	reviewed	已移除独立流量入口回归；当前路由参数验证返回 422。 已全文阅读；验证及限制见 API 模块报告。
+backend/internal/api/__tests__/animation_models_test.go	7f145780e1b90f74099944c4799811d8e271d455c4f48c93f426670f655b6691	reviewed	鉴权、稳定账号、模型返回及内部错误隐藏与可操作提示保留。 已全文阅读；验证及限制见 API 模块报告。
+backend/internal/api/__tests__/binding_cleanup_input_test.go	e98059e254afa9ddd0b7f9e04149781a4ec47001c4a9d48dd38dd505a9346e6d	reviewed	真实临时库和路由：四类异常封包须 422，绑定及身份保留、审计不变；旧实现四项均删除数据，修复后通过。
+backend/internal/api/__tests__/browser_requests_test.go	072275fd3b567749f93d97b5dc810bfd7511aafeb0ddc4f412fb0a6102d8ec5c	reviewed	已移除的上游浏览器路径返回 404，使用隔离会话。 已全文阅读；验证及限制见 API 模块报告。
+backend/internal/api/__tests__/channel_discovery_test.go	e09b2a521a2551ab66129c28cce2a02e2e86c94916a59f226cc04be621a590fc	reviewed	真实受控 HTTP 验证模型读取、版本拒绝、业务失败及秘密隐藏。 已全文阅读；验证及限制见 API 模块报告。
+backend/internal/api/__tests__/channel_groups_test.go	5470a87c8a16db67b568eb327c01a7c401e5f8be473598116d0584f576814850	reviewed	跨页稳定渠道 ID、凭据隐藏和显式分组版本；旧用例存在顺序依赖。 已全文阅读；验证及限制见 API 模块报告。
+backend/internal/api/__tests__/detection_task_groups_test.go	eb8d79e37f9e2a7c3f2003be63b26d9211136e811459a5b491f18932d41589a0	reviewed	历史归属快照保留、旧记录仅显示当前归属与删除分组降级。 已全文阅读；验证及限制见 API 模块报告。
+backend/internal/api/__tests__/detection_tasks_test.go	e61758aced9a8323bb8bd27de16b448d068488028d2225f26d624c402bbc3069	reviewed	鉴权、版本和显式动画/前置阶段适配；服务 stub 检查参数契约。 已全文阅读；验证及限制见 API 模块报告。
+backend/internal/api/__tests__/durable_task_cancel_test.go	fb1006fce1820ba5b4e612e88f9f98d904d2877a2e0afdb159488ef0b7462340	reviewed	取消先持久保存再通知 worker、失败不宣称成功，重启仍保留结果与取消状态。 已全文阅读；验证及限制见 API 模块报告。
+backend/internal/api/__tests__/group_batch_policy_test.go	3e07280a77ee9e1cc7888776d63d9d0a0d8d2dff9a26c3b15708d52761eba1c7	reviewed	严格范围输入、鉴权、缺失组和去重；批量结果和写入事件保护。 已全文阅读；验证及限制见 API 模块报告。
+backend/internal/api/__tests__/model_options_test.go	c3160a4e2b6bacc790888ed74f78f6c6b54f238945ddecc4f442212316d2465b	reviewed	模型选项任务鉴权、目标 Host/分组及无生成模型输入。 已全文阅读；验证及限制见 API 模块报告。
+backend/internal/api/__tests__/newapi_channels_test.go	ac41da819199a88d720879ee4e9b30a0eaa355ae639245cda926660da79f4df1	reviewed	渠道分页参数、凭据隐藏、稳定 ID 和批量模型入口鉴权。 已全文阅读；验证及限制见 API 模块报告。
+backend/internal/api/__tests__/probe_animation_test.go	9bf4b1a4203219e8a55a58252a208540bd111863eda61994f76e8df84facc72a	reviewed	动画探活必须后台任务，显式模式和请求模型保持。 已全文阅读；验证及限制见 API 模块报告。
+backend/internal/api/__tests__/recent_result_classification_test.go	f385d64fdd2f4284f1b358fe99b889dd16be8486b19387849525b3d57b078244	reviewed	中性错误分数 null、网关/凭据错误保留评分，两种账号读取入口。 已全文阅读；验证及限制见 API 模块报告。
+backend/internal/api/__tests__/request_actor_test.go	f8eb43f1017797de2918220512f57d0058da931f66613b297102c11cc1f3d0af	reviewed	真实会话撤销边界保护已鉴权请求的操作者，并拒绝下一请求；另覆盖 Cookie/Bearer/混合及失效身份，不缓存跨请求鉴权。
+backend/internal/api/__tests__/task_concurrency_test.go	5b9fc37b44ebaaebfdf6c524c77b6d76c8facba662a774b5c41d25055e0e842e	reviewed	真实队列与配置保存、版本冲突、无效值不覆盖已生效设置。 已全文阅读；验证及限制见 API 模块报告。
+backend/internal/api/__tests__/task_recovery_cancel_test.go	c23e108c295213bcb5ea4b136e8b754263e2f1322b2ddf916f6b7144e6ad020a	reviewed	待恢复任务鉴权取消、持久化并阻止恢复调度。 已全文阅读；验证及限制见 API 模块报告。
+backend/internal/api/__tests__/terminal_continuity_test.go	0c243ef8bdc7122b31680567dce5a61eee0e3877082612ccd350e8d945e3dc21	reviewed	终端创建 410 与历史鉴权；旧 POST 200 分支不可达，记录维护限制。 已全文阅读；验证及限制见 API 模块报告。
+backend/internal/api/__tests__/upstream_allocation_settings_test.go	7a51788e8e53957ff84c6b230d540e527ee423aac48ccf4347a4e3f64b97cae8	reviewed	共享并发显式 override、版本与鉴权；读取写入不改调度。 已全文阅读；验证及限制见 API 模块报告。
+backend/internal/api/__tests__/upstream_binding_cleanup_test.go	22f7fd762409db80ac43f0a396eae1ed6b9a4081ef38effbc8b5d7f7babcbe65	reviewed	真实数据库隔离验证绑定范围、身份变化、审计回滚和无关记录保留。 已全文阅读；验证及限制见 API 模块报告。
+backend/internal/api/__tests__/upstream_group_history_clear_test.go	7ff7310251a2a3a452d1e366c5968a23cff2aabe41ffd66eea04beccb6d13544	reviewed	历史删除使用稳定上游范围，空范围及匿名请求拒绝。 已全文阅读；验证及限制见 API 模块报告。
+backend/internal/api/__tests__/workbench_requests_test.go	958d29df65e07156f9938a313e7e4607b927cfc397135021bad465977a579217	reviewed	隔离会话预览归属、秘密不回传、移除旧入口及维护 no-store。 已全文阅读；验证及限制见 API 模块报告。
+backend/internal/api/account_cost_wall.go	7ec3b198a2a6712b037d6911b7e47b7b005ffa006f0c4c116feed0eee22283da	reviewed	成本拦截开关显式布尔值、稳定账号、写前检查与操作者；路由受统一鉴权保护。 已全文阅读；验证及限制见 API 模块报告。
+backend/internal/api/account_group_lock.go	206f495fe991e5f1bdbd2cd30aa5895f311b14445c9bebdef728fc2df8e72c54	reviewed	分组锁显式布尔值、稳定账号、能力检查与冲突映射。 已全文阅读；验证及限制见 API 模块报告。
+backend/internal/api/account_groups.go	a8bf30bfdf04e445ce6dfc4ca6d2b087fc63c4f0ea635428fcea4c2b737f0dab	fixed	全文复审：稳定账号和分组版本预检保留；统一严格 JSON 解析，四类异常输入在业务预检前返回 422。
+backend/internal/api/account_results_events.go	3e7b479792a9befcaec2d060676f52d31692c9c10970ddf958be91b0f77152ed	reviewed	SSE 账号上限、订阅释放、原子快照、会话复核；逐账号重复详情/健康读取候选未测量。 已全文阅读；验证及限制见 API 模块报告。
+backend/internal/api/account_workbench.go	a0739e2be07dba9fdda470f6551a38cb3d27bba1622b94682473d0b6e2b0193b	reviewed	预览归属使用 Cookie 哈希；模板与列表 no-store、版本及服务层适配。 已全文阅读；验证及限制见 API 模块报告。
+backend/internal/api/account_workbench_maintenance.go	113b9b4912a854b29f98bf5f249c679285e69343af77dcf59296ad837d5bea12	reviewed	维护预览/确认/检查/停止按会话归属和版本传递，未知操作拒绝。 已全文阅读；验证及限制见 API 模块报告。
+backend/internal/api/account_workbench_runs.go	a03b5107b8fee18d5cbfb5e63b64a96706c528b9a1a0ab7548fbb95b3d8ee596	reviewed	任务读取、版本确认、登录输入与动作分派；归属及 no-store 一致。 已全文阅读；验证及限制见 API 模块报告。
+backend/internal/api/animation_manual_verdict.go	0707c3501bc3e62fe830625388a868232d868460e85d5c6d36380b8e9032b11d	reviewed	手动标记请求、操作者及未找到/活跃/无效结果错误映射。 已全文阅读；验证及限制见 API 模块报告。
+backend/internal/api/animation_prompt.go	e69595428e78f95de5456fbe0a41de4da838b81fe3ae1dd042dc69b1eea25dd0	reviewed	全局提示词严格请求解析、操作者与无缓存响应。 已全文阅读；验证及限制见 API 模块报告。
+backend/internal/api/detection_task_groups.go	eba1d8a5802ad77002d78cd0b931fbf4f8ca1b4ead73a14817d8a274fcede082	reviewed	旧任务仅补当前归属视图并标明来源，复制结果映射不改历史；稳定分组和数量上限。 已全文阅读；验证及限制见 API 模块报告。
+backend/internal/api/detection_tasks.go	bc144c59e253ca1f3ffda3d30a8b4f6a4d708d89b9328e23838f216ec8f0f46a	reviewed	检测任务配置、版本、删除与执行适配；显式阶段选择与服务可用性。 已全文阅读；验证及限制见 API 模块报告。
+backend/internal/api/kuma_template_distribution.go	19b7e7c1203fc3546f7a57f66441659d1c4067f099478972a30245abb179b234	reviewed	模板版本预览及后台下发，错误统一映射；需要既有服务依赖。 已全文阅读；验证及限制见 API 模块报告。
+backend/internal/api/kuma_templates_test.go	9cf62e8ac34daadb085171e98ba201f7786c08897cf564f08f615c53345cb3b5	reviewed	模板摘要隐藏凭据、详情回显请求内容不含独立鉴权、预设可编辑与鉴权。 已全文阅读；验证及限制见 API 模块报告。
+backend/internal/api/model_animations.go	2b38e522106e08bad3b7e955baeb60e807408257a2a6d12670d12b776df2917e	reviewed	账号/自定义模型、任务、计划与提示错误适配；no-store 与稳定账号校验。 已全文阅读；验证及限制见 API 模块报告。
+backend/internal/api/onboarding_concurrency.go	e294adae8a7c85ca1968274225b75868d102cb4c462afcb8f3bbcd7fa051f00a	reviewed	开户并发预览复用批量参数验证，结果不缓存。 已全文阅读；验证及限制见 API 模块报告。
+backend/internal/api/onboarding_probe_tasks.go	5c30334f971f02381f2cf9c4a3a436f5bb83251b622d0ed1185df5b117e34f72	reviewed	前置操作白名单及稳定目标输入，返回后台任务。 已全文阅读；验证及限制见 API 模块报告。
+backend/internal/api/server.go	5c97e02be7818f90082b55e825e929211794aa893f2cbba484a893b5fb0bfec6	fixed	全文复审 6328 行：鉴权、路由、业务适配、输入解析及 SSE；复用本次已鉴权身份，消除操作者丢失与重复会话读取，跨请求和流仍校验。其他现有改动不归本轮成果。
+backend/internal/api/server_test.go	5a7b2bd810f98e68d8a43bcff9b8541699b99638e95281104e6be931a8bf8196	reviewed	全文复审 4048 行：鉴权/CSRF/初始化、账号与上游/任务/配置协议；覆盖稳定 ID、版本与秘密隔离。旧大型替身、组合断言和真实时钟为维护限制，本轮未重写。
+backend/internal/api/task_concurrency.go	55434b054fc8f7ba658dce4a494d7e4e3c2365588fdf1ca3be8d0f6bc7ccc812	reviewed	并发设置版本冲突、无效参数与保存失败分别映射。 已全文阅读；验证及限制见 API 模块报告。
+backend/internal/api/terminal_continuity.go	b775c83e9198274d50f458bc820bf139e1a1adfdd75aa6e121869e8a3a92d23a	reviewed	终端创建固定 410，历史仅经已鉴权服务读取。 已全文阅读；验证及限制见 API 模块报告。
+backend/internal/api/upstream_allocation_settings.go	296353dcba2669a78d4cfe67d3b52b39247638df507b5ff9c9c17a6164ab41a8	reviewed	显式 nullable override、策略版本与上游 ID；未知字段拒绝。 已全文阅读；验证及限制见 API 模块报告。
+backend/internal/api/upstream_binding_cleanup.go	2abb4d712ee50f6ce777376035ef1a6c83841b372d79d426c3480525982a17ec	fixed	全文复审：严格 JSON 校验先于绑定删除；未知字段、尾随值和错误/缺失 Content-Type 不删除绑定或身份、不写审计；稳定 ID 和冲突映射保留。
+docs/reviews/api-adaptation-2026-10-11.md	d3eddf91d7a6ad722d0ce0cc51c2e5afc9b108193c52d60c59f55cec0e0beec5	reviewed	三处 API 修复、旧失败与新通过证据、四包竞态及 vet、审查覆盖和未证实性能候选；本轮收口，不宣称生产延迟或 RSS 收益。

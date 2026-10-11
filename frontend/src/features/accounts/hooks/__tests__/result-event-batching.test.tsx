@@ -7,11 +7,14 @@ import { useAccountResultEvents } from "../use-account-result-events";
 
 class EventStream extends EventTarget {
   static instances: EventStream[] = [];
+  closed = false;
   constructor() {
     super();
     EventStream.instances.push(this);
   }
-  close(): void {}
+  close(): void {
+    this.closed = true;
+  }
   emit(id: string, resultID = "1"): void {
     this.dispatchEvent(
       new MessageEvent("result", {
@@ -111,4 +114,29 @@ it("翻页后取消旧连接尚未发布的更新，旧连接迟到事件不会�
       .getQueryData<AccountStatus[]>(["accounts"])
       ?.map((account) => account.recent_results.length),
   ).toEqual([0, 1]);
+});
+
+it("同步模型弹窗打开时关闭实时连接并丢弃待发布结果，关闭后恢复订阅", () => {
+  const view = renderHook(
+    (props: { paused: boolean }) => useAccountResultEvents(["1"], props.paused),
+    { initialProps: { paused: false }, wrapper: Wrapper },
+  );
+  const original = EventStream.instances[0];
+  act(() => original.emit("1"));
+
+  view.rerender({ paused: true });
+  act(() => {
+    original.emit("1", "2");
+    vi.advanceTimersByTime(100);
+  });
+  expect(original.closed).toBe(true);
+  expect(client.getQueryData<AccountStatus[]>(["accounts"])?.[0].recent_results).toEqual([]);
+
+  view.rerender({ paused: false });
+  expect(EventStream.instances).toHaveLength(2);
+  act(() => {
+    EventStream.instances[1].emit("1", "3");
+    vi.advanceTimersByTime(100);
+  });
+  expect(client.getQueryData<AccountStatus[]>(["accounts"])?.[0].recent_results[0]?.id).toBe("3");
 });

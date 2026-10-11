@@ -1,4 +1,4 @@
-import { useDeferredValue, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 
@@ -31,13 +31,21 @@ export function LogsCenterPage() {
   const [eventLevel, setEventLevel] = useState<UnifiedLogEventLevel>("all");
   const [eventGroup, setEventGroup] = useState("all");
   const [search, setSearch] = useState("");
-  const deferredSearch = useDeferredValue(search);
+  const [settledSearch, setSettledSearch] = useState("");
+  useEffect(() => {
+    if (search === settledSearch) return;
+    const timer = window.setTimeout(() => {
+      setSettledSearch(search);
+      setPage(1);
+    }, 250);
+    return () => window.clearTimeout(timer);
+  }, [search, settledSearch]);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
   const [selected, setSelected] = useState<UnifiedLogEntry | null>(null);
   const groups = useQuery({
     queryKey: ["groups"],
-    queryFn: api.groups,
+    queryFn: ({ signal }) => api.groups(signal),
     enabled: kind === "event",
   });
   const selectedGroupID = groups.data?.find((group) => group.name === eventGroup)?.id ?? "";
@@ -49,21 +57,24 @@ export function LogsCenterPage() {
       eventLevel,
       eventGroup,
       selectedGroupID,
-      deferredSearch,
+      settledSearch,
       page,
       pageSize,
     ],
-    queryFn: () =>
-      api.logs({
-        kind,
-        state,
-        level: kind === "event" ? eventLevel : "all",
-        group: kind === "event" && eventGroup !== "all" ? eventGroup : "",
-        groupId: kind === "event" ? selectedGroupID : "",
-        search: deferredSearch,
-        page,
-        pageSize,
-      }),
+    queryFn: (context) =>
+      api.logs(
+        {
+          kind,
+          state,
+          level: kind === "event" ? eventLevel : "all",
+          group: kind === "event" && eventGroup !== "all" ? eventGroup : "",
+          groupId: kind === "event" ? selectedGroupID : "",
+          search: settledSearch,
+          page,
+          pageSize,
+        },
+        context.signal,
+      ),
     refetchInterval: 15_000,
     placeholderData: (previous) => previous,
   });
@@ -106,7 +117,6 @@ export function LogsCenterPage() {
           truncated={logs.data?.truncated === true}
           onSearchChange={(value) => {
             setSearch(value);
-            setPage(1);
           }}
           onKindChange={selectKind}
           onStateChange={(value) => {

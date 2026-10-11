@@ -21,11 +21,10 @@ func TestDetectionTaskRunsOnlySelectedStagesAfterRestart(t *testing.T) {
 	}{
 		{"animation only", true, false, false, []string{"animation"}},
 		{"precheck only", false, true, false, []string{"precheck"}},
-		{"terminal only", false, false, true, []string{"terminal"}},
-		{"precheck and terminal", false, true, true, []string{"precheck", "terminal"}},
 		{"precheck and animation", true, true, false, []string{"precheck", "animation"}},
-		{"terminal and animation", true, false, true, []string{"terminal", "animation"}},
-		{"all stages", true, true, true, []string{"precheck", "terminal", "animation"}},
+		{"legacy terminal and precheck", false, true, true, []string{"precheck"}},
+		{"legacy terminal and animation", true, false, true, []string{"animation"}},
+		{"legacy all stages", true, true, true, []string{"precheck", "animation"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var requested []string
@@ -50,7 +49,7 @@ func TestDetectionTaskRunsOnlySelectedStagesAfterRestart(t *testing.T) {
 			data, _ := json.Marshal(managedTask())
 			var fields map[string]any
 			json.Unmarshal(data, &fields)
-			fields["animation"], fields["precheck"], fields["terminal"] = tc.animation, tc.precheck, tc.terminal
+			fields["animation"], fields["precheck"], fields["terminal"] = tc.animation, tc.precheck, false
 			fields["terminal_rounds"], fields["automatic"] = 1, true
 			data, _ = json.Marshal(fields)
 			var value modelcheck.DetectionTask
@@ -59,6 +58,15 @@ func TestDetectionTaskRunsOnlySelectedStagesAfterRestart(t *testing.T) {
 			}
 			if _, err := f.service.SaveDetectionTask(context.Background(), value, "test"); err != nil {
 				t.Fatal(err)
+			}
+			if tc.terminal {
+				var legacy []map[string]any
+				if err := json.Unmarshal(f.catalog.plans, &legacy); err != nil {
+					t.Fatal(err)
+				}
+				legacy[0]["terminal"] = true
+				legacy[0]["terminal_rounds"] = 3
+				f.catalog.plans, _ = json.Marshal(legacy)
 			}
 			restarted, err := modelcheck.New(f.tasks, credentials{}, f.catalog, credentials{})
 			if err != nil {
@@ -84,11 +92,13 @@ func TestDetectionTaskRunsOnlySelectedStagesAfterRestart(t *testing.T) {
 			}
 			animations := result.Result["animations"].([]modelcheck.AnimationResult)
 			wantAnimations := len(tc.stages)
-			if tc.terminal {
-				wantAnimations--
-			}
 			if len(animations) != wantAnimations {
 				t.Fatalf("unselected results: %v", animations)
+			}
+			for _, animation := range animations {
+				if animation.Phase != "completed" {
+					t.Fatalf("terminal result phase = %q, want completed: %+v", animation.Phase, animation)
+				}
 			}
 		})
 	}

@@ -1,3 +1,4 @@
+import { mergeAccountResults } from "../lib/recent-results";
 import type { LiveResultsStatus } from "../lib/live-results-status";
 import { useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
@@ -47,27 +48,12 @@ const collectionSchema = z.object({
   state: z.enum(["connected", "retrying"]),
 });
 
-function mergeAccountResults(
-  previous: readonly AccountRecentResult[],
-  incoming: readonly AccountRecentResult[],
-): AccountRecentResult[] {
-  const results = new Map<string, AccountRecentResult>();
-  for (const item of [...previous, ...incoming]) {
-    const key = item.id ?? `${item.source}:${item.observed_at}`;
-    results.set(key, item);
-  }
-  return [...results.values()]
-    .sort((a, b) => {
-      const time = (b.observed_at ?? "").localeCompare(a.observed_at ?? "");
-      if (time !== 0) return time;
-      return (b.id ?? "").localeCompare(a.id ?? "", undefined, { numeric: true });
-    })
-    .slice(0, 100);
-}
-
-export function useAccountResultEvents(accountIDs: readonly string[]): LiveResultsStatus {
+export function useAccountResultEvents(
+  accountIDs: readonly string[],
+  paused = false,
+): LiveResultsStatus {
   const client = useQueryClient();
-  const idsKey = [...new Set(accountIDs)].sort().join(",");
+  const idsKey = paused ? "" : [...new Set(accountIDs)].sort().join(",");
   const [status, setStatus] = useState<LiveResultsStatus>("connecting");
   useEffect(() => {
     if (!idsKey) return;

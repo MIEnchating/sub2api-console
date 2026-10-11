@@ -57,6 +57,10 @@ func (s *Service) Start(ctx context.Context, owner string, input RunConfirmation
 		value.Public.Items = append(value.Public.Items, RunItem{InputItem: item.Item, Status: "queued", TemplateName: label})
 	}
 	value.Scope = preview.Scope
+	value.RememberedSource = preview.RememberedSource
+	if err = s.rememberedSourceAllowed(ctx, &value); err != nil {
+		return Run{}, err
+	}
 	result, err := s.launch(ctx, &value)
 	if err == nil {
 		_ = s.private.DeleteWorkbenchDocument(ctx, "preview:"+owner, claimedRevision)
@@ -68,7 +72,7 @@ func (s *Service) launch(ctx context.Context, value *privateRun) (Run, error) {
 		return Run{}, errors.New("工作台任务执行服务尚未就绪")
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	task := taskstore.Task{ID: newID(), Skill: Skill, Operation: "workbench-run", Status: "queued", Message: "账号处理已排队", Result: map[string]any{"run_id": value.Public.ID, "total": len(value.Items)}, CreatedAt: now, UpdatedAt: now}
+	task := taskstore.Task{ID: newID(), Skill: Skill, Operation: "workbench-run", Status: "queued", Message: "账号处理已排队", Result: map[string]any{"run_id": value.Public.ID, "total": len(runWorkIndices(value))}, CreatedAt: now, UpdatedAt: now}
 	value.Public.TaskID = task.ID
 	value.Public.Status = "queued"
 	value.TaskIDs = append(value.TaskIDs, task.ID)
@@ -115,5 +119,8 @@ func (s *Service) launch(ctx context.Context, value *privateRun) (Run, error) {
 func (s *Service) persistRun(value *privateRun) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	return s.saveRun(ctx, value)
+	// A removed or changed login source must stop further credential use, but
+	// must not prevent recording the task's failure or terminal state.
+	materialErr := s.persistRememberedLoginMaterial(ctx, value)
+	return errors.Join(materialErr, s.saveRun(ctx, value))
 }

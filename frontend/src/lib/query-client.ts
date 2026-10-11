@@ -2,10 +2,10 @@ import { QueryCache, QueryClient } from "@tanstack/react-query";
 
 import { ApiError } from "@/api";
 import { notifyOperationError } from "./operation-feedback";
-import { isSessionExpiredError } from "./session-auth";
+import { isSessionExpiredError, SessionChangedError } from "./session-auth";
 
 function shouldRetryQuery(failureCount: number, error: unknown): boolean {
-  if (isSessionExpiredError(error)) return false;
+  if (isSessionExpiredError(error) || error instanceof SessionChangedError) return false;
   if (
     error instanceof ApiError &&
     error.status >= 400 &&

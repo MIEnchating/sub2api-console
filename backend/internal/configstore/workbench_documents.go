@@ -22,7 +22,9 @@ func (s *Store) WorkbenchDocumentPage(ctx context.Context, prefix, after string,
 	if prefix == "" || len(prefix) > 200 || len(after) > 200 || limit < 1 || limit > 501 {
 		return nil, errors.New("工作台查询范围无效")
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT id,revision,payload FROM account_workbench_documents WHERE substr(id,1,?)=? AND id>? ORDER BY id LIMIT ?`, len(prefix), prefix, after, limit)
+	where, args := workbenchDocumentRange(prefix)
+	args = append(args, after, limit)
+	rows, err := s.db.QueryContext(ctx, `SELECT id,revision,payload FROM account_workbench_documents WHERE `+where+` AND id>? ORDER BY id LIMIT ?`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -41,23 +43,31 @@ func (s *Store) WorkbenchDocumentPage(ctx context.Context, prefix, after string,
 // WorkbenchDocuments scopes reads to an exact namespace prefix. LIKE is not
 // used because session and task identifiers must not become wildcard queries.
 func (s *Store) WorkbenchDocuments(ctx context.Context, prefix string, limit int) ([]WorkbenchDocumentRecord, error) {
-	if prefix == "" || len(prefix) > 200 || limit < 1 || limit > 501 {
-		return nil, errors.New("工作台查询范围无效")
-	}
-	rows, err := s.db.QueryContext(ctx, `SELECT id,revision,payload FROM account_workbench_documents WHERE substr(id,1,?)=? ORDER BY rowid DESC LIMIT ?`, len(prefix), prefix, limit)
+	result := []WorkbenchDocumentRecord{}
+	err := s.VisitWorkbenchDocuments(ctx, prefix, limit, func(record WorkbenchDocumentRecord) (bool, error) {
+		result = append(result, record)
+		return true, nil
+	})
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	result := []WorkbenchDocumentRecord{}
-	for rows.Next() {
-		var record WorkbenchDocumentRecord
-		if err = rows.Scan(&record.ID, &record.Revision, &record.Payload); err != nil {
-			return nil, err
+	return result, nil
+}
+
+// The id primary key uses SQLite's BINARY collation. A half-open byte range
+// matches a literal prefix, including Unicode and SQL wildcard characters,
+// without applying a function to each stored key. Bounds are not document IDs
+// and need not themselves contain complete UTF-8 code points.
+func workbenchDocumentRange(prefix string) (string, []any) {
+	upper := []byte(prefix)
+	for i := len(upper) - 1; i >= 0; i-- {
+		if upper[i] != 0xff {
+			upper[i]++
+			return "id>=? AND id<?", []any{prefix, string(upper[:i+1])}
 		}
-		result = append(result, record)
 	}
-	return result, rows.Err()
+	// An all-0xff prefix has no finite successor in the byte ordering.
+	return "id>=?", []any{prefix}
 }
 
 func (s *Store) DeleteWorkbenchDocument(ctx context.Context, key string, revision int64) error {
@@ -82,6 +92,16 @@ func (s *Store) WorkbenchDocument(ctx context.Context, key string) (json.RawMess
 	var raw []byte
 	var revision int64
 	err := s.db.QueryRowContext(ctx, `SELECT payload,revision FROM account_workbench_documents WHERE id=?`, key).Scan(&raw, &revision)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, 0, nil
+	}
+	return raw, revision, err
+}
+
+func (s *Store) WorkbenchDocumentPublic(ctx context.Context, key string) (json.RawMessage, int64, error) {
+	var raw []byte
+	var revision int64
+	err := s.db.QueryRowContext(ctx, `SELECT json_extract(payload,'$.public'),revision FROM account_workbench_documents WHERE id=?`, key).Scan(&raw, &revision)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, 0, nil
 	}

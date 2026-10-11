@@ -1,5 +1,5 @@
-import { useState, type ReactElement } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMemo, useState, type ReactElement } from "react";
+import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { RefreshCw, ChevronDown, Trash2, FileDown, History, Search } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/api";
@@ -43,9 +43,22 @@ export function RunList(): ReactElement {
   const client = useQueryClient();
   const query = useQuery({
     queryKey: runKeys.list,
-    queryFn: api.workbenchRuns,
-    refetchInterval: (query) => (query.state.data?.some(active) ? 1000 : 30_000),
+    queryFn: ({ signal }) => api.workbenchRuns(signal),
+    refetchInterval: 30_000,
   });
+  const activeRuns = useMemo(() => (query.data ?? []).filter(active), [query.data]);
+  const activeQueries = useQueries({
+    queries: activeRuns.map((run) => ({
+      queryKey: [...runKeys.list, "detail", run.id, run.revision],
+      queryFn: ({ signal }: { signal: AbortSignal }) => api.workbenchRun(run.id, signal),
+      refetchInterval: (detail: { state: { data?: WorkbenchRun } }) =>
+        detail.state.data && active(detail.state.data) ? 1000 : false,
+    })),
+  });
+  const activeUpdates = useMemo(
+    () => new Map(activeRuns.map((run, index) => [run.id, activeQueries[index].data])),
+    [activeRuns, activeQueries],
+  );
   const [search, setSearch] = useState("");
   const [expanded, setExpanded] = useState<string | null>(null);
   const [confirmation, setConfirmation] = useState<RunAction | null>(null);
@@ -70,17 +83,27 @@ export function RunList(): ReactElement {
       }),
     onError: (error) => notifyOperationError(error, "私有 JSON 保存失败"),
   });
-  const runs = (query.data ?? []).filter((run) =>
-    run.items.some((item) =>
-      (item.email + " " + item.name + " " + (item.account_id || ""))
-        .toLowerCase()
-        .includes(search.trim().toLowerCase()),
-    ),
-  );
+  const runs = useMemo(() => {
+    const queryText = search.trim().toLowerCase();
+    return (query.data ?? [])
+      .map((run) => {
+        const updated = activeUpdates.get(run.id);
+        return updated && updated.revision >= run.revision ? updated : run;
+      })
+      .filter((run) => {
+        if (!queryText) return true;
+        return run.items.some((item) =>
+          (item.email + " " + item.name + " " + (item.account_id || ""))
+            .toLowerCase()
+            .includes(queryText),
+        );
+      });
+  }, [activeUpdates, query.data, search]);
   const pending = update.isPending || exportFile.isPending;
   return (
     <section aria-label="处理记录" className="grid min-w-0 gap-4">
       <WorkbenchToolbar
+        description="查看导入进度，继续处理待确认的账号。"
         actions={
           <Button
             variant="outline"
@@ -91,26 +114,27 @@ export function RunList(): ReactElement {
             刷新
           </Button>
         }
-      />
-      <div className="flex flex-wrap items-center gap-3 rounded-xl border bg-card p-3">
-        <div className="relative min-w-0 flex-1 sm:max-w-md">
-          <Search
-            aria-hidden="true"
-            className="pointer-events-none absolute top-2 left-2.5 size-4 text-muted-foreground"
-          />
-          <Input
-            className="pl-9"
-            type="search"
-            aria-label="搜索处理记录"
-            placeholder="搜索邮箱、名称或站点账号 ID"
-            value={search}
-            onChange={(event) => setSearch(event.target.value)}
-          />
+      >
+        <div className="flex min-w-0 flex-wrap items-center gap-3">
+          <div className="relative min-w-0 flex-1 sm:max-w-md">
+            <Search
+              aria-hidden="true"
+              className="pointer-events-none absolute top-2 left-2.5 size-4 text-muted-foreground"
+            />
+            <Input
+              className="pl-9"
+              type="search"
+              aria-label="搜索处理记录"
+              placeholder="搜索邮箱、名称或站点账号 ID"
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+            />
+          </div>
+          {query.data && (
+            <span className="text-xs text-muted-foreground">共 {runs.length} 个批次</span>
+          )}
         </div>
-        {query.data && (
-          <span className="text-xs text-muted-foreground">共 {runs.length} 个批次</span>
-        )}
-      </div>
+      </WorkbenchToolbar>
       {query.isPending && (
         <div aria-busy="true" aria-label="正在读取处理记录" className="grid gap-3">
           <Skeleton className="h-24" />
@@ -133,7 +157,7 @@ export function RunList(): ReactElement {
         const open = expanded === run.id || (expanded === null && index === 0);
         const expired = new Date(run.expires_at).getTime() <= Date.now();
         return (
-          <article key={run.id} className="min-w-0 overflow-hidden rounded-xl border bg-card">
+          <article key={run.id} className="min-w-0 overflow-hidden rounded-lg border bg-card">
             <div className="flex flex-wrap items-center justify-between gap-2 bg-muted/20 p-3 sm:p-4">
               <Button
                 variant="ghost"

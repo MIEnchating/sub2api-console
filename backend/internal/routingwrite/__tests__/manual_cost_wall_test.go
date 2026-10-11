@@ -23,6 +23,7 @@ func prepareManualCost(t *testing.T, fixture *upstreamCapacityFixture) {
 }
 
 func TestManualCostWallWritesOnlySchedulingAndRecoversAfterExplicitExemption(t *testing.T) {
+	t.Parallel()
 	service, fixture := newUpstreamCapacityWriteFixture(t, nil, 20, 30, true)
 	prepareManualCost(t, fixture)
 	result, err := service.EnforceManualCostWall(t.Context(), []string{"41"}, "test")
@@ -50,6 +51,7 @@ func TestManualCostWallWritesOnlySchedulingAndRecoversAfterExplicitExemption(t *
 }
 
 func TestManualCostWallRejectsStalePriceOrMembershipBeforeWriting(t *testing.T) {
+	t.Parallel()
 	for _, field := range []string{"rate_multiplier", "group_ids"} {
 		t.Run(field, func(t *testing.T) {
 			service, fixture := newUpstreamCapacityWriteFixture(t, nil, 20, 30, true)
@@ -68,6 +70,7 @@ func TestManualCostWallRejectsStalePriceOrMembershipBeforeWriting(t *testing.T) 
 }
 
 func TestManualCostWallPreservesMonitoringModeAndUnselectedAccounts(t *testing.T) {
+	t.Parallel()
 	for _, scenario := range []string{"monitoring", "unselected"} {
 		t.Run(scenario, func(t *testing.T) {
 			service, fixture := newUpstreamCapacityWriteFixture(t, nil, 20, 30, true)
@@ -88,6 +91,7 @@ func TestManualCostWallPreservesMonitoringModeAndUnselectedAccounts(t *testing.T
 }
 
 func TestManualCostWallDoesNotCommitUnconfirmedSchedulingReadback(t *testing.T) {
+	t.Parallel()
 	_, fixture := newUpstreamCapacityWriteFixture(t, nil, 20, 30, true)
 	prepareManualCost(t, fixture)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

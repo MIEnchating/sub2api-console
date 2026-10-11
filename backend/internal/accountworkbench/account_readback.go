@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"reflect"
 	"slices"
 
@@ -60,18 +61,48 @@ func verifyApplied(account, requested map[string]any) error {
 	return nil
 }
 
-// verifyAppliedWhileIsolated checks the configuration fields that are safe to
-// compare before promotion. Sub2API keeps the runtime health status (often
-// "active") independent from scheduling; schedulable=false is the isolation
-// boundary used by the workbench.
-func verifyAppliedWhileIsolated(account, requested map[string]any) error {
-	withoutStatus := make(map[string]any, len(requested))
-	for key, value := range requested {
-		if key != "status" {
-			withoutStatus[key] = value
+// verifyImportedApplied validates the parts of an import that the management
+// API can read back. OAuth secrets are intentionally redacted by the API, so
+// comparing the full credentials object would turn a successful import into a
+// false "credentials not applied" failure. Stable identity is checked by the
+// caller and model mappings remain safe, non-secret configuration to verify.
+func verifyImportedApplied(account, requested map[string]any) error {
+	if credentials, ok := requested["credentials"].(map[string]any); ok {
+		if err := verifyImportedCredentialState(account, credentials); err != nil {
+			return err
+		}
+		if err := verifyModelMappings(account, credentials); err != nil {
+			return err
 		}
 	}
-	return verifyApplied(account, withoutStatus)
+	withoutCredentials := maps.Clone(requested)
+	delete(withoutCredentials, "credentials")
+	return verifyApplied(account, withoutCredentials)
+}
+
+func verifyImportedAppliedWhileIsolated(account, requested map[string]any) error {
+	withoutStatus := maps.Clone(requested)
+	delete(withoutStatus, "status")
+	return verifyImportedApplied(account, withoutStatus)
+}
+
+func verifyImportedCredentialState(account, expected map[string]any) error {
+	status := object(account["credentials_status"])
+	for _, field := range []struct {
+		credential string
+		statusKey  string
+	}{
+		{credential: "access_token", statusKey: "has_access_token"},
+		{credential: "refresh_token", statusKey: "has_refresh_token"},
+	} {
+		if text(expected[field.credential]) == "" {
+			continue
+		}
+		if configured, ok := status[field.statusKey].(bool); ok && !configured {
+			return fmt.Errorf("账号凭据 %s 未生效，已停止启用", field.credential)
+		}
+	}
+	return nil
 }
 
 func appliedValue(actual, expected any) bool {

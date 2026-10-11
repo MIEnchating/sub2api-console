@@ -1,9 +1,10 @@
-import { useDictionaryOrder } from "@/hooks/use-dictionary-order";
+import { useDictionary } from "@/hooks/use-dictionary-order";
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowRight, Bolt, RefreshCw, ServerCog, ShieldCheck, TriangleAlert } from "lucide-react";
 
-import { api } from "@/api";
+import { api, type AccountStatus } from "@/api";
+import { ContentRetry } from "@/components/content-retry";
 import { RefreshButton } from "@/components/refresh-button";
 import { PageActions } from "@/components/page-actions";
 import { PageHeading } from "@/components/page-heading";
@@ -20,17 +21,16 @@ import { cn } from "@/lib/utils";
 import { notifyOperationError } from "@/lib/operation-feedback";
 import { notifyTaskResult } from "@/lib/task-result-feedback";
 import { concurrencyLimitedLabel } from "@/lib/domain-dictionaries";
+import { sortRecordsByDictionary } from "@/lib/dictionary-order";
 import { OverviewActivity } from "./overview-activity";
 import {
-  buildAttentionAccounts,
-  buildGroupHealth,
-  buildOverviewMetrics,
-  overviewAccounts,
+  buildOverviewHealth,
   strategyLabel,
-  visibleOverviewGroups,
   type GroupHealth,
   type HealthTone,
 } from "../lib/overview-health";
+
+const emptyAccounts: AccountStatus[] = [];
 
 type OverviewPageProps = {
   onOpenGroups: () => void;
@@ -202,18 +202,20 @@ export function OverviewPage(props: OverviewPageProps) {
   const [syncTaskId, setSyncTaskId] = useState<string | null>(null);
   const accounts = useQuery({
     queryKey: ["accounts"],
-    queryFn: api.accounts,
+    queryFn: ({ signal }) => api.accounts(signal),
+    staleTime: 30_000,
     refetchInterval: 30_000,
   });
   const groups = useQuery({
     queryKey: ["groups"],
-    queryFn: api.groups,
+    queryFn: ({ signal }) => api.groups(signal),
+    staleTime: 30_000,
     refetchInterval: 30_000,
-    refetchOnMount: "always",
   });
   const events = useQuery({
     queryKey: ["overview-events"],
-    queryFn: api.recentEvents,
+    queryFn: ({ signal }) => api.recentEvents(signal),
+    staleTime: 15_000,
     refetchInterval: 15_000,
   });
   const sync = useMutation({
@@ -223,7 +225,7 @@ export function OverviewPage(props: OverviewPageProps) {
   });
   const syncTask = useQuery({
     queryKey: ["overview-sync", syncTaskId],
-    queryFn: () => api.task(syncTaskId!),
+    queryFn: ({ signal }) => api.task(syncTaskId!, signal),
     enabled: Boolean(syncTaskId),
     refetchInterval: taskPollInterval,
   });
@@ -238,25 +240,22 @@ export function OverviewPage(props: OverviewPageProps) {
     setSyncTaskId(null);
   }, [queryClient, syncTask.data]);
 
-  const accountRows = accounts.data ?? [];
-  const groupRows = useDictionaryOrder("group", groups.data ?? [], (group) => group.id ?? "");
-  const visibleGroups = useMemo(() => visibleOverviewGroups(groupRows), [groupRows]);
-  const managedAccounts = useMemo(
-    () => overviewAccounts(accountRows, visibleGroups),
-    [accountRows, visibleGroups],
+  const accountRows = accounts.data ?? emptyAccounts;
+  const groupDictionary = useDictionary("group");
+  const groupRows = useMemo(
+    () =>
+      sortRecordsByDictionary(
+        groups.data ?? [],
+        groupDictionary.data?.items,
+        (group) => group.id ?? "",
+      ),
+    [groups.data, groupDictionary.data?.items],
   );
-  const metrics = useMemo(
-    () => buildOverviewMetrics(managedAccounts, visibleGroups),
-    [managedAccounts, visibleGroups],
+  const overview = useMemo(
+    () => buildOverviewHealth(accountRows, groupRows),
+    [accountRows, groupRows],
   );
-  const healthRows = useMemo(
-    () => visibleGroups.map((group) => buildGroupHealth(group, managedAccounts)),
-    [managedAccounts, visibleGroups],
-  );
-  const attention = useMemo(
-    () => buildAttentionAccounts(accountRows, visibleGroups),
-    [accountRows, visibleGroups],
-  );
+  const metrics = overview.metrics;
   const loading = accounts.isLoading || groups.isLoading;
   const syncing = sync.isPending || Boolean(syncTaskId);
   const error = accounts.error ?? groups.error;
@@ -293,6 +292,14 @@ export function OverviewPage(props: OverviewPageProps) {
       />
       {error && <QueryErrorToast error={error} fallback="运营数据读取失败" />}
       {events.error && <QueryErrorToast error={events.error} fallback="最近事件读取失败" />}
+      {syncTask.error && <QueryErrorToast error={syncTask.error} fallback="同步状态读取失败" />}
+      {syncTaskId &&
+        (syncTask.isError ||
+          (syncTask.isFetching && syncTask.errorUpdatedAt > syncTask.dataUpdatedAt)) && (
+          <section aria-label="同步状态重试">
+            <ContentRetry onRetry={() => void syncTask.refetch()} pending={syncTask.isFetching} />
+          </section>
+        )}
       <section
         className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4"
         aria-label="核心运营指标"
@@ -357,14 +364,14 @@ export function OverviewPage(props: OverviewPageProps) {
           className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3"
         >
           {loading && <MatrixSkeleton />}
-          {!loading && !error && healthRows.length === 0 && (
+          {!loading && !error && overview.healthRows.length === 0 && (
             <div className="text-muted-foreground col-span-full flex min-h-48 items-center justify-center text-sm">
               暂无分组数据
             </div>
           )}
           {!loading &&
             !unavailable &&
-            healthRows.map((health) => (
+            overview.healthRows.map((health) => (
               <GroupHealthCard
                 key={health.group.id ?? health.group.name}
                 health={health}
@@ -375,7 +382,7 @@ export function OverviewPage(props: OverviewPageProps) {
       </Card>
 
       <OverviewActivity
-        attention={attention}
+        attention={overview.attention}
         events={events.data ?? []}
         attentionLoading={loading}
         attentionError={error}

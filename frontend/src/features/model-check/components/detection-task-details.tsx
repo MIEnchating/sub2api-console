@@ -27,10 +27,10 @@ import { detectionTaskMessage } from "../lib/detection-task-outcome";
 export function DetectionTaskDetails(props: { id: string; onClose: () => void }): ReactElement {
   const query = useQuery({
     queryKey: ["task", props.id],
-    queryFn: () => api.task(props.id),
+    queryFn: ({ signal }) => api.task(props.id, signal),
     refetchInterval: taskPollInterval,
   });
-  const groups = useQuery({ queryKey: ["groups"], queryFn: api.groups });
+  const groups = useQuery({ queryKey: ["groups"], queryFn: ({ signal }) => api.groups(signal) });
   const task = query.data;
   const state = collectAnimationTasks(task ? [task] : [], new Set<string>());
   const terminals = terminalContinuityResults(task ? [task] : []);

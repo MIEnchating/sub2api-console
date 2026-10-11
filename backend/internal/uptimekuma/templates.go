@@ -96,6 +96,11 @@ func (s *Service) Templates(ctx context.Context) ([]TemplateSummary, error) {
 	return result, nil
 }
 func (s *Service) SaveTemplate(ctx context.Context, id string, in TemplateInput) (TemplateSummary, error) {
+	ctx, release, err := s.enter(ctx)
+	if err != nil {
+		return TemplateSummary{}, err
+	}
+	defer release()
 	var item configstore.KumaTemplate
 	if id != "" {
 		if !templateIDPattern.MatchString(id) {
@@ -209,6 +214,11 @@ func (s *Service) SaveTemplate(ctx context.Context, id string, in TemplateInput)
 	return templateSummary(item), nil
 }
 func (s *Service) DeleteTemplate(ctx context.Context, id string, revision int64) error {
+	ctx, release, err := s.enter(ctx)
+	if err != nil {
+		return err
+	}
+	defer release()
 	if !templateIDPattern.MatchString(id) || revision < 1 {
 		return failure("kuma_invalid_template", "模板 ID 或版本无效", 422)
 	}
@@ -228,9 +238,14 @@ func (s *Service) resolveTemplate(ctx context.Context, in *MonitorInput) error {
 	if err != nil {
 		return templateError(err)
 	}
+	return applyResolvedTemplate(item, in)
+}
+
+func applyResolvedTemplate(item configstore.KumaTemplate, in *MonitorInput) error {
 	if item.Revision != in.TemplateRevision {
 		return templateError(configstore.ErrKumaTemplateConflict)
 	}
+	var err error
 	if item.Monitoring != nil {
 		if in.TemplateSettingsOverride && in.Type != item.Monitoring.Type {
 			return failure("kuma_invalid_template_type", "模板监控类型与当前监控不一致，请重新选择模板", 422)

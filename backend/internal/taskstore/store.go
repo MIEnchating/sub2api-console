@@ -91,6 +91,8 @@ func Open(path string) (*Store, error) {
 	for _, statement := range []string{
 		`CREATE TABLE IF NOT EXISTS task_recovery (task_id TEXT PRIMARY KEY, payload TEXT NOT NULL)`,
 		`CREATE INDEX IF NOT EXISTS ix_tasks_updated_at ON tasks(updated_at DESC,id)`,
+		`CREATE INDEX IF NOT EXISTS ix_tasks_log_cleanup ON tasks(updated_at,id)
+			WHERE status NOT IN ('queued','running','waiting_input')`,
 		`CREATE INDEX IF NOT EXISTS ix_tasks_status_updated_at ON tasks(status,updated_at,id)`,
 		`CREATE INDEX IF NOT EXISTS ix_tasks_skill_updated_at ON tasks(skill,updated_at DESC,id)`,
 		`CREATE INDEX IF NOT EXISTS ix_tasks_operation_status_updated_at ON tasks(operation,status,updated_at DESC,id DESC)`,
@@ -102,6 +104,7 @@ func Open(path string) (*Store, error) {
 			` + taskRunKeySQL + `,` + taskObjectSQL + `,` + taskRequestSQL + `,` + taskModelSQL + `,` + taskErrorSQL + `
 		)`,
 		`DROP INDEX IF EXISTS ix_tasks_log_listing`,
+		taskConsoleSummaryIndexSQL,
 	} {
 		if _, err := db.Exec(statement); err != nil {
 			return nil, errors.Join(err, db.Close())
@@ -212,6 +215,10 @@ func activeOperationKey(operation string) string {
 		return "account-rate-sync"
 	case "account-model-discovery", "account-model-apply":
 		return "account-model-sync"
+	case "account-model-automation":
+		return "account-model-automation"
+	case "account-model-automation-group":
+		return "account-model-automation-group"
 	case "upstream-balances-sync", "upstream-groups-sync", "upstream-name-repair", "upstream-sync":
 		return "upstream-batch-sync"
 	default:
@@ -293,35 +300,6 @@ func (s *Store) ListLogSummaries(ctx context.Context, limit *int) ([]Task, error
 	query := `SELECT id,skill,operation,status,progress,message,` +
 		taskRunKeySQL + `,` + taskObjectSQL +
 		`,created_at,updated_at FROM tasks ORDER BY updated_at DESC`
-	arguments := []any{}
-	if limit != nil {
-		if *limit < 0 || *limit > 100000 {
-			return nil, errors.New("limit 必须在 0 到 100000 之间")
-		}
-		query += ` LIMIT ?`
-		arguments = append(arguments, *limit)
-	}
-	rows, err := s.db.QueryContext(ctx, query, arguments...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	return scanTaskSummaries(rows)
-}
-
-func (s *Store) ListConsoleSummaries(ctx context.Context, limit *int) ([]Task, error) {
-	query := `SELECT id,skill,operation,status,progress,message,` +
-		taskRunKeySQL + `,` + taskObjectSQL +
-		`,created_at,updated_at FROM tasks AS visible
-		WHERE COALESCE(` + taskSystemInfoSQL + `,0)=1 OR visible.operation IN (
-			'account-model-animation','account-model-precheck','account-model-combined',
-			'managed-model-detection','account-terminal-continuity'
-		) OR (
-			visible.operation='active-probe' AND json_valid(visible.result_json) AND
-			TRIM(COALESCE(CAST(json_extract(visible.result_json,'$.platform') AS TEXT),''))<>'' AND
-			TRIM(COALESCE(CAST(json_extract(visible.result_json,'$.model') AS TEXT),''))<>''
-		)
-		ORDER BY visible.updated_at DESC`
 	arguments := []any{}
 	if limit != nil {
 		if *limit < 0 || *limit > 100000 {
@@ -509,42 +487,6 @@ func compactAutomaticInspectionHistory(
 	return result.RowsAffected()
 }
 
-func (s *Store) ClearLogs(ctx context.Context, before *time.Time) (int64, int64, error) {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return 0, 0, err
-	}
-	defer tx.Rollback()
-	where := ` WHERE status NOT IN ('queued','running','waiting_input')`
-	arguments := []any{}
-	if before != nil {
-		where += ` AND updated_at < ?`
-		arguments = append(arguments, before.UTC().Format(storageTimeLayout))
-	}
-	// Acquire the write lock before reading counts, and preserve tombstones in
-	// the same transaction so late finalization cannot recreate cleaned tasks.
-	tombstoneArguments := append([]any{time.Now().UTC().Format(storageTimeLayout)}, arguments...)
-	if _, err := tx.ExecContext(ctx, `INSERT INTO deleted_tasks(id,deleted_at) SELECT id,? FROM tasks`+where, tombstoneArguments...); err != nil {
-		return 0, 0, err
-	}
-	var protected int64
-	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM tasks WHERE status IN ('queued','running','waiting_input')`).Scan(&protected); err != nil {
-		return 0, 0, err
-	}
-	result, err := tx.ExecContext(ctx, `DELETE FROM tasks`+where, arguments...)
-	if err != nil {
-		return 0, protected, err
-	}
-	deleted, err := result.RowsAffected()
-	if err != nil {
-		return 0, protected, err
-	}
-	if err := tx.Commit(); err != nil {
-		return 0, protected, err
-	}
-	return deleted, protected, nil
-}
-
 type scanner interface {
 	Scan(...any) error
 }
@@ -558,6 +500,10 @@ func scanTask(row scanner) (Task, error) {
 		}
 		return Task{}, err
 	}
+	return decodeTaskResult(task, raw)
+}
+
+func decodeTaskResult(task Task, raw string) (Task, error) {
 	if err := validateTaskColumns(task); err != nil {
 		return corruptTask(task, "任务持久化字段损坏"), nil
 	}

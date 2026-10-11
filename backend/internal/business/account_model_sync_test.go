@@ -9,6 +9,7 @@ import (
 )
 
 func TestAccountModelSyncPreviewKeepsCatalogsPerAccountAndAppliesGlobalBlockPatterns(t *testing.T) {
+	t.Parallel()
 	store := openPolicyStore(t)
 	ctx := context.Background()
 	for _, statement := range []string{
@@ -68,6 +69,7 @@ func TestAccountModelSyncPreviewKeepsCatalogsPerAccountAndAppliesGlobalBlockPatt
 }
 
 func TestModelMatchesBlockPatternsSupportsCaseInsensitiveStarAndQuestionWildcards(t *testing.T) {
+	t.Parallel()
 	patterns := []string{"claude-*", "gpt-?.?-preview", "EXACT-MODEL"}
 	for _, model := range []string{"Claude-Opus-4", "gpt-5.2-preview", "exact-model"} {
 		if !ModelMatchesBlockPatterns(model, patterns) {
@@ -82,6 +84,7 @@ func TestModelMatchesBlockPatternsSupportsCaseInsensitiveStarAndQuestionWildcard
 }
 
 func TestAccountModelSyncPreviewFingerprintChangesWithCatalog(t *testing.T) {
+	t.Parallel()
 	store := openPolicyStore(t)
 	ctx := context.Background()
 	if _, err := store.db.ExecContext(ctx, `INSERT INTO accounts(id,name,metadata_json,updated_at)
@@ -105,6 +108,7 @@ func TestAccountModelSyncPreviewFingerprintChangesWithCatalog(t *testing.T) {
 }
 
 func TestAccountModelSyncPreviewFingerprintIgnoresDisplayMetadata(t *testing.T) {
+	t.Parallel()
 	store := openPolicyStore(t)
 	ctx := context.Background()
 	if _, err := store.db.ExecContext(ctx, `INSERT INTO accounts(id,name,metadata_json,updated_at)
@@ -129,6 +133,7 @@ func TestAccountModelSyncPreviewFingerprintIgnoresDisplayMetadata(t *testing.T) 
 }
 
 func TestAccountModelSyncPreviewRejectsUnknownAndDuplicateAccounts(t *testing.T) {
+	t.Parallel()
 	store := openPolicyStore(t)
 	ctx := context.Background()
 	if _, err := store.db.ExecContext(ctx, `INSERT INTO accounts(id,name,metadata_json,updated_at)
@@ -143,6 +148,7 @@ func TestAccountModelSyncPreviewRejectsUnknownAndDuplicateAccounts(t *testing.T)
 }
 
 func TestSaveAccountEnabledModelsPersistsOnlyAppliedModels(t *testing.T) {
+	t.Parallel()
 	store := openPolicyStore(t)
 	ctx := context.Background()
 	if _, err := store.db.ExecContext(ctx, `INSERT INTO accounts(id,name,metadata_json,updated_at)

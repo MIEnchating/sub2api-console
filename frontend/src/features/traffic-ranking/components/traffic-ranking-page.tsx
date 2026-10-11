@@ -15,14 +15,16 @@ import { QueryErrorToast } from "@/components/query-error-toast";
 import { SearchField } from "@/components/data-table/search-field";
 import { PageLoadingSkeleton } from "@/components/page-loading-skeleton";
 import { useClientPagination } from "@/hooks/use-client-pagination";
-import { accountPlatformLabel } from "@/features/accounts/lib/account-labels";
 import {
   orderedDictionaryOptions,
   trafficRankingSortOptions,
   trafficTimeRangeOptions,
 } from "@/lib/domain-dictionaries";
 
-import { trafficAccountMatches } from "../lib/traffic-ranking";
+import {
+  normalizeTrafficSearchQuery,
+  trafficAccountMatchesNormalized,
+} from "../lib/traffic-ranking";
 import { TrafficRankingTable } from "./traffic-ranking-table";
 
 type TimeRange = "1h" | "6h" | "24h" | "7d" | "30d";
@@ -35,11 +37,11 @@ const pageSizes = [10, 20, 50, 100];
 
 export function TrafficRankingPage(): ReactElement {
   const [timeRange, setTimeRange] = useState<TimeRange>("24h");
-  const [group, setGroup] = useState("all");
+  const [group, setGroup] = useState<string | null>(null);
   const [platform, setPlatform] = useState("all");
   const [sortBy, setSortBy] = useState<TrafficRankingSort>("traffic");
   const [search, setSearch] = useState("");
-  const groups = useQuery({ queryKey: ["groups"], queryFn: api.groups });
+  const groups = useQuery({ queryKey: ["groups"], queryFn: ({ signal }) => api.groups(signal) });
   const orderedGroups = useDictionaryOrder("group", groups.data ?? [], (group) => group.id ?? "");
   const platformDictionary = useQuery({
     queryKey: ["dictionaries", "platform"],
@@ -47,33 +49,29 @@ export function TrafficRankingPage(): ReactElement {
   });
   const ranking = useQuery({
     queryKey: ["traffic-ranking", timeRange, group, sortBy],
-    queryFn: () =>
-      api.trafficRanking({
-        timeRange,
-        group: group === "all" ? undefined : group,
-        sortBy,
-      }),
+    queryFn: (context) =>
+      api.trafficRanking(
+        {
+          timeRange,
+          group: group ?? undefined,
+          sortBy,
+        },
+        context.signal,
+      ),
+    staleTime: 60_000,
     refetchInterval: 60_000,
   });
-  const visibleAccounts = useMemo(
-    () =>
-      (ranking.data?.accounts ?? []).filter(
-        (row) =>
-          trafficAccountMatches(row, search) &&
-          (platform === "all" || row.platform?.trim().toLocaleLowerCase() === platform),
-      ),
-    [ranking.data?.accounts, platform, search],
-  );
-  const platformOptions = useMemo(() => {
-    const discovered = [
-      ...new Set(
-        (ranking.data?.accounts ?? [])
-          .flatMap((row) => (row.platform ? [row.platform.trim().toLocaleLowerCase()] : []))
-          .filter(Boolean),
-      ),
-    ].map((value) => ({ value, label: accountPlatformLabel(value) ?? value }));
-    return orderedDictionaryOptions(platformDictionary.data?.items, discovered);
-  }, [platformDictionary.data?.items, ranking.data?.accounts]);
+  const visibleAccounts = useMemo(() => {
+    const normalizedSearch = normalizeTrafficSearchQuery(search);
+    const normalizedPlatform = platform === "all" ? null : platform.trim().toLocaleLowerCase();
+    return (ranking.data?.accounts ?? []).filter(
+      (row) =>
+        trafficAccountMatchesNormalized(row, normalizedSearch) &&
+        (normalizedPlatform === null ||
+          row.platform?.trim().toLocaleLowerCase() === normalizedPlatform),
+    );
+  }, [ranking.data?.accounts, platform, search]);
+  const platformOptions = orderedDictionaryOptions(platformDictionary.data?.items);
   const pagination = useClientPagination(visibleAccounts);
   useEffect(
     () => pagination.setCurrentPage(1),
@@ -113,12 +111,14 @@ export function TrafficRankingPage(): ReactElement {
             />
             <FilterMenu
               label="账号分组"
+              dictionaryKind="group"
               options={orderedGroups.map((item) => item.name)}
-              value={group === "all" ? null : group}
-              onValueChange={(value) => setGroup(value ?? "all")}
+              value={group}
+              onValueChange={setGroup}
             />
             <FilterMenu
               label="平台"
+              dictionaryKind="platform"
               options={platformOptions.map((option) => option.value)}
               value={platform === "all" ? null : platform}
               onValueChange={(value) => setPlatform(value ?? "all")}

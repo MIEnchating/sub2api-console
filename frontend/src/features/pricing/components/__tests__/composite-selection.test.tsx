@@ -1,3 +1,4 @@
+import { seedDictionaries } from "@/test/dictionary-fixtures";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -74,6 +75,9 @@ it("展开复合分组计算明细时展示成本计算而非平台不匹配", a
 it("后端返回可用复合分组时允许键盘选入互换组并保存配置", async () => {
   vi.stubGlobal("PointerEvent", MouseEvent);
   const client = new QueryClient({ defaultOptions: { queries: { enabled: false } } });
+  seedDictionaries(client, {
+    group: fixture().groups.map((group) => ({ value: group.id, name: group.name })),
+  });
   client.setQueryData(["pricing"], fixture());
   try {
     render(

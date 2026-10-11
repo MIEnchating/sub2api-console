@@ -400,10 +400,7 @@ func (s *Service) Calculate(ctx context.Context, scope Scope, persistDecisions b
 				continue
 			}
 			prior, _ := previousDecision(previous, account.ID, groupName)
-			evidence, scoreErr := evaluateRoutingHealth(account, sampleMap[account.ID], prior, groupConfig, policy, now)
-			if scoreErr != nil {
-				return Result{}, scoreErr
-			}
+			evidence := evaluateRoutingHealth(account, sampleMap[account.ID], prior, groupConfig, now)
 			health := evidence.health
 			current := &candidate{
 				account: account, health: health, routingHealth: health.HealthScore, rows: evidence.rows,
@@ -2534,18 +2531,18 @@ func withCriticalProbeEvidence(
 	allRows []business.RoutingSample,
 	now time.Time,
 	probeMaxAge time.Duration,
-	policy map[string]any,
+	config scoringConfig,
 ) []business.RoutingSample {
 	probes := freshSourceSamples(allRows, "active-probe", now, probeMaxAge, len(allRows))
 	if len(probes) == 0 {
 		return healthRows
 	}
 	latestProbe := probes[0]
-	classified, err := ClassifySample(Sample{
+	classified := classify(Sample{
 		Result: latestProbe.Result, FailureReason: latestProbe.FailureReason, Source: latestProbe.Source,
 		LatencyP95: latestProbe.LatencyP95, StatusCode: routingSampleStatus(latestProbe), Payload: latestProbe.Payload,
-	}, policy)
-	if err != nil || !classified.Fatal {
+	}, config)
+	if !classified.Fatal {
 		return healthRows
 	}
 	probeObserved, err := time.Parse(time.RFC3339Nano, latestProbe.ObservedAt)

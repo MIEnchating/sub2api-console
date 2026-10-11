@@ -52,7 +52,9 @@ export function NavigationSettingsCard<T extends string>(props: NavigationSettin
         className="grid min-h-0 flex-1 content-start gap-4 overflow-y-auto overscroll-contain"
       >
         {props.loading && <ContentLoading label="正在读取菜单设置" compact />}
-        {props.readFailed && props.onRetry && <ContentRetry onRetry={props.onRetry} />}
+        {props.readFailed && props.onRetry && (
+          <ContentRetry onRetry={props.onRetry} pending={props.loading} />
+        )}
         <div className="text-muted-foreground flex items-center gap-2 text-xs" role="status">
           {props.hiddenItemIDs.size > 0 ? (
             <EyeOff aria-hidden="true" className="size-3.5" />

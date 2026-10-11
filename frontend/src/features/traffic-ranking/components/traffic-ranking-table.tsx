@@ -5,6 +5,7 @@ import type { TrafficRanking, TrafficRankingRow as RankingRow, TrafficRankingSor
 import { ContentRetry } from "@/components/content-retry";
 import { TableEmptyState } from "@/components/data-table/empty-state";
 import { Table, TableBody, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 
 import { TrafficRankingRow } from "./traffic-ranking-row";
@@ -24,14 +25,13 @@ function MetricHeading(props: {
   active?: boolean;
   ascending?: boolean;
   className: string;
-  title?: string;
+  description?: string;
 }): ReactElement {
   const direction = props.ascending ? "ascending" : "descending";
   const Icon = props.ascending ? ArrowUp : ArrowDown;
   return (
     <TableHead
       scope="col"
-      title={props.title}
       aria-sort={props.active ? direction : undefined}
       className={cn("h-14 px-3 text-right", props.className)}
     >
@@ -42,7 +42,24 @@ function MetricHeading(props: {
         )}
       >
         {props.active && <Icon aria-hidden="true" className="size-3.5" />}
-        {props.label}
+        {props.description ? (
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <span
+                  tabIndex={0}
+                  aria-description={props.description}
+                  className="rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                />
+              }
+            >
+              {props.label}
+            </TooltipTrigger>
+            <TooltipContent role="tooltip">{props.description}</TooltipContent>
+          </Tooltip>
+        ) : (
+          props.label
+        )}
       </div>
       <div className="text-muted-foreground mt-0.5 text-xs font-normal">{props.detail}</div>
     </TableHead>
@@ -112,7 +129,7 @@ export function TrafficRankingTable(props: TrafficRankingTableProps): ReactEleme
             <MetricHeading
               label="缓存占比"
               detail="占输入侧用量"
-              title="读取、写入分别占输入侧用量的比例；输入侧用量 = 输入 + 缓存读取 + 缓存写入，不含输出。"
+              description="读取、写入分别占输入侧用量的比例；输入侧用量 = 输入 + 缓存读取 + 缓存写入，不含输出。"
               className="w-40"
             />
           </TableRow>

@@ -17,7 +17,7 @@ afterEach(() => {
 
 function renderNotifications(): void {
   const client = new QueryClient({
-    defaultOptions: { queries: { enabled: false, retry: false } },
+    defaultOptions: { queries: { enabled: false, retry: false, staleTime: Infinity } },
   });
   clients.push(client);
   const config: RuntimeConfig = {

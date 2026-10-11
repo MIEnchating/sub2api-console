@@ -104,7 +104,7 @@ func taskLimitsEnv() (map[string]int, int, error) {
 		"management": 2, "pricing": 2, "probe": 8, "model_check": 4,
 		"model_animation_scheduler": 1, "upstream_sync": 2, "upstream_delete": 2,
 		"account_delete": 2, "onboarding": 4, "auth_recovery": 2, "inspection": 2,
-		"logs": 1, "uptime_kuma": 2, "newapi_channel": 2, "live": 500, "workbench": 4,
+		"logs": 1, "uptime_kuma": 2, "newapi_channel": 2, "account_model_automation_group": 1, "live": 500, "workbench": 4,
 	}
 	result := make(map[string]int, len(defaults))
 	for key, fallback := range defaults {

@@ -1,4 +1,4 @@
-import { useDictionaryOrder } from "@/hooks/use-dictionary-order";
+import { useDictionaryRecordOrder } from "@/hooks/use-dictionary-order";
 import { ContentLoading } from "@/components/content-loading";
 import { ContentRetry } from "@/components/content-retry";
 import { PricingCatalogActions } from "./pricing-catalog-actions";
@@ -250,17 +250,31 @@ export function GroupAccountCostDetails(props: { groupID: string; decisions: Pri
     () =>
       props.decisions
         .filter((decision) => decision.current_group_ids.includes(props.groupID))
+        .map((decision) => {
+          const cost = accountCostValue(decision);
+          return {
+            decision,
+            cost,
+            searchText: [
+              decision.account_name,
+              decision.account_id,
+              decision.platform,
+              cost === null ? "未记录" : decision.cost_multiplier,
+            ]
+              .filter(Boolean)
+              .join(" ")
+              .toLocaleLowerCase(),
+          };
+        })
         .sort((left, right) => {
-          const leftCost = accountCostValue(left);
-          const rightCost = accountCostValue(right);
-          if (leftCost === null && rightCost !== null) return 1;
-          if (leftCost !== null && rightCost === null) return -1;
-          if (leftCost !== null && rightCost !== null) {
-            const order = comparePricingDecimals(leftCost, rightCost);
+          if (left.cost === null && right.cost !== null) return 1;
+          if (left.cost !== null && right.cost === null) return -1;
+          if (left.cost !== null && right.cost !== null) {
+            const order = comparePricingDecimals(left.cost, right.cost);
             if (order !== 0) return order;
           }
-          return (left.account_name || left.account_id).localeCompare(
-            right.account_name || right.account_id,
+          return (left.decision.account_name || left.decision.account_id).localeCompare(
+            right.decision.account_name || right.decision.account_id,
             "zh-CN",
           );
         }),
@@ -269,15 +283,7 @@ export function GroupAccountCostDetails(props: { groupID: string; decisions: Pri
   const filteredAccounts = useMemo(() => {
     const query = search.trim().toLocaleLowerCase();
     if (!query) return accounts;
-    return accounts.filter((decision) => {
-      const cost = accountCostValue(decision);
-      return [
-        decision.account_name,
-        decision.account_id,
-        decision.platform,
-        cost === null ? "未记录" : decision.cost_multiplier,
-      ].some((value) => value?.toLocaleLowerCase().includes(query));
-    });
+    return accounts.filter((account) => account.searchText.includes(query));
   }, [accounts, search]);
   const pagination = useClientPagination(filteredAccounts);
 
@@ -315,8 +321,7 @@ export function GroupAccountCostDetails(props: { groupID: string; decisions: Pri
                 {search ? "没有匹配的账号" : "该分组当前没有账号"}
               </TableEmptyState>
             ) : (
-              pagination.visibleItems.map((decision) => {
-                const cost = accountCostValue(decision);
+              pagination.visibleItems.map(({ decision, cost }) => {
                 return (
                   <TableRow key={decision.account_id}>
                     <TableCell className="font-medium tabular-nums">
@@ -856,7 +861,7 @@ function PricingCatalogTable(props: {
   const tableRef = useRef<HTMLDivElement>(null);
   const costsByGroup = useMemo(() => groupAccountCostsByID(props.decisions), [props.decisions]);
   const [selectedGroup, setSelectedGroup] = useState<PricingGroup | null>(null);
-  const orderedGroups = useDictionaryOrder("group", props.groups, (group) => group.id);
+  const orderedGroups = useDictionaryRecordOrder("group", props.groups, (group) => group.id);
   const filteredGroups = useMemo(() => {
     const query = props.search.trim().toLocaleLowerCase();
     if (!query) return orderedGroups;
@@ -1153,7 +1158,10 @@ export function PricingPreviewTable(props: {
 
 function PricingWorkspace(props: { page: "catalog" | "config" }) {
   const queryClient = useQueryClient();
-  const snapshot = useQuery({ queryKey: ["pricing"], queryFn: api.pricing });
+  const snapshot = useQuery({
+    queryKey: ["pricing"],
+    queryFn: ({ signal }) => api.pricing(signal),
+  });
   const [catalogSearch, setCatalogSearch] = useState("");
   const [draft, setDraft] = useState<PricingConfigDraft | null>(null);
   const [taskID, setTaskID] = useState<string | null>(null);
@@ -1166,17 +1174,17 @@ function PricingWorkspace(props: { page: "catalog" | "config" }) {
   const [deleteBackupTarget, setDeleteBackupTarget] = useState<PricingBackup | null>(null);
   const backups = useQuery({
     queryKey: ["pricing-backups"],
-    queryFn: api.pricingBackups,
+    queryFn: ({ signal }) => api.pricingBackups(signal),
     enabled: props.page === "catalog",
   });
   const changes = useQuery({
     queryKey: ["pricing-changes"],
-    queryFn: api.pricingChanges,
+    queryFn: ({ signal }) => api.pricingChanges(signal),
     enabled: props.page === "catalog" && changesOpen,
   });
   const task = useQuery({
     queryKey: ["task", taskID],
-    queryFn: () => api.task(taskID!),
+    queryFn: ({ signal }) => api.task(taskID!, signal),
     enabled: Boolean(taskID),
     refetchInterval: taskPollInterval,
   });

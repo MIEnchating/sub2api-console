@@ -1,0 +1,1 @@
+backend/internal/taskcontext/context.go	aba835b105aec520ea4817534092ceb331ba8baf174a8e2b0ea5a22d80038e44	reviewed	匹配基线仅新增服务停止 ErrInterrupted 标记，全文核对稳定任务 ID 上下文保持不变；调用方通过取消原因区分人工取消及进程停止。 基线 c57e626bff3546eea8d67ffaf40cc6889d96d389 / f22e944da56d85c622e52fc843d2f3b6f9605051776fc33627c8dc51dd997b3d，原记录 backend-domains.tsv。 本轮未确认新增缺陷，无业务/测试修改，未重复执行检查。

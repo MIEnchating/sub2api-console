@@ -49,7 +49,7 @@ export function useOnboardingModelOptions(host: string, groupId: string): ModelO
   const taskId = current?.taskId;
   const task = useQuery({
     queryKey: ["onboarding-model-options-task", taskId ?? null],
-    queryFn: taskId ? () => api.task(taskId) : skipToken,
+    queryFn: taskId ? ({ signal }) => api.task(taskId, signal) : skipToken,
     enabled: current?.status === "running",
     retry: false,
     refetchInterval: taskPollInterval,

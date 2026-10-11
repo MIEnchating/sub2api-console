@@ -8,6 +8,7 @@ import (
 )
 
 func TestCapacityWaitSkipsRepeatedRecoveryWithoutFailureAlertAndRetriesWhenCapacityReturns(t *testing.T) {
+	t.Parallel()
 	service, fixture := newUpstreamCapacityWriteFixture(t, writeCapacityPointer(10), 4, 10, false)
 	enabled := true
 	targets := map[string]business.AccountRoutingTarget{
@@ -49,6 +50,7 @@ func TestCapacityWaitSkipsRepeatedRecoveryWithoutFailureAlertAndRetriesWhenCapac
 }
 
 func TestCapacityReadFailureStillReportsExecutionFailure(t *testing.T) {
+	t.Parallel()
 	service, fixture := newUpstreamCapacityWriteFixture(t, writeCapacityPointer(10), 4, 6, false)
 	fixture.failSnapshot = true
 	enabled := true

@@ -8,6 +8,10 @@ export const activeTaskStatuses = new Set<TaskSummary["status"]>([
   "waiting_input",
 ]);
 
+export function isTaskStarting(task: Pick<TaskSummary, "status" | "progress">): boolean {
+  return (task.status === "queued" || task.status === "running") && task.progress === 0;
+}
+
 const taskStatusLabels: Record<TaskSummary["status"], string> = {
   queued: taskStatusDictionary.queued ?? "排队中",
   running: taskStatusDictionary.running ?? "进行中",
@@ -41,7 +45,10 @@ export function isModelDetectionTask(operation: string): boolean {
 }
 
 const taskOperationLabels: Record<string, string> = {
+  "uptime-kuma-template-distribute": "Uptime Kuma 模板参数下发",
   ...detectionOperationLabels,
+  "account-model-automation": "账号模型",
+  "account-model-automation-group": "账号模型运营任务组",
   "newapi-channel-models": "渠道模型批量维护",
   "active-probe": "主动探活",
   "automatic-inspection": "自动巡检",

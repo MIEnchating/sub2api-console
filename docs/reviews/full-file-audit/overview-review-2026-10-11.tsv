@@ -1,0 +1,1 @@
+frontend/src/features/overview/lib/overview-health.ts	26d426be94f1d6605f425fde6c3b3783ee77f56c890accc592845f39f9dd70cf	reviewed	差异及聚合调用上下文：一次建立分组成员索引，共用健康行与指标计算；并加入 concurrency_limited 状态与明确提示，保留空值、分组覆盖与倍率统计语义。基线 789aa481ceddc6d9d0a61c6a62df1e7731c0d90c / 587a7f69757ba4fec4f4d74c3b14c517ecec1d0f51d7f6312abfbd0634a95f8b，原记录 frontend-overview-profile.tsv。未确认新增缺陷；本轮无源码/测试修改，未重复执行检查。

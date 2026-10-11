@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test";
 
 import type { TrafficRanking, TrafficRankingRow } from "../../src/api";
+import { dictionaryItems } from "../../src/test/dictionary-fixtures";
 import { pageFixtures } from "./fixtures/page-shell";
 
 const longAccountName =
@@ -58,7 +59,12 @@ test.beforeEach(async ({ page, colorScheme }) => {
       "/api/auth/session": { authenticated: true, username: "流量布局测试" },
       "/api/accounts": [],
       "/api/groups": [{ id: "traffic-group", name: longGroupName }],
-      "/api/dictionaries": { items: [] },
+      "/api/dictionaries": {
+        items:
+          new URL(route.request().url()).searchParams.get("kind") === "group"
+            ? dictionaryItems("group", [{ value: "traffic-group", name: longGroupName }])
+            : [],
+      },
       "/api/tasks": [],
       "/api/traffic/ranking": ranking,
       "/api/inspection/automation": {
@@ -236,4 +242,73 @@ test("刷新请求尚未完成时保留已有排行和分页且不显示首次�
     releaseResponse();
   }
   await expect(refresh).toBeEnabled();
+});
+
+test("键盘聚焦缓存占比时可读取完整口径并用 Escape 关闭", async ({ page }) => {
+  await page.goto("/traffic");
+  const heading = page.getByRole("columnheader", { name: /缓存占比/ });
+  const trigger = heading.getByText("缓存占比", { exact: true });
+  await expect(heading).not.toHaveAttribute("title");
+  await page.keyboard.press("Tab");
+  await trigger.focus();
+  await expect(trigger).toBeInViewport();
+  const tooltip = page.getByRole("tooltip");
+  await expect(tooltip).toBeVisible();
+  await expect(tooltip).toContainText("输入侧用量 = 输入 + 缓存读取 + 缓存写入，不含输出");
+  await expect(trigger).toHaveAccessibleDescription(/输入侧用量/);
+  await page.keyboard.press("Escape");
+  await expect(tooltip).toBeHidden();
+  await expect(trigger).toBeFocused();
+});
+
+test("键盘选择 all 分组查询精确范围，清除后恢复全部账号与分页", async ({ page }) => {
+  await page.route("**/api/groups", (route) =>
+    route.fulfill({ json: [{ id: "all-group", name: "all" }] }),
+  );
+  await page.route("**/api/dictionaries?kind=group", (route) =>
+    route.fulfill({
+      json: { items: dictionaryItems("group", [{ value: "all-group", name: "all" }]) },
+    }),
+  );
+  const scopes: (string | null)[] = [];
+  await page.route("**/api/traffic/ranking?*", async (route) => {
+    const group = new URL(route.request().url()).searchParams.get("group");
+    scopes.push(group);
+    await route.fulfill({
+      json: {
+        ...ranking,
+        group_name: group ?? "",
+        accounts: group === "all" ? [ranking.accounts[0]] : ranking.accounts,
+      },
+    });
+  });
+  await page.goto("/traffic");
+  const table = page.getByRole("table", { name: "账号流量排行" });
+  await expect(table.locator("tbody tr")).toHaveCount(20);
+  const filter = page.getByRole("button", { name: "账号分组筛选", exact: true });
+  await filter.focus();
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("option", { name: "all", exact: true })).toBeVisible();
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("option", { name: "all", exact: true })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  await page.keyboard.press("Escape");
+  await expect(filter).toBeFocused();
+  await expect.poll(() => scopes.includes("all")).toBe(true);
+  await expect(table.locator("tbody tr")).toHaveCount(1);
+  await expect(page.getByRole("button", { name: "转到下一页", exact: true })).toBeDisabled();
+  await page.screenshot({ path: test.info().outputPath("traffic-group-all.png") });
+
+  await filter.focus();
+  await page.keyboard.press("Enter");
+  await page.getByRole("button", { name: "清除筛选", exact: true }).click();
+  await page.keyboard.press("Escape");
+  await expect(table.locator("tbody tr")).toHaveCount(20);
+  const next = page.getByRole("button", { name: "转到下一页", exact: true });
+  await next.scrollIntoViewIfNeeded();
+  await expect(next).toBeEnabled();
+  await next.click();
+  await expect(table.getByText("备用账号 21", { exact: true })).toBeVisible();
 });

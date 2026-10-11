@@ -138,3 +138,54 @@ func TestMaintenanceRestartPausesPreviouslyEnabledScheduleUntilNewConfirmation(t
 		t.Fatal("restart silently resumed delegated maintenance")
 	}
 }
+
+func TestMaintenanceStatusReadsPublicStateWithoutDecodingPrivateAttempts(t *testing.T) {
+	service, store := fixture(t, `{"data":{"items":[],"total":0}}`)
+	owner, _ := previewOwner(t, store)
+	ctx := t.Context()
+	preview, err := service.PreviewMaintenance(ctx, owner, accountworkbench.MaintenanceSettings{Enabled: true, IntervalMinutes: 5, CooldownMinutes: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.ConfigureMaintenance(ctx, owner, accountworkbench.RunConfirmation{ID: preview.ID, Revision: preview.Revision}); err != nil {
+		t.Fatal(err)
+	}
+	documents, err := store.WorkbenchDocuments(ctx, "maintenance:", 1)
+	if err != nil || len(documents) != 1 {
+		t.Fatalf("maintenance document: %v, %d", err, len(documents))
+	}
+	revision, err := store.SaveWorkbenchDocument(ctx, documents[0].ID, documents[0].Revision, json.RawMessage(`{"public":{"enabled":true,"interval_minutes":5,"cooldown_minutes":10,"results":[{"account_id":"41","check":{"tokens":12345678901234567890}}]},"attempts":"private-invalid"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	status, err := service.Maintenance(ctx, owner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !status.Enabled || status.Revision != revision || len(status.Results) != 1 || status.Results[0].Check["tokens"] != json.Number("12345678901234567890") {
+		t.Fatalf("public status lost data: %+v", status)
+	}
+}
+
+func TestMaintenanceStatusRejectsInvalidPublicState(t *testing.T) {
+	service, store := fixture(t, `{"data":{"items":[],"total":0}}`)
+	owner, _ := previewOwner(t, store)
+	ctx := t.Context()
+	preview, err := service.PreviewMaintenance(ctx, owner, accountworkbench.MaintenanceSettings{Enabled: true, IntervalMinutes: 5, CooldownMinutes: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.ConfigureMaintenance(ctx, owner, accountworkbench.RunConfirmation{ID: preview.ID, Revision: preview.Revision}); err != nil {
+		t.Fatal(err)
+	}
+	documents, err := store.WorkbenchDocuments(ctx, "maintenance:", 1)
+	if err != nil || len(documents) != 1 {
+		t.Fatalf("maintenance document: %v, %d", err, len(documents))
+	}
+	if _, err := store.SaveWorkbenchDocument(ctx, documents[0].ID, documents[0].Revision, json.RawMessage(`{"public":{"results":"invalid"}}`)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Maintenance(ctx, owner); err == nil || err.Error() != "自动维护配置无法读取" {
+		t.Fatalf("invalid public status accepted: %v", err)
+	}
+}

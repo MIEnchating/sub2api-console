@@ -1,4 +1,5 @@
 import type { ReactElement } from "react";
+import { Settings2 } from "lucide-react";
 import { Controller, type UseFormReturn } from "react-hook-form";
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -10,12 +11,10 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import type { ImportValues } from "../lib/import-schema";
-import type { TemplateLibrary } from "../types";
+import { ImportTemplateSelector } from "./import-template-selector";
 
 export function ImportSettings(props: {
   form: UseFormReturn<ImportValues>;
-  templates: TemplateLibrary | undefined;
-  loading: boolean;
   busy: boolean;
 }): ReactElement {
   const form = props.form;
@@ -24,21 +23,25 @@ export function ImportSettings(props: {
   return (
     <section
       aria-labelledby="workbench-settings-heading"
-      className="flex min-w-0 flex-col gap-4 rounded-xl border bg-card p-4"
+      className="flex min-w-0 flex-col gap-4 rounded-lg border bg-card p-4 shadow-xs sm:p-5"
     >
-      <div className="flex items-center gap-2.5 border-b pb-3">
+      <div className="flex items-center gap-3 border-b pb-4">
         <span
           aria-hidden="true"
-          className="flex size-6 shrink-0 items-center justify-center rounded-md bg-primary/10 text-xs font-semibold text-primary"
+          className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-sm font-semibold text-primary"
         >
           2
         </span>
-        <h2 id="workbench-settings-heading" className="text-sm font-semibold">
-          处理设置
-        </h2>
+        <div className="min-w-0 space-y-1">
+          <h2 id="workbench-settings-heading" className="text-sm font-semibold">
+            处理设置
+          </h2>
+          <p className="text-xs text-muted-foreground">选择处理方式与账号配置</p>
+        </div>
+        <Settings2 aria-hidden="true" className="ml-auto size-5 shrink-0 text-muted-foreground" />
       </div>
-      <div className="grid gap-3">
-        <div className="grid gap-2">
+      <div className="grid min-w-0 grid-cols-1 gap-4">
+        <div className="grid min-w-0 grid-cols-1 gap-2">
           <label htmlFor="workbench-action" className="text-sm">
             处理方式
           </label>
@@ -60,42 +63,10 @@ export function ImportSettings(props: {
             )}
           />
         </div>
-        {values.action === "import" && (
-          <div className="grid gap-2">
-            <label htmlFor="workbench-template" className="text-sm">
-              配置模板
-            </label>
-            <Controller
-              name="template_id"
-              control={form.control}
-              render={({ field }) => (
-                <Select
-                  value={field.value || "__auto__"}
-                  disabled={busy || props.loading}
-                  onValueChange={(value) => field.onChange(value === "__auto__" ? "" : value)}
-                >
-                  <SelectTrigger id="workbench-template">
-                    <SelectValue>
-                      {props.templates?.items.find((item) => item.id === field.value)?.name ||
-                        "首选模板 / 自动匹配"}
-                    </SelectValue>
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="__auto__">首选模板 / 自动匹配</SelectItem>
-                    {props.templates?.items.map((item) => (
-                      <SelectItem key={item.id} value={item.id}>
-                        {item.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              )}
-            />
-          </div>
-        )}
+        {values.action === "import" && <ImportTemplateSelector form={form} busy={busy} />}
       </div>
       {values.action === "import" && (
-        <div className="grid gap-3 rounded-lg border bg-muted/20 p-3">
+        <div className="grid min-w-0 grid-cols-1 gap-2.5 rounded-lg border bg-muted/20 p-3">
           <label className="flex items-center gap-2 text-sm">
             <Controller
               name="check"
@@ -106,12 +77,12 @@ export function ImportSettings(props: {
             />
             导入后执行智商检测
           </label>
-          <p className="text-xs text-muted-foreground">
+          <p className="text-xs leading-5 text-muted-foreground">
             先套用模板并校验账号，再导入管理平台。检测通过后开启调度；检测未通过时保留账号和分组，不开启调度，可在处理记录中手动启用。关闭检测则导入后直接开启调度。
           </p>
         </div>
       )}
-      <div className="grid gap-3 rounded-lg border bg-muted/20 p-3">
+      <div className="grid min-w-0 grid-cols-1 gap-3 border-t pt-4">
         <label className="flex items-center gap-2 text-sm">
           <Controller
             name="proxy_enabled"
@@ -141,9 +112,11 @@ export function ImportSettings(props: {
         )}
       </div>
       {values.action === "import" && values.check && (
-        <details className="rounded-lg border bg-muted/20 p-3 text-sm">
-          <summary className="cursor-pointer text-muted-foreground">检测设置</summary>
-          <div className="mt-3 grid max-w-sm gap-2">
+        <details className="min-w-0 rounded-lg border bg-muted/20 p-3 text-sm">
+          <summary className="cursor-pointer rounded-sm text-muted-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring">
+            检测设置
+          </summary>
+          <div className="mt-3 grid min-w-0 max-w-sm gap-2">
             <label htmlFor="workbench-model">检测模型</label>
             <Input id="workbench-model" disabled={busy} {...form.register("model")} />
           </div>

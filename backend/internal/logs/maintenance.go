@@ -9,6 +9,8 @@ import (
 
 	"github.com/MIEnchating/sub2api-console/backend/internal/business"
 	"github.com/MIEnchating/sub2api-console/backend/internal/configstore"
+	"github.com/MIEnchating/sub2api-console/backend/internal/taskrunner"
+	"github.com/MIEnchating/sub2api-console/backend/internal/taskstore"
 )
 
 const cleanupCheckInterval = time.Hour
@@ -42,20 +44,28 @@ type CleanupResult struct {
 type CleanupStatus struct {
 	configstore.LogCleanupSettings
 	NextRunAt *string `json:"next_run_at"`
+	TaskID    *string `json:"task_id,omitempty"`
 }
 
 type Maintenance struct {
-	settings CleanupSettingsStore
-	business BusinessCleaner
-	tasks    TaskCleaner
-	now      func() time.Time
+	runner     taskrunner.Runner
+	saver      taskstore.Saver
+	settings   CleanupSettingsStore
+	business   BusinessCleaner
+	tasks      TaskCleaner
+	now        func() time.Time
+	invalidate func()
 
-	runGate chan struct{}
-	mu      sync.Mutex
-	cancel  context.CancelFunc
-	done    chan struct{}
-	wake    chan struct{}
+	runGate       chan struct{}
+	mu            sync.Mutex
+	currentTaskID string
+	cancel        context.CancelFunc
+	done          chan struct{}
+	wake          chan struct{}
 }
+
+// UseCacheInvalidator is configured before maintenance or HTTP tasks start.
+func (m *Maintenance) UseCacheInvalidator(invalidate func()) { m.invalidate = invalidate }
 
 func NewMaintenance(settings CleanupSettingsStore, businessCleaner BusinessCleaner, taskCleaner TaskCleaner) *Maintenance {
 	return &Maintenance{
@@ -69,7 +79,18 @@ func (m *Maintenance) Status(ctx context.Context) (CleanupStatus, error) {
 	if err != nil {
 		return CleanupStatus{}, err
 	}
-	return cleanupStatus(settings, m.now().UTC()), nil
+	return m.statusWithTask(settings), nil
+}
+
+func (m *Maintenance) statusWithTask(settings configstore.LogCleanupSettings) CleanupStatus {
+	status := cleanupStatus(settings, m.now().UTC())
+	m.mu.Lock()
+	if m.currentTaskID != "" {
+		id := m.currentTaskID
+		status.TaskID = &id
+	}
+	m.mu.Unlock()
+	return status
 }
 
 func (m *Maintenance) Update(ctx context.Context, enabled bool, retentionDays int) (CleanupStatus, error) {
@@ -81,7 +102,7 @@ func (m *Maintenance) Update(ctx context.Context, enabled bool, retentionDays in
 	case m.wake <- struct{}{}:
 	default:
 	}
-	return cleanupStatus(settings, m.now().UTC()), nil
+	return m.statusWithTask(settings), nil
 }
 
 func (m *Maintenance) ClearExpired(ctx context.Context, retentionDays int) (CleanupResult, error) {
@@ -187,32 +208,6 @@ func (m *Maintenance) loop(ctx context.Context) {
 	}
 }
 
-func (m *Maintenance) clear(ctx context.Context, cutoff time.Time, retentionDays int) (CleanupResult, error) {
-	if m.business == nil || m.tasks == nil || m.settings == nil {
-		return CleanupResult{}, errors.New("日志清理服务尚未就绪")
-	}
-	tasks, protected, err := m.tasks.ClearLogs(ctx, &cutoff)
-	if err != nil {
-		return CleanupResult{}, err
-	}
-	businessResult, err := m.business.ClearLogRecords(ctx, &cutoff)
-	if err != nil {
-		return CleanupResult{}, err
-	}
-	completed := m.now().UTC()
-	if err := m.settings.MarkLogCleanupRun(ctx, completed); err != nil {
-		return CleanupResult{}, err
-	}
-	result := CleanupResult{
-		Tasks: tasks, Runs: businessResult.Runs, Events: businessResult.Events,
-		Changes: businessResult.Changes, ProtectedTasks: protected,
-		RetentionDays: retentionDays, CutoffAt: cutoff.UTC().Format(time.RFC3339Nano),
-		CompletedAt: completed.Format(time.RFC3339Nano),
-	}
-	result.Total = result.Tasks + result.Runs + result.Events + result.Changes
-	return result, nil
-}
-
 func (m *Maintenance) acquireRun(ctx context.Context) error {
 	select {
 	case m.runGate <- struct{}{}:
@@ -222,7 +217,12 @@ func (m *Maintenance) acquireRun(ctx context.Context) error {
 	}
 }
 
-func (m *Maintenance) releaseRun() { <-m.runGate }
+func (m *Maintenance) releaseRun() {
+	m.mu.Lock()
+	m.currentTaskID = ""
+	m.mu.Unlock()
+	<-m.runGate
+}
 
 func cleanupDue(settings configstore.LogCleanupSettings, now time.Time) bool {
 	if settings.LastRunAt == nil {

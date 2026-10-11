@@ -102,6 +102,44 @@ func TestTrafficRankingFiltersCurrentAccountGroupAndSortsByLatency(t *testing.T)
 	}
 }
 
+func TestTrafficRankingSelectedGroupIgnoresInvalidMetadataOutsideScope(t *testing.T) {
+	store := openPolicyStore(t)
+	ctx := context.Background()
+	end := time.Date(2026, 8, 31, 12, 0, 0, 0, time.UTC)
+	if _, err := store.db.ExecContext(ctx, `INSERT INTO accounts(id,name,metadata_json,updated_at) VALUES
+		('41','selected','{"platform":"openai"}','now'),('42','outside','not-json','now');
+		INSERT INTO account_groups(account_id,group_name) VALUES('41','selected'),('42','other');
+		INSERT INTO usage_records(request_id,account_id,group_name,is_error,observed_at,source,payload_json)
+		VALUES('selected-request','41','selected',0,?,'traffic','{}')`, end.Add(-time.Hour).Format(time.RFC3339Nano)); err != nil {
+		t.Fatal(err)
+	}
+	result, err := store.TrafficRanking(ctx, TrafficRankingQuery{
+		StartAt: end.Add(-6 * time.Hour), EndAt: end, GroupName: "selected",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.TotalRequests != 1 || len(result.Accounts) != 1 || result.Accounts[0].AccountID != "41" {
+		t.Fatalf("selected group ranking = %#v", result)
+	}
+}
+
+func TestTrafficRankingRejectsInvalidMetadataInSelectedScope(t *testing.T) {
+	store := openPolicyStore(t)
+	ctx := context.Background()
+	end := time.Date(2026, 8, 31, 12, 0, 0, 0, time.UTC)
+	if _, err := store.db.ExecContext(ctx, `INSERT INTO accounts(id,name,metadata_json,updated_at)
+		VALUES('41','selected','not-json','now');
+		INSERT INTO account_groups(account_id,group_name) VALUES('41','selected')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.TrafficRanking(ctx, TrafficRankingQuery{
+		StartAt: end.Add(-6 * time.Hour), EndAt: end, GroupName: "selected",
+	}); err == nil || !strings.Contains(err.Error(), "元数据记录损坏") {
+		t.Fatalf("invalid selected metadata was accepted: %v", err)
+	}
+}
+
 func TestTrafficRankingPrefersRequestDurationOverFirstToken(t *testing.T) {
 	store := openPolicyStore(t)
 	ctx := context.Background()
@@ -180,6 +218,7 @@ func TestTrafficRankingAggregatesTokenUsageAndDistinguishesMissingFromZero(t *te
 }
 
 func TestTrafficRankingAverageIncludesRecordsBeyondLatencySampleLimit(t *testing.T) {
+	t.Parallel()
 	store := openPolicyStore(t)
 	ctx := context.Background()
 	end := time.Date(2026, 8, 31, 12, 0, 0, 0, time.UTC)
@@ -190,23 +229,15 @@ func TestTrafficRankingAverageIncludesRecordsBeyondLatencySampleLimit(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	statement, err := tx.PrepareContext(ctx, `INSERT INTO usage_records(
+	_, err = tx.ExecContext(ctx, `WITH RECURSIVE requests(index_number) AS (
+		SELECT 0 UNION ALL SELECT index_number + 1 FROM requests WHERE index_number < ?
+	) INSERT INTO usage_records(
 		request_id,account_id,account_name,is_error,first_token_ms,observed_at,source,payload_json
-	) VALUES(?,?,?,?,?,?,?,?)`)
+	) SELECT printf('request-%05d', index_number), '41', 'sampled', 0,
+		CASE WHEN index_number = ? THEN '10001' ELSE '1' END, ?, 'traffic', '{}'
+	FROM requests`, trafficRankingLatencySampleLimit, trafficRankingLatencySampleLimit,
+		end.Add(-time.Hour).Format(time.RFC3339Nano))
 	if err != nil {
-		t.Fatal(err)
-	}
-	for index := 0; index <= trafficRankingLatencySampleLimit; index++ {
-		latency := "1"
-		if index == trafficRankingLatencySampleLimit {
-			latency = "10001"
-		}
-		if _, err := statement.ExecContext(ctx, fmt.Sprintf("request-%05d", index), "41", "sampled", false, latency,
-			end.Add(-time.Hour).Format(time.RFC3339Nano), "traffic", "{}"); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := statement.Close(); err != nil {
 		t.Fatal(err)
 	}
 	if err := tx.Commit(); err != nil {
@@ -246,6 +277,34 @@ func TestTrafficRankingWindowQueryUsesBoundedWindowIndex(t *testing.T) {
 	}
 	if !strings.Contains(plan, "ix_usage_records_traffic_window") || !strings.Contains(plan, "observed_at>?") || !strings.Contains(plan, "observed_at<?") {
 		t.Fatalf("traffic window index was not used:\n%s", plan)
+	}
+	if strings.Contains(plan, "USE TEMP B-TREE") {
+		t.Fatalf("traffic window scan sorted records outside the index:\n%s", plan)
+	}
+}
+
+func TestTrafficRankingLargeWindowDedupUsesBoundedWindowIndex(t *testing.T) {
+	store := openPolicyStore(t)
+	rows, err := store.db.Query("EXPLAIN QUERY PLAN "+trafficRankingLargeWindowCandidates+trafficRankingLargeWindowResults,
+		"2026-08-01T00:00:00.000000000Z", "2026-09-01T00:00:00.000000000Z")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	plan := ""
+	for rows.Next() {
+		var id, parent, unused int
+		var detail string
+		if err := rows.Scan(&id, &parent, &unused, &detail); err != nil {
+			t.Fatal(err)
+		}
+		plan += detail + "\n"
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(plan, "ix_usage_records_traffic_window") {
+		t.Fatalf("large traffic window scan did not use bounded index:\n%s", plan)
 	}
 }
 

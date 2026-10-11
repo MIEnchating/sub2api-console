@@ -11,6 +11,7 @@ import (
 )
 
 func TestUpdatePolicyPreservesRoutingDecisionEpochAndRuntimeHistory(t *testing.T) {
+	t.Parallel()
 	store := openPolicyStore(t)
 	ctx := context.Background()
 	decisionAt := "2026-08-28T01:00:00Z"
@@ -58,6 +59,7 @@ func TestUpdatePolicyPreservesRoutingDecisionEpochAndRuntimeHistory(t *testing.T
 }
 
 func TestUpdatePolicySavesRuntimeModeAndPolicyAtomically(t *testing.T) {
+	t.Parallel()
 	store := openPolicyStore(t)
 	ctx := context.Background()
 	if _, err := store.SetMode(ctx, "监控模式"); err != nil {
@@ -98,6 +100,7 @@ func TestUpdatePolicySavesRuntimeModeAndPolicyAtomically(t *testing.T) {
 }
 
 func TestPolicySnapshotUsesLightweightGroupSummary(t *testing.T) {
+	t.Parallel()
 	store := openPolicyStore(t)
 	ctx := context.Background()
 	if _, err := store.db.ExecContext(ctx, `INSERT INTO local_groups(
@@ -119,6 +122,7 @@ func TestPolicySnapshotUsesLightweightGroupSummary(t *testing.T) {
 }
 
 func TestUpdatePolicyPreservesOmittedFieldsAndClearsExplicitLists(t *testing.T) {
+	t.Parallel()
 	store := openPolicyStore(t)
 	ctx := context.Background()
 	if _, err := store.db.ExecContext(ctx, `INSERT INTO local_groups(name,remote_id,strategy,strategy_source,updated_at)
@@ -170,6 +174,7 @@ func TestUpdatePolicyPreservesOmittedFieldsAndClearsExplicitLists(t *testing.T) 
 }
 
 func TestUpdatePolicyKeepsExplicitManagedGroupSelection(t *testing.T) {
+	t.Parallel()
 	store := openPolicyStore(t)
 	ctx := context.Background()
 	if _, err := store.UpdatePolicy(ctx, map[string]any{
@@ -193,6 +198,7 @@ func TestUpdatePolicyKeepsExplicitManagedGroupSelection(t *testing.T) {
 }
 
 func TestPolicyDefaultsToManagingAllAccountsAndPersistsOptOut(t *testing.T) {
+	t.Parallel()
 	store := openPolicyStore(t)
 	ctx := context.Background()
 	snapshot, err := store.PolicySnapshot(ctx)
@@ -220,6 +226,7 @@ func TestPolicyDefaultsToManagingAllAccountsAndPersistsOptOut(t *testing.T) {
 }
 
 func TestLegacyPolicySnapshotExposesAndPersistsScalingDefaults(t *testing.T) {
+	t.Parallel()
 	store := openPolicyStore(t)
 	ctx := context.Background()
 	document, err := store.readPolicyDocument(ctx, store.db, "control-plane")
@@ -268,6 +275,7 @@ func TestLegacyPolicySnapshotExposesAndPersistsScalingDefaults(t *testing.T) {
 }
 
 func TestLegacyPolicySnapshotDefaultsWritebackVerificationToOff(t *testing.T) {
+	t.Parallel()
 	store := openPolicyStore(t)
 	ctx := context.Background()
 	document, err := store.readPolicyDocument(ctx, store.db, "control-plane")
@@ -298,6 +306,7 @@ func TestLegacyPolicySnapshotDefaultsWritebackVerificationToOff(t *testing.T) {
 }
 
 func TestUpdatePolicyRejectsInvalidValuesWithoutPartialWrite(t *testing.T) {
+	t.Parallel()
 	store := openPolicyStore(t)
 	ctx := context.Background()
 	if _, err := store.db.ExecContext(ctx, `INSERT INTO local_groups(name,remote_id,strategy,strategy_source,updated_at)
@@ -380,6 +389,7 @@ func TestUpdatePolicyRejectsInvalidValuesWithoutPartialWrite(t *testing.T) {
 }
 
 func TestUpdatePolicyAdvancedProjectionPreservesOmittedSectionsAndClearsExplicitSection(t *testing.T) {
+	t.Parallel()
 	store := openPolicyStore(t)
 	ctx := context.Background()
 	before, err := store.readPolicyDocument(ctx, store.db, "control-plane")
@@ -421,6 +431,7 @@ func TestUpdatePolicyAdvancedProjectionPreservesOmittedSectionsAndClearsExplicit
 }
 
 func TestUpdatePolicyAcceptsGuardianDecimalScores(t *testing.T) {
+	t.Parallel()
 	store := openPolicyStore(t)
 	ctx := context.Background()
 	if _, err := store.UpdatePolicy(ctx, map[string]any{
@@ -448,6 +459,7 @@ func TestUpdatePolicyAcceptsGuardianDecimalScores(t *testing.T) {
 }
 
 func TestUpdatePolicyRestoresGuardianGatewayCodesWhenExplicitlyEmpty(t *testing.T) {
+	t.Parallel()
 	store := openPolicyStore(t)
 	ctx := context.Background()
 	if _, err := store.UpdatePolicy(ctx, map[string]any{
@@ -467,6 +479,7 @@ func TestUpdatePolicyRestoresGuardianGatewayCodesWhenExplicitlyEmpty(t *testing.
 }
 
 func TestUpdatePolicyDeduplicatesStatusCodesWithoutDuplicatingUniqueValues(t *testing.T) {
+	t.Parallel()
 	store := openPolicyStore(t)
 	ctx := context.Background()
 	if _, err := store.UpdatePolicy(ctx, map[string]any{
@@ -495,6 +508,7 @@ func TestUpdatePolicyDeduplicatesStatusCodesWithoutDuplicatingUniqueValues(t *te
 }
 
 func TestUpdatePolicyAutoApplyMergesPartialPatchAndRejectsUnknownField(t *testing.T) {
+	t.Parallel()
 	store := openPolicyStore(t)
 	ctx := context.Background()
 	if _, err := store.UpdatePolicy(ctx, map[string]any{
@@ -518,6 +532,7 @@ func TestUpdatePolicyAutoApplyMergesPartialPatchAndRejectsUnknownField(t *testin
 }
 
 func TestGroupPolicyAndExclusionMutationsUseStableGroupID(t *testing.T) {
+	t.Parallel()
 	store := openPolicyStore(t)
 	ctx := context.Background()
 	if _, err := store.db.ExecContext(ctx, `INSERT INTO local_groups(name,remote_id,strategy,strategy_source,updated_at)
@@ -581,6 +596,7 @@ func TestGroupPolicyAndExclusionMutationsUseStableGroupID(t *testing.T) {
 }
 
 func TestGroupPolicyAndExclusionPreserveFuseAndCooldownHistoryUntilNextRound(t *testing.T) {
+	t.Parallel()
 	store := openPolicyStore(t)
 	ctx := context.Background()
 	epochAt := "2026-08-28T00:00:00Z"

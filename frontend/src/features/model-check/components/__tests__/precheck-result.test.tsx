@@ -30,6 +30,33 @@ function result(): AnimationResult {
   };
 }
 
+it("前置检测通过时账号卡片使用绿色结论标记", () => {
+  render(<PrecheckAccountResult result={result()} />);
+  const summary = within(screen.getByRole("region", { name: "前置检测结果" }));
+  expect(summary.getByTitle("通过")).toHaveClass("text-success", "bg-success/10");
+  expect(summary.getByTitle("通过")).not.toHaveClass("bg-secondary", "text-secondary-foreground");
+});
+
+it("查看通过的前置检测详情时逐题结论也使用绿色", async () => {
+  const user = userEvent.setup();
+  render(<PrecheckAccountResult result={result()} />);
+  await user.click(screen.getByRole("button", { name: "查看前置检测详情" }));
+  const answers = within(await screen.findByRole("region", { name: "模型回答" }));
+  for (const verdict of answers.getAllByText("通过")) {
+    expect(verdict).toHaveClass("text-success");
+    expect(verdict).not.toHaveClass("text-muted-foreground");
+  }
+});
+
+it("通过后重新检测时展示检测中且不沿用旧结果的绿色", () => {
+  render(
+    <PrecheckAccountResult result={result()} activity={{ mode: "precheck", status: "running" }} />,
+  );
+  const summary = within(screen.getByRole("region", { name: "前置检测结果" }));
+  expect(summary.getByTitle("检测中")).not.toHaveClass("text-success", "bg-success/10");
+  expect(summary.queryByText("通过")).not.toBeInTheDocument();
+});
+
 it("前置检测等待结果时提供可访问忙碌状态，不伪造确定进度", () => {
   render(<PrecheckAccountResult activity={{ mode: "precheck", status: "running" }} />);
   expect(screen.getByRole("status", { name: "正在执行前置检测" })).toBeVisible();
@@ -87,8 +114,10 @@ it("两题返回超长回答时卡片仅展示汇总结论，逐题结果和原�
   expect(trigger).toHaveAttribute("aria-expanded", "true");
   expect(dialog).toHaveTextContent("糖果题");
   expect(dialog).toHaveTextContent(fixture.model);
-  expect(dialog).toHaveTextContent("candy-41");
-  expect(dialog).toHaveTextContent("cutoff-41");
+  expect(within(dialog).getAllByText(/^请求 ID[：:]?$/)).toHaveLength(1);
+  expect(dialog).toHaveTextContent(fixture.request_id);
+  expect(dialog).not.toHaveTextContent("candy-41");
+  expect(dialog).not.toHaveTextContent("cutoff-41");
   expect(within(dialog).getByText(fixture.precheck!.questions[1].answer!)).toHaveClass(
     "wrap-anywhere",
   );
@@ -165,7 +194,7 @@ it("前置卡片保留思考等级，用量及 TPS 仅在详情展示", async ()
   expect(detail.getByText("20.0 TPS")).toBeVisible();
 });
 
-it("前置卡片显示完成时间及费用缺失说明，详情保留推理 Token 与完整回答", async () => {
+it("前置卡片显示完成时间，详情保留推理 Token 与完整回答且不显示费用", async () => {
   const user = userEvent.setup();
   const fixture = {
     ...result(),
@@ -204,7 +233,7 @@ it("前置卡片显示本次检测耗时，缺少有效耗时时明确标记未�
   expect(screen.getByText("耗时 未记录")).toBeVisible();
 });
 
-it("旧前置结果没有推理强度、用量或费用时明确展示缺失而不补零", async () => {
+it("旧前置结果没有推理强度或用量时明确展示缺失而不补零", async () => {
   const user = userEvent.setup();
   render(<PrecheckAccountResult result={result()} />);
   await user.click(screen.getByRole("button", { name: "查看前置检测详情" }));
@@ -214,7 +243,7 @@ it("旧前置结果没有推理强度、用量或费用时明确展示缺失而�
   expect(within(stats).getByText("未记录")).toBeVisible();
   expect(within(stats).getAllByText("未返回")).toHaveLength(4);
   expect(within(stats).getByText("无法计算")).toBeVisible();
-  expect(within(stats).getByText("无法估算")).toBeVisible();
+  expect(within(stats).queryByText(/预估费用|无法估算/)).not.toBeInTheDocument();
 });
 
 it("回答达到保存上限时详情明确标注截断且按文本展示 HTML", async () => {

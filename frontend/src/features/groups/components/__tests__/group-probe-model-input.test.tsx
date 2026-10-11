@@ -1,4 +1,5 @@
-import { fireEvent, screen } from "@testing-library/react";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { render } from "./dictionary-render";
 import { describe, expect, it, vi } from "vitest";
 
@@ -158,21 +159,52 @@ it("组内模型为空时仍可切换选择方式并看到手动输入提示", (
   expect(screen.getByRole("status")).toHaveTextContent("暂无组内共同模型，可手动输入探活模型");
 });
 
-it("模型加载失败时保留已保存模型并允许手动修改", () => {
+it("模型加载失败时保留已保存模型、允许重试且不重复显示内联错误", () => {
   const onChange = vi.fn();
+  const reload = vi.fn();
   render(
     <GroupPolicyEditorFields
       value={{ ...value, probe_model: "saved-model" }}
       onChange={onChange}
       probeModelsError
+      onReloadProbeModels={reload}
     />,
   );
   expect(screen.getByRole("textbox", { name: "手动输入探活模型" })).toHaveValue("saved-model");
-  expect(screen.getByRole("status")).toHaveTextContent("获取组内模型失败");
+  expect(screen.queryByRole("status")).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "重新获取组内模型" }));
+  expect(reload).toHaveBeenCalledOnce();
   fireEvent.change(screen.getByRole("textbox", { name: "手动输入探活模型" }), {
     target: { value: "replacement-model" },
   });
   expect(onChange).toHaveBeenCalledWith({ ...value, probe_model: "replacement-model" });
+});
+
+it("模型后台刷新失败时保留可选的缓存模型且不重复显示内联错误", async () => {
+  vi.stubGlobal("PointerEvent", MouseEvent);
+  const user = userEvent.setup();
+  const props = {
+    value,
+    onChange: vi.fn(),
+    onReloadProbeModels: vi.fn(),
+    probeModelsError: true,
+    probeModels: {
+      group_id: "6",
+      group_name: "codex",
+      models: ["cached-model"],
+      account_count: 1,
+      accounts_with_models: 1,
+      complete: true,
+    },
+  };
+  render(<GroupPolicyEditorFields {...props} />);
+  expect(screen.queryByRole("status")).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "选择模型" }));
+  fireEvent.click(screen.getByRole("combobox", { name: "选择探活模型" }));
+  await waitFor(() => expect(screen.getByRole("option", { name: "cached-model" })).toBeVisible());
+  screen.getByRole("option", { name: "cached-model" }).focus();
+  await user.keyboard("{Enter}");
+  expect(props.onChange).toHaveBeenCalledWith({ ...value, probe_model: "cached-model" });
 });
 
 it("继承全局模型时显示实际模型且不写入分组覆盖", () => {

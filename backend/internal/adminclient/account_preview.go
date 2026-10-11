@@ -76,7 +76,7 @@ func (c *Client) GenerateAccountPreview(ctx context.Context, accountID string, i
 		_ = response.Body.Close()
 		return nil, errors.New("管理端未提供账号生成预览接口或账号已不存在，请升级 Sub2API 并刷新账号后重试")
 	}
-	payload, err, _ := decodeResponse(response)
+	payload, err, _ := decodeResponse(response, c.adminKey)
 	if err != nil {
 		return nil, errors.New(redact.Secrets(strings.ReplaceAll(err.Error(), c.adminKey, "[已隐藏]")))
 	}

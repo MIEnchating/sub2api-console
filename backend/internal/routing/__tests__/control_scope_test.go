@@ -30,6 +30,7 @@ func controlScopeStore(t *testing.T) (*business.Store, *sql.DB) {
 }
 
 func TestRoutingGroupScopeUsesStableIDDespiteNumericGroupName(t *testing.T) {
+	t.Parallel()
 	for _, excluded := range []bool{true, false} {
 		name := "selected group"
 		if excluded {
@@ -71,6 +72,7 @@ func TestRoutingGroupScopeUsesStableIDDespiteNumericGroupName(t *testing.T) {
 }
 
 func TestRoutingControlComparesLoadFactorByDecimalValue(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		name    string
 		current any

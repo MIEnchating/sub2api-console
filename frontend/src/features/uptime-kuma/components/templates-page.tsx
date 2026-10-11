@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CirclePlus, Pencil, Trash2 } from "lucide-react";
+import { CirclePlus, Pencil, Send, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { api, type KumaTemplate } from "@/api";
 import { PageLayout } from "@/components/page-layout";
@@ -30,13 +30,19 @@ import { useClientPagination } from "@/hooks/use-client-pagination";
 import { notifyOperationError } from "@/lib/operation-feedback";
 import { kumaTemplatesKey, monitorTypeLabels } from "../constants";
 import type { TemplateValues } from "../lib/template-schema";
+import { TemplateDistributionDialog } from "./template-distribution-dialog";
 import { TemplateDialog } from "./template-dialog";
 
 export function KumaTemplatesPage() {
   const client = useQueryClient();
-  const query = useQuery({ queryKey: kumaTemplatesKey, queryFn: api.kumaTemplates, retry: false });
+  const query = useQuery({
+    queryKey: kumaTemplatesKey,
+    queryFn: ({ signal }) => api.kumaTemplates(signal),
+    retry: false,
+  });
   const [search, setSearch] = useState("");
   const [editor, setEditor] = useState<{ item?: KumaTemplate } | null>(null);
+  const [distributing, setDistributing] = useState<KumaTemplate | null>(null);
   const [deleting, setDeleting] = useState<KumaTemplate | null>(null);
   const refresh = (): Promise<void> => client.invalidateQueries({ queryKey: kumaTemplatesKey });
   const save = useMutation({
@@ -122,7 +128,7 @@ export function KumaTemplatesPage() {
                     <TableHead>请求方法</TableHead>
                     <TableHead>请求头</TableHead>
                     <TableHead>请求体</TableHead>
-                    <TableHead className="w-24 text-right">操作</TableHead>
+                    <TableHead className="w-32 text-right">操作</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -157,6 +163,13 @@ export function KumaTemplatesPage() {
                             }}
                           >
                             <Pencil aria-hidden="true" />
+                          </TableActionButton>
+                          <TableActionButton
+                            label="参数下发"
+                            disabled={disabled}
+                            onClick={() => setDistributing(item)}
+                          >
+                            <Send aria-hidden="true" />
                           </TableActionButton>
                           <TableActionButton
                             label="删除"
@@ -197,6 +210,9 @@ export function KumaTemplatesPage() {
           onClose={() => setEditor(null)}
           onSubmit={(value) => save.mutate(value)}
         />
+      )}
+      {distributing && (
+        <TemplateDistributionDialog item={distributing} onClose={() => setDistributing(null)} />
       )}
       <ConfirmActionDialog
         open={!!deleting}

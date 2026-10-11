@@ -1,15 +1,13 @@
 package configstore
 
-import "context"
+import (
+	"context"
+	"database/sql"
+)
 
 // The current workbench uses versioned documents. Only remove known retired
 // tables when empty; populated legacy stores must remain recoverable.
-func (s *Store) removeEmptyRetiredTables(ctx context.Context) error {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
+func removeEmptyRetiredTables(ctx context.Context, tx *sql.Tx) error {
 	for _, table := range []string{
 		"workbench_login_profiles", "workbench_oauth_checkpoints", "workbench_queues",
 		"workbench_sms_receipts", "workbench_source_profiles",
@@ -32,5 +30,5 @@ func (s *Store) removeEmptyRetiredTables(ctx context.Context) error {
 			return err
 		}
 	}
-	return tx.Commit()
+	return nil
 }

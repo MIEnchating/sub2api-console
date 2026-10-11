@@ -81,8 +81,10 @@ export function AccountDeleteDialog(props: {
   const deleting = props.activeAction === accountDeleteActionLabel;
   const preview = useQuery({
     queryKey: ["account-delete-preview", props.accountId],
-    queryFn: () => api.accountDeletePreview(props.accountId),
+    queryFn: ({ signal }) => api.accountDeletePreview(props.accountId, signal),
+    subscribed: props.open && !deleting,
     enabled: props.open && !deleting,
+    staleTime: 0,
     retry: false,
   });
 

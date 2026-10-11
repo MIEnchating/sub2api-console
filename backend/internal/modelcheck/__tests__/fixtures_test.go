@@ -27,6 +27,7 @@ type catalog struct {
 	rows         []business.AccountStatus
 	details      map[string]*business.AccountDetail
 	raw          []byte
+	promptRaw    []byte
 	failSave     bool
 	plans        []byte
 	groupMembers map[string][]string
@@ -121,11 +122,15 @@ func setup(t *testing.T, count int, platform string, handler http.HandlerFunc) *
 	return &fixture{service: service, catalog: c, tasks: tasks, runner: runner}
 }
 func finished(t *testing.T, f *fixture) taskstore.Task {
+	return finishedWithin(t, f, 5*time.Second)
+}
+
+func finishedWithin(t *testing.T, f *fixture, timeout time.Duration) taskstore.Task {
 	t.Helper()
 	select {
 	case task := <-f.tasks.terminal:
 		return task
-	case <-time.After(5 * time.Second):
+	case <-time.After(timeout):
 		t.Fatal("task did not complete")
 		return taskstore.Task{}
 	}

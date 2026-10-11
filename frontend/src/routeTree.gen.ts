@@ -35,6 +35,7 @@ import { Route as UptimeKumaRouteRouteImport } from './app-routes/uptime-kuma/ro
 import { Route as VaultRouteImport } from './app-routes/vault'
 import { Route as AccountWorkbenchIndexRouteImport } from './app-routes/account-workbench.index'
 import { Route as NewapiIndexRouteImport } from './app-routes/newapi/index'
+import { Route as NewapiAccountModelAutomationRouteImport } from './app-routes/newapi/account-model-automation'
 import { Route as NewapiChannelsRouteImport } from './app-routes/newapi/channels'
 import { Route as NewapiDifferencesRouteImport } from './app-routes/newapi/differences'
 import { Route as NewapiGroupsRouteImport } from './app-routes/newapi/groups'
@@ -174,6 +175,12 @@ const NewapiIndexRoute = NewapiIndexRouteImport.update({
   path: '/',
   getParentRoute: () => NewapiRouteRoute,
 } as any)
+const NewapiAccountModelAutomationRoute =
+  NewapiAccountModelAutomationRouteImport.update({
+    id: '/account-model-automation',
+    path: '/account-model-automation',
+    getParentRoute: () => NewapiRouteRoute,
+  } as any)
 const NewapiChannelsRoute = NewapiChannelsRouteImport.update({
   id: '/channels',
   path: '/channels',
@@ -240,6 +247,7 @@ export interface FileRoutesByFullPath {
   '/traffic': typeof TrafficRoute
   '/upstreams': typeof UpstreamsRoute
   '/vault': typeof VaultRoute
+  '/newapi/account-model-automation': typeof NewapiAccountModelAutomationRoute
   '/newapi/channels': typeof NewapiChannelsRoute
   '/newapi/differences': typeof NewapiDifferencesRoute
   '/newapi/groups': typeof NewapiGroupsRoute
@@ -273,6 +281,7 @@ export interface FileRoutesByTo {
   '/traffic': typeof TrafficRoute
   '/upstreams': typeof UpstreamsRoute
   '/vault': typeof VaultRoute
+  '/newapi/account-model-automation': typeof NewapiAccountModelAutomationRoute
   '/newapi/channels': typeof NewapiChannelsRoute
   '/newapi/differences': typeof NewapiDifferencesRoute
   '/newapi/groups': typeof NewapiGroupsRoute
@@ -310,6 +319,7 @@ export interface FileRoutesById {
   '/traffic': typeof TrafficRoute
   '/upstreams': typeof UpstreamsRoute
   '/vault': typeof VaultRoute
+  '/newapi/account-model-automation': typeof NewapiAccountModelAutomationRoute
   '/newapi/channels': typeof NewapiChannelsRoute
   '/newapi/differences': typeof NewapiDifferencesRoute
   '/newapi/groups': typeof NewapiGroupsRoute
@@ -348,6 +358,7 @@ export interface FileRouteTypes {
     | '/traffic'
     | '/upstreams'
     | '/vault'
+    | '/newapi/account-model-automation'
     | '/newapi/channels'
     | '/newapi/differences'
     | '/newapi/groups'
@@ -381,6 +392,7 @@ export interface FileRouteTypes {
     | '/traffic'
     | '/upstreams'
     | '/vault'
+    | '/newapi/account-model-automation'
     | '/newapi/channels'
     | '/newapi/differences'
     | '/newapi/groups'
@@ -417,6 +429,7 @@ export interface FileRouteTypes {
     | '/traffic'
     | '/upstreams'
     | '/vault'
+    | '/newapi/account-model-automation'
     | '/newapi/channels'
     | '/newapi/differences'
     | '/newapi/groups'
@@ -640,6 +653,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof NewapiIndexRouteImport
       parentRoute: typeof NewapiRouteRoute
     }
+    '/newapi/account-model-automation': {
+      id: '/newapi/account-model-automation'
+      path: '/account-model-automation'
+      fullPath: '/newapi/account-model-automation'
+      preLoaderRoute: typeof NewapiAccountModelAutomationRouteImport
+      parentRoute: typeof NewapiRouteRoute
+    }
     '/newapi/channels': {
       id: '/newapi/channels'
       path: '/channels'
@@ -700,6 +720,7 @@ declare module '@tanstack/react-router' {
 }
 
 interface NewapiRouteRouteChildren {
+  NewapiAccountModelAutomationRoute: typeof NewapiAccountModelAutomationRoute
   NewapiChannelsRoute: typeof NewapiChannelsRoute
   NewapiDifferencesRoute: typeof NewapiDifferencesRoute
   NewapiGroupsRoute: typeof NewapiGroupsRoute
@@ -708,6 +729,7 @@ interface NewapiRouteRouteChildren {
 }
 
 const NewapiRouteRouteChildren: NewapiRouteRouteChildren = {
+  NewapiAccountModelAutomationRoute: NewapiAccountModelAutomationRoute,
   NewapiChannelsRoute: NewapiChannelsRoute,
   NewapiDifferencesRoute: NewapiDifferencesRoute,
   NewapiGroupsRoute: NewapiGroupsRoute,

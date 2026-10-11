@@ -9,6 +9,14 @@ import type { DetectionRule, RuleProbe } from "../lib/model-check-rules";
 const pageSizes = [5, 10, 20];
 const probeKindLabels = { choice: "选择题", numeric: "数值题", text: "回答特征" };
 
+function toleranceLabel(tolerance: RuleProbe["tolerance"]): string {
+  if (!tolerance) return "";
+  if (tolerance.mode === "relative") {
+    return `；配置容差：${Number((tolerance.value * 100).toFixed(2))}%（相对）`;
+  }
+  return `；配置容差：${tolerance.value}（绝对）`;
+}
+
 export function ModelCheckRuleDetail(props: { rule: DetectionRule }): ReactElement {
   const [search, setSearch] = useState("");
   const listRef = useRef<HTMLOListElement>(null);
@@ -200,9 +208,7 @@ export function ModelCheckRuleDetail(props: { rule: DetectionRule }): ReactEleme
                       <p className="text-xs text-muted-foreground break-words">
                         答案特征值：
                         {probe.clusters?.map((cluster) => cluster.center).join("、") || "未配置"}
-                        {probe.tolerance
-                          ? `；配置容差：${probe.tolerance.mode === "relative" ? `${Number((probe.tolerance.value * 100).toFixed(2))}%（相对）` : `${probe.tolerance.value}（绝对）`}`
-                          : ""}
+                        {toleranceLabel(probe.tolerance)}
                       </p>
                     ) : null}
                     {!rule.builtinVersion ? (

@@ -10,6 +10,7 @@ import (
 )
 
 func TestSeedQuotaUnitPropagatesQueryFailureBeforeInspectingNullableColumns(t *testing.T) {
+	t.Parallel()
 	store, err := Open(filepath.Join(t.TempDir(), "quota-unit-cancelled.sqlite3"))
 	if err != nil {
 		t.Fatal(err)
@@ -30,6 +31,7 @@ func TestSeedQuotaUnitPropagatesQueryFailureBeforeInspectingNullableColumns(t *t
 }
 
 func TestValidateNewAPIQuotaUnitEstablishesFirstBaselineAndPersistsObservation(t *testing.T) {
+	t.Parallel()
 	store, err := Open(filepath.Join(t.TempDir(), "quota-unit.sqlite3"))
 	if err != nil {
 		t.Fatal(err)
@@ -48,6 +50,7 @@ func TestValidateNewAPIQuotaUnitEstablishesFirstBaselineAndPersistsObservation(t
 }
 
 func TestValidateNewAPIQuotaUnitRejectsKnownConflictingValueWithoutOlderBaseline(t *testing.T) {
+	t.Parallel()
 	store, err := Open(filepath.Join(t.TempDir(), "quota-unit-conflict.sqlite3"))
 	if err != nil {
 		t.Fatal(err)
@@ -66,6 +69,7 @@ func TestValidateNewAPIQuotaUnitRejectsKnownConflictingValueWithoutOlderBaseline
 }
 
 func TestValidateNewAPIQuotaUnitAcceptsStableBaselineAndRejectsWindowChange(t *testing.T) {
+	t.Parallel()
 	store, err := Open(filepath.Join(t.TempDir(), "quota-unit-stable.sqlite3"))
 	if err != nil {
 		t.Fatal(err)

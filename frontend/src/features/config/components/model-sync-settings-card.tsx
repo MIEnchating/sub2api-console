@@ -1,13 +1,13 @@
-import { QueryErrorToast } from "@/components/query-error-toast";
+import { ContentRetry } from "@/components/content-retry";
 import { FieldError } from "@/components/field-error";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Save } from "lucide-react";
-import { useEffect } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useForm } from "react-hook-form";
 import { toast } from "sonner";
 
-import { api } from "@/api";
+import { api, ApiError, type AccountModelSyncSettings } from "@/api";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -22,32 +22,89 @@ import {
 
 export function ModelSyncSettingsCard() {
   const queryClient = useQueryClient();
+  const baseline = useRef<string[] | null>(null);
+  const appliedSettings = useRef<AccountModelSyncSettings | null>(null);
+  const submitting = useRef(false);
+  const mounted = useRef(false);
+  const [conflict, setConflict] = useState(false);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
   const settings = useQuery({
     queryKey: ["account-model-sync-settings"],
-    queryFn: api.accountModelSyncSettings,
+    queryFn: ({ signal }) => api.accountModelSyncSettings(signal),
   });
   const form = useForm<ModelSyncSettingsValues>({
     resolver: zodResolver(modelSyncSettingsSchema),
     defaultValues: { blockedPatterns: "" },
   });
   const save = useMutation({
-    mutationFn: (values: ModelSyncSettingsValues) =>
-      api.updateAccountModelSyncSettings({
-        blocked_patterns: parseModelBlockPatterns(values.blockedPatterns),
-      }),
-    onSuccess: (value) => {
+    retry: false,
+    networkMode: "always",
+    mutationFn: (values: AccountModelSyncSettings & { expected_patterns: string[] }) =>
+      api.updateAccountModelSyncSettings(values),
+    onSuccess: async (value) => {
+      await queryClient.cancelQueries({ queryKey: ["account-model-sync-settings"], exact: true });
       queryClient.setQueryData(["account-model-sync-settings"], value);
+      void queryClient.invalidateQueries({
+        queryKey: ["account-model-sync-settings"],
+        exact: true,
+      });
       void queryClient.invalidateQueries({ queryKey: ["account-model-sync-preview"] });
+      if (!mounted.current) return;
+      appliedSettings.current =
+        queryClient.getQueryData<AccountModelSyncSettings>(["account-model-sync-settings"]) ?? null;
+      baseline.current = [...value.blocked_patterns];
       form.reset({ blockedPatterns: value.blocked_patterns.join("\n") });
       toast.success("全局屏蔽模型已保存");
     },
-    onError: (error) => notifyOperationError(error, "全局屏蔽模型保存失败"),
+    onError: (error) => {
+      if (!mounted.current) return;
+      if (error instanceof ApiError && error.code === "model_sync_settings_changed") {
+        setConflict(true);
+        void queryClient.invalidateQueries({
+          queryKey: ["account-model-sync-settings"],
+          exact: true,
+        });
+      }
+      notifyOperationError(error, "全局屏蔽模型保存失败");
+    },
+    onSettled: () => {
+      submitting.current = false;
+    },
+  });
+  const reload = useMutation({
+    retry: false,
+    networkMode: "always",
+    mutationFn: () => settings.refetch({ throwOnError: true }),
+    onSuccess: (result) => {
+      if (!mounted.current || !result.data) return;
+      baseline.current = [...result.data.blocked_patterns];
+      form.reset({ blockedPatterns: result.data.blocked_patterns.join("\n") });
+      setConflict(false);
+    },
+    onError: (error) => {
+      if (mounted.current) notifyOperationError(error, "屏蔽规则读取失败，请重试");
+    },
   });
 
   useEffect(() => {
-    if (!settings.data || form.formState.isDirty) return;
+    if (
+      !settings.data ||
+      settings.error ||
+      settings.data === appliedSettings.current ||
+      form.formState.isDirty ||
+      save.isPending ||
+      conflict
+    )
+      return;
+    appliedSettings.current = settings.data;
+    baseline.current = [...settings.data.blocked_patterns];
     form.reset({ blockedPatterns: settings.data.blocked_patterns.join("\n") });
-  }, [settings.data, form, form.formState.isDirty]);
+  }, [settings.data, settings.error, form, form.formState.isDirty, save.isPending, conflict]);
 
   if (settings.isLoading && settings.data === undefined) {
     return (
@@ -80,6 +137,10 @@ export function ModelSyncSettingsCard() {
     );
   }
 
+  if (!settings.data) {
+    return <ContentRetry pending={settings.isFetching} onRetry={() => void settings.refetch()} />;
+  }
+
   const field = form.register("blockedPatterns");
   const error = form.formState.errors.blockedPatterns?.message;
   return (
@@ -93,7 +154,15 @@ export function ModelSyncSettingsCard() {
       <CardContent className="flex min-h-0 flex-1 flex-col group-data-[size=sm]/card:p-0">
         <form
           className="flex min-h-0 flex-1 flex-col"
-          onSubmit={form.handleSubmit((values) => save.mutate(values))}
+          onSubmit={form.handleSubmit((values) => {
+            if (submitting.current || reload.isPending || conflict || baseline.current === null)
+              return;
+            submitting.current = true;
+            save.mutate({
+              blocked_patterns: parseModelBlockPatterns(values.blockedPatterns),
+              expected_patterns: [...baseline.current],
+            });
+          })}
         >
           <div
             data-slot="settings-scroll"
@@ -110,7 +179,7 @@ export function ModelSyncSettingsCard() {
                 className="field-sizing-fixed min-h-0 max-h-none flex-1 resize-none font-mono text-xs leading-5"
                 rows={7}
                 spellCheck={false}
-                disabled={save.isPending}
+                disabled={save.isPending || reload.isPending}
                 aria-invalid={error ? "true" : undefined}
                 aria-describedby={error ? "model-sync-blocked-patterns-error" : undefined}
                 placeholder={"例如：\nclaude-*\ngemini-*\n*-image-*"}
@@ -118,16 +187,24 @@ export function ModelSyncSettingsCard() {
             </label>
             <FieldError id="model-sync-blocked-patterns-error" message={error} />
             {settings.error ? (
-              <QueryErrorToast
-                error={settings.error}
-                fallback="全局屏蔽模型设置读取失败，请刷新后重试"
-              />
+              <ContentRetry pending={settings.isFetching} onRetry={() => void settings.refetch()} />
             ) : null}
           </div>
           <SettingsFooter>
+            {conflict ? (
+              <Button type="button" disabled={reload.isPending} onClick={() => reload.mutate()}>
+                {reload.isPending ? "正在加载最新规则…" : "加载最新规则并替换草稿"}
+              </Button>
+            ) : null}
             <Button
               type="submit"
-              disabled={save.isPending || Boolean(settings.error) || !form.formState.isDirty}
+              disabled={
+                save.isPending ||
+                reload.isPending ||
+                conflict ||
+                Boolean(settings.error) ||
+                !form.formState.isDirty
+              }
             >
               <Save aria-hidden="true" />
               {save.isPending ? "保存中…" : "保存屏蔽规则"}

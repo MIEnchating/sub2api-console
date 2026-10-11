@@ -24,7 +24,7 @@ func fetchOpenAI(ctx context.Context, client *http.Client) ([]Price, error) {
 	if err != nil {
 		return nil, err
 	}
-	return enrichModelPrices(ctx, prices, func(p Price) ([]Price, error) {
+	return enrichModelPrices(ctx, prices, func(ctx context.Context, p Price) ([]Price, error) {
 		if len(p.Tiers) == 0 {
 			return []Price{p}, nil
 		}

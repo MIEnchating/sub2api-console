@@ -24,6 +24,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/gin-gonic/gin/binding"
 
+	"github.com/MIEnchating/sub2api-console/backend/internal/accountautomation"
 	"github.com/MIEnchating/sub2api-console/backend/internal/accountdelete"
 	"github.com/MIEnchating/sub2api-console/backend/internal/accountops"
 	"github.com/MIEnchating/sub2api-console/backend/internal/accountworkbench"
@@ -136,6 +137,7 @@ type SystemLogReader interface {
 }
 
 type NewAPIManagementService interface {
+	LookupChannels(context.Context, string, []string) (newapimanagement.ChannelLookupResult, error)
 	Channels(context.Context, string, int, int) (newapimanagement.ChannelPage, error)
 	ChannelsByID(context.Context, string, []string, int, int) (newapimanagement.ChannelPage, error)
 	AvailableChannelModels(context.Context, string, string, string) ([]string, error)
@@ -144,6 +146,7 @@ type NewAPIManagementService interface {
 	SavePlatform(context.Context, newapimanagement.PlatformInput) (configstore.NewAPIPlatformSummary, error)
 	DeletePlatform(context.Context, string) (bool, error)
 	Refresh(context.Context, string) (newapimanagement.RemoteSnapshot, error)
+	Groups(context.Context, string) (newapimanagement.RemoteGroups, error)
 	ManagementModelPrices(context.Context, string) ([]newapimanagement.Sub2APIModelPrice, error)
 	ModelPriceCatalog(context.Context, string, bool) (newapimanagement.ModelPriceCatalog, error)
 	RemoteModelPricingSource(context.Context, string) (newapimanagement.RemotePricingSource, error)
@@ -193,7 +196,7 @@ type LogReader interface {
 type LogMaintenanceController interface {
 	Status(context.Context) (consolelogs.CleanupStatus, error)
 	Update(context.Context, bool, int) (consolelogs.CleanupStatus, error)
-	ClearExpired(context.Context, int) (consolelogs.CleanupResult, error)
+	Enqueue(context.Context, int) (taskstore.Task, error)
 }
 
 type AlertTaskEnqueuer interface {
@@ -229,9 +232,21 @@ type AccountTaskEnqueuer interface {
 type AccountModelSyncService interface {
 	ModelSyncPreview(context.Context, []string) (business.AccountModelSyncPreview, error)
 	ModelSyncSettings(context.Context) (business.AccountModelSyncSettings, error)
-	ConfigureModelSyncSettings(context.Context, []string, string) (business.AccountModelSyncSettings, error)
+	ConfigureModelSyncSettings(context.Context, []string, []string, string) (business.AccountModelSyncSettings, error)
 	EnqueueModelDiscovery(context.Context, []string, string) (taskstore.Task, error)
 	EnqueueModelApply(context.Context, accountops.ModelApplyRequest) (taskstore.Task, error)
+}
+
+type AccountModelAutomationService interface {
+	Enqueue(context.Context, accountautomation.Request) (taskstore.Task, error)
+	Schedules(context.Context) ([]accountautomation.Schedule, error)
+	SaveSchedule(context.Context, accountautomation.Schedule) (accountautomation.Schedule, error)
+	DeleteSchedule(context.Context, string) error
+	RunSchedule(context.Context, string) (taskstore.Task, error)
+	TaskGroups(context.Context) ([]accountautomation.TaskGroup, error)
+	SaveTaskGroup(context.Context, accountautomation.TaskGroup) (accountautomation.TaskGroup, error)
+	DeleteTaskGroup(context.Context, string) error
+	RunTaskGroup(context.Context, string) (taskstore.Task, error)
 }
 
 type AccountDeleteService interface {
@@ -312,83 +327,85 @@ type AuthRecoveryService interface {
 }
 
 type Dependencies struct {
-	TaskSettings       *tasksettings.Service
-	NewAPIChannelTasks *newapimanagement.ChannelTasks
-	UptimeKuma         *uptimekuma.TaskService
-	AccountResultsLive AccountResultsLive
-	Notification       NotificationTester
-	NotificationTarget NotificationTargetDiscovery
-	Inspection         InspectionController
-	InspectionTasks    InspectionTaskEnqueuer
-	RoutingControl     RoutingControlRestorer
-	Tasks              TaskRepository
-	TaskCanceller      TaskCanceller
-	Logs               LogReader
-	LogMaintenance     LogMaintenanceController
-	AlertTasks         AlertTaskEnqueuer
-	ManagementTasks    ManagementTaskEnqueuer
-	AccountMaintenance AccountMaintenanceTaskEnqueuer
-	AccountTasks       AccountTaskEnqueuer
-	AccountModelSync   AccountModelSyncService
-	AccountDelete      AccountDeleteService
-	ProbeTasks         ProbeTaskEnqueuer
-	ModelChecks        ModelCheckService
-	AccountWorkbench   *accountworkbench.Service
-	UpstreamDetect     UpstreamDetector
-	UpstreamConfigs    UpstreamConfigurationService
-	UpstreamSync       UpstreamSyncTaskEnqueuer
-	UpstreamDelete     UpstreamDeleteService
-	AuthRecovery       AuthRecoveryService
-	Onboarding         OnboardingService
-	RequestTrace       RequestTraceReader
-	SystemLogs         SystemLogReader
-	Pricing            PricingService
-	NewAPIManagement   NewAPIManagementService
-	SystemMetrics      SystemMetricsReader
+	TaskSettings           *tasksettings.Service
+	NewAPIChannelTasks     *newapimanagement.ChannelTasks
+	UptimeKuma             *uptimekuma.TaskService
+	AccountResultsLive     AccountResultsLive
+	Notification           NotificationTester
+	NotificationTarget     NotificationTargetDiscovery
+	Inspection             InspectionController
+	InspectionTasks        InspectionTaskEnqueuer
+	RoutingControl         RoutingControlRestorer
+	Tasks                  TaskRepository
+	TaskCanceller          TaskCanceller
+	Logs                   LogReader
+	LogMaintenance         LogMaintenanceController
+	AlertTasks             AlertTaskEnqueuer
+	ManagementTasks        ManagementTaskEnqueuer
+	AccountMaintenance     AccountMaintenanceTaskEnqueuer
+	AccountTasks           AccountTaskEnqueuer
+	AccountModelSync       AccountModelSyncService
+	AccountModelAutomation AccountModelAutomationService
+	AccountDelete          AccountDeleteService
+	ProbeTasks             ProbeTaskEnqueuer
+	ModelChecks            ModelCheckService
+	AccountWorkbench       *accountworkbench.Service
+	UpstreamDetect         UpstreamDetector
+	UpstreamConfigs        UpstreamConfigurationService
+	UpstreamSync           UpstreamSyncTaskEnqueuer
+	UpstreamDelete         UpstreamDeleteService
+	AuthRecovery           AuthRecoveryService
+	Onboarding             OnboardingService
+	RequestTrace           RequestTraceReader
+	SystemLogs             SystemLogReader
+	Pricing                PricingService
+	NewAPIManagement       NewAPIManagementService
+	SystemMetrics          SystemMetricsReader
 }
 
 type Server struct {
-	taskSettings       *tasksettings.Service
-	newAPIChannelTasks *newapimanagement.ChannelTasks
-	kumaTasks          *uptimekuma.TaskService
-	uptimeKuma         *uptimekuma.Service
-	accountResultsLive AccountResultsLive
-	accountHealth      *routing.Service
-	config             config.Config
-	private            *configstore.Store
-	business           Business
-	notifier           NotificationTester
-	notificationTarget NotificationTargetDiscovery
-	inspection         InspectionController
-	inspectionTasks    InspectionTaskEnqueuer
-	routingControl     RoutingControlRestorer
-	tasks              TaskRepository
-	taskCanceller      TaskCanceller
-	logs               LogReader
-	logMaintenance     LogMaintenanceController
-	alertTasks         AlertTaskEnqueuer
-	managementTasks    ManagementTaskEnqueuer
-	accountMaintenance AccountMaintenanceTaskEnqueuer
-	accountTasks       AccountTaskEnqueuer
-	accountModelSync   AccountModelSyncService
-	accountDelete      AccountDeleteService
-	probeTasks         ProbeTaskEnqueuer
-	modelChecks        ModelCheckService
-	accountWorkbench   *accountworkbench.Service
-	upstreamDetect     UpstreamDetector
-	upstreamConfigs    UpstreamConfigurationService
-	upstreamSync       UpstreamSyncTaskEnqueuer
-	upstreamDelete     UpstreamDeleteService
-	authRecovery       AuthRecoveryService
-	onboarding         OnboardingService
-	traceReader        RequestTraceReader
-	systemLogReader    SystemLogReader
-	pricing            PricingService
-	newAPIManagement   NewAPIManagementService
-	systemMetrics      SystemMetricsReader
-	loginThrottle      *loginThrottle
-	sseSlots           chan struct{}
-	now                func() time.Time
+	taskSettings           *tasksettings.Service
+	newAPIChannelTasks     *newapimanagement.ChannelTasks
+	kumaTasks              *uptimekuma.TaskService
+	uptimeKuma             *uptimekuma.Service
+	accountResultsLive     AccountResultsLive
+	accountHealth          *routing.Service
+	config                 config.Config
+	private                *configstore.Store
+	business               Business
+	notifier               NotificationTester
+	notificationTarget     NotificationTargetDiscovery
+	inspection             InspectionController
+	inspectionTasks        InspectionTaskEnqueuer
+	routingControl         RoutingControlRestorer
+	tasks                  TaskRepository
+	taskCanceller          TaskCanceller
+	logs                   LogReader
+	logMaintenance         LogMaintenanceController
+	alertTasks             AlertTaskEnqueuer
+	managementTasks        ManagementTaskEnqueuer
+	accountMaintenance     AccountMaintenanceTaskEnqueuer
+	accountTasks           AccountTaskEnqueuer
+	accountModelSync       AccountModelSyncService
+	accountModelAutomation AccountModelAutomationService
+	accountDelete          AccountDeleteService
+	probeTasks             ProbeTaskEnqueuer
+	modelChecks            ModelCheckService
+	accountWorkbench       *accountworkbench.Service
+	upstreamDetect         UpstreamDetector
+	upstreamConfigs        UpstreamConfigurationService
+	upstreamSync           UpstreamSyncTaskEnqueuer
+	upstreamDelete         UpstreamDeleteService
+	authRecovery           AuthRecoveryService
+	onboarding             OnboardingService
+	traceReader            RequestTraceReader
+	systemLogReader        SystemLogReader
+	pricing                PricingService
+	newAPIManagement       NewAPIManagementService
+	systemMetrics          SystemMetricsReader
+	loginThrottle          *loginThrottle
+	sseSlots               chan struct{}
+	now                    func() time.Time
 }
 
 const (
@@ -594,47 +611,48 @@ func New(cfg config.Config, private *configstore.Store, business Business, depen
 		accountHealth = routing.NewService(repository)
 	}
 	server := &Server{
-		taskSettings:       services.TaskSettings,
-		kumaTasks:          services.UptimeKuma,
-		uptimeKuma:         uptimekuma.New(private, nil),
-		accountResultsLive: services.AccountResultsLive,
-		accountHealth:      accountHealth,
-		config:             cfg,
-		private:            private,
-		business:           business,
-		notifier:           services.Notification,
-		notificationTarget: services.NotificationTarget,
-		inspection:         services.Inspection,
-		inspectionTasks:    services.InspectionTasks,
-		routingControl:     services.RoutingControl,
-		tasks:              services.Tasks,
-		taskCanceller:      services.TaskCanceller,
-		logs:               services.Logs,
-		logMaintenance:     services.LogMaintenance,
-		alertTasks:         services.AlertTasks,
-		managementTasks:    services.ManagementTasks,
-		accountMaintenance: services.AccountMaintenance,
-		accountTasks:       services.AccountTasks,
-		accountModelSync:   services.AccountModelSync,
-		accountDelete:      services.AccountDelete,
-		probeTasks:         services.ProbeTasks,
-		modelChecks:        services.ModelChecks,
-		accountWorkbench:   services.AccountWorkbench,
-		upstreamDetect:     services.UpstreamDetect,
-		upstreamConfigs:    services.UpstreamConfigs,
-		upstreamSync:       services.UpstreamSync,
-		upstreamDelete:     services.UpstreamDelete,
-		authRecovery:       services.AuthRecovery,
-		onboarding:         services.Onboarding,
-		traceReader:        services.RequestTrace,
-		systemLogReader:    services.SystemLogs,
-		pricing:            services.Pricing,
-		newAPIManagement:   services.NewAPIManagement,
-		newAPIChannelTasks: services.NewAPIChannelTasks,
-		systemMetrics:      services.SystemMetrics,
-		loginThrottle:      newLoginThrottle(cfg.TrustedProxyCIDRs),
-		sseSlots:           make(chan struct{}, maximumSSEConnections),
-		now:                time.Now,
+		taskSettings:           services.TaskSettings,
+		kumaTasks:              services.UptimeKuma,
+		uptimeKuma:             uptimekuma.New(private, nil),
+		accountResultsLive:     services.AccountResultsLive,
+		accountHealth:          accountHealth,
+		config:                 cfg,
+		private:                private,
+		business:               business,
+		notifier:               services.Notification,
+		notificationTarget:     services.NotificationTarget,
+		inspection:             services.Inspection,
+		inspectionTasks:        services.InspectionTasks,
+		routingControl:         services.RoutingControl,
+		tasks:                  services.Tasks,
+		taskCanceller:          services.TaskCanceller,
+		logs:                   services.Logs,
+		logMaintenance:         services.LogMaintenance,
+		alertTasks:             services.AlertTasks,
+		managementTasks:        services.ManagementTasks,
+		accountMaintenance:     services.AccountMaintenance,
+		accountTasks:           services.AccountTasks,
+		accountModelSync:       services.AccountModelSync,
+		accountModelAutomation: services.AccountModelAutomation,
+		accountDelete:          services.AccountDelete,
+		probeTasks:             services.ProbeTasks,
+		modelChecks:            services.ModelChecks,
+		accountWorkbench:       services.AccountWorkbench,
+		upstreamDetect:         services.UpstreamDetect,
+		upstreamConfigs:        services.UpstreamConfigs,
+		upstreamSync:           services.UpstreamSync,
+		upstreamDelete:         services.UpstreamDelete,
+		authRecovery:           services.AuthRecovery,
+		onboarding:             services.Onboarding,
+		traceReader:            services.RequestTrace,
+		systemLogReader:        services.SystemLogs,
+		pricing:                services.Pricing,
+		newAPIManagement:       services.NewAPIManagement,
+		newAPIChannelTasks:     services.NewAPIChannelTasks,
+		systemMetrics:          services.SystemMetrics,
+		loginThrottle:          newLoginThrottle(cfg.TrustedProxyCIDRs),
+		sseSlots:               make(chan struct{}, maximumSSEConnections),
+		now:                    time.Now,
 	}
 	if services.UptimeKuma != nil {
 		server.uptimeKuma = services.UptimeKuma.Service
@@ -666,6 +684,7 @@ func New(cfg config.Config, private *configstore.Store, business Business, depen
 	authorized.GET("/dictionaries", server.listDictionaries)
 	authorized.POST("/dictionaries/reorder", server.reorderDictionaries)
 	authorized.PUT("/config/model-sync", server.updateModelSyncSettings)
+	authorized.POST("/config/model-sync/blocked-models", server.addModelSyncBlock)
 	authorized.POST("/config/target", server.updateAdminTarget)
 	authorized.GET("/notifications/status", server.notificationStatus)
 	authorized.GET("/notifications/queue", server.notificationQueue)
@@ -677,6 +696,7 @@ func New(cfg config.Config, private *configstore.Store, business Business, depen
 	authorized.POST("/accounts/delete-preview", server.accountDeleteBatchPreview)
 	authorized.POST("/accounts/delete", server.deleteAccounts)
 	authorized.GET("/accounts/:account_id", server.account)
+	authorized.GET("/accounts/:account_id/control-state", server.accountControlState)
 	authorized.GET("/accounts/:account_id/delete-preview", server.accountDeletePreview)
 	authorized.POST("/accounts/:account_id/delete", server.deleteAccount)
 	authorized.GET("/traffic/ranking", server.trafficRanking)
@@ -705,6 +725,15 @@ func New(cfg config.Config, private *configstore.Store, business Business, depen
 	authorized.POST("/management/accounts/models/discover", server.discoverAccountModels)
 	authorized.POST("/management/accounts/models/preview", server.previewAccountModels)
 	authorized.POST("/management/accounts/models/apply", server.applyAccountModels)
+	authorized.POST("/management/accounts/models/automation", server.enqueueAccountModelAutomation)
+	authorized.GET("/management/accounts/models/automation/schedules", server.accountModelAutomationSchedules)
+	authorized.PUT("/management/accounts/models/automation/schedules", server.saveAccountModelAutomationSchedule)
+	authorized.DELETE("/management/accounts/models/automation/schedules/:schedule_id", server.deleteAccountModelAutomationSchedule)
+	authorized.POST("/management/accounts/models/automation/schedules/:schedule_id/run", server.runAccountModelAutomationSchedule)
+	authorized.GET("/management/accounts/models/automation/groups", server.accountModelAutomationTaskGroups)
+	authorized.PUT("/management/accounts/models/automation/groups", server.saveAccountModelAutomationTaskGroup)
+	authorized.DELETE("/management/accounts/models/automation/groups/:group_id", server.deleteAccountModelAutomationTaskGroup)
+	authorized.POST("/management/accounts/models/automation/groups/:group_id/run", server.runAccountModelAutomationTaskGroup)
 	authorized.POST("/onboarding", server.createOnboarding)
 	authorized.POST("/onboarding/batch", server.createOnboardingBatch)
 	authorized.POST("/onboarding/concurrency-preview", server.previewOnboardingConcurrency)
@@ -721,6 +750,7 @@ func New(cfg config.Config, private *configstore.Store, business Business, depen
 	authorized.PUT("/groups/:group_id/policy", server.updateGroupPolicy)
 	authorized.DELETE("/groups/:group_id/policy", server.clearGroupPolicy)
 	authorized.PUT("/groups/:group_id/excluded", server.setGroupExcluded)
+	authorized.POST("/groups/batch-policy", server.batchGroupPolicy)
 	authorized.GET("/policy", server.policy)
 	authorized.PUT("/policy", server.updatePolicy)
 	authorized.GET("/policy/upstream-concurrency/:kind/:id", server.getUpstreamAllocationSetting)
@@ -739,6 +769,8 @@ func New(cfg config.Config, private *configstore.Store, business Business, depen
 	authorized.GET("/uptime-kuma/config", server.kumaConfig)
 	authorized.GET("/uptime-kuma/templates", server.kumaTemplates)
 	authorized.GET("/uptime-kuma/templates/:template_id", server.kumaTemplate)
+	authorized.GET("/uptime-kuma/templates/:template_id/distribution", server.previewKumaTemplateDistribution)
+	authorized.POST("/uptime-kuma/templates/:template_id/distribution", server.distributeKumaTemplate)
 	authorized.POST("/uptime-kuma/templates", server.saveKumaTemplate)
 	authorized.POST("/uptime-kuma/template-preset", server.kumaTemplatePreset)
 	authorized.PUT("/uptime-kuma/templates/:template_id", server.saveKumaTemplate)
@@ -758,6 +790,7 @@ func New(cfg config.Config, private *configstore.Store, business Business, depen
 	authorized.POST("/newapi/platforms", server.saveNewAPIPlatform)
 	authorized.DELETE("/newapi/platforms/:platform_id", server.deleteNewAPIPlatform)
 	authorized.POST("/newapi/platforms/:platform_id/refresh", server.refreshNewAPIPlatform)
+	authorized.GET("/newapi/platforms/:platform_id/groups", server.newAPIRemoteGroups)
 	authorized.GET("/newapi/platforms/:platform_id/management-model-prices", server.managementModelPrices)
 	authorized.POST("/newapi/platforms/:platform_id/management-model-prices/refresh", server.managementModelPrices)
 	authorized.GET("/newapi/platforms/:platform_id/remote-model-prices/raw", server.remoteModelPricingSource)
@@ -766,6 +799,7 @@ func New(cfg config.Config, private *configstore.Store, business Business, depen
 	authorized.POST("/newapi/platforms/:platform_id/channel-models", server.fetchNewAPIChannelModels)
 	authorized.POST("/newapi/platforms/:platform_id/channels", server.createNewAPIChannel)
 	authorized.GET("/newapi/platforms/:platform_id/channels", server.newAPIChannels)
+	authorized.GET("/newapi/platforms/:platform_id/channels/lookup", server.lookupNewAPIChannels)
 	authorized.GET("/newapi/platforms/:platform_id/channels/:channel_id/models/available", server.availableNewAPIChannelModels)
 	authorized.GET("/newapi/platforms/:platform_id/channel-groups", server.newAPIChannelGroups)
 	authorized.PUT("/newapi/platforms/:platform_id/channel-groups", server.saveNewAPIChannelGroups)
@@ -805,6 +839,9 @@ func New(cfg config.Config, private *configstore.Store, business Business, depen
 	authorized.POST("/inspection/probe", server.runActiveProbe)
 	authorized.GET("/model-checks/capabilities", server.modelCheckCapabilities)
 	authorized.GET("/account-workbench/accounts", server.accountWorkbenchAccounts)
+	authorized.GET("/account-workbench/remembered-accounts", server.accountWorkbenchRememberedAccounts)
+	authorized.DELETE("/account-workbench/remembered-accounts/:id", server.accountWorkbenchDeleteRememberedAccount)
+	authorized.POST("/account-workbench/remembered-accounts/:id/preview", server.accountWorkbenchRememberedLogin)
 	authorized.GET("/account-workbench/maintenance", server.accountWorkbenchMaintenance)
 	authorized.POST("/account-workbench/maintenance/:action", server.accountWorkbenchMaintenance)
 	authorized.POST("/account-workbench/preview", server.accountWorkbenchPreview)
@@ -826,7 +863,10 @@ func New(cfg config.Config, private *configstore.Store, business Business, depen
 	authorized.POST("/model-checks/configuration/restore", server.restoreModelCheckVersion)
 	authorized.POST("/model-checks", server.runModelCheck)
 	authorized.GET("/model-checks/animations", server.animationCheckHistory)
+	authorized.GET("/model-checks/animation-prompt", server.animationPromptSettings)
+	authorized.PUT("/model-checks/animation-prompt", server.saveAnimationPrompt)
 	authorized.POST("/model-checks/animations", server.runAnimationCheck)
+	authorized.PUT("/model-checks/animations/:task_id/manual-verdict", server.setAnimationManualVerdict)
 	authorized.GET("/model-checks/terminal-continuity", server.terminalContinuityHistory)
 	authorized.GET("/model-checks/detection-tasks", server.detectionTaskEndpoint)
 	authorized.PUT("/model-checks/detection-tasks", server.detectionTaskEndpoint)
@@ -945,19 +985,12 @@ func (s *Server) initialize(c *gin.Context) {
 		writeError(c, http.StatusUnprocessableEntity, "独立导出初始化不能同时提交管理目标")
 		return
 	}
-	if payload.LocalExportOnly {
-		err = s.private.InitializeLocalExport(c.Request.Context(), payload.Username, payload.Password)
-	} else {
-		err = s.private.Initialize(c.Request.Context(), payload.Username, payload.Password, payload.AdminBaseURL, payload.AdminKey)
-	}
+	token, err := s.private.InitializeSession(c.Request.Context(), payload.Username, payload.Password, payload.AdminBaseURL, payload.AdminKey, payload.LocalExportOnly, sessionTTL, s.now())
 	if err != nil {
 		writeError(c, http.StatusConflict, err.Error())
 		return
 	}
-	if err := s.setSession(c, strings.TrimSpace(payload.Username), payload.Password); err != nil {
-		writeError(c, http.StatusInternalServerError, "控制台会话创建失败")
-		return
-	}
+	s.setSessionCookie(c, token)
 	status, err = s.private.PublicStatus(c.Request.Context())
 	if err != nil {
 		writeError(c, http.StatusInternalServerError, "控制台配置读取失败")
@@ -1052,23 +1085,23 @@ func (s *Server) updateProfile(c *gin.Context) {
 		writeError(c, http.StatusUnprocessableEntity, "个人资料参数无效")
 		return
 	}
-	username, err := s.private.UpdateCredentials(
+	currentToken, _ := c.Cookie(sessionCookie)
+	currentToken = strings.TrimSpace(currentToken)
+	username, token, err := s.private.UpdateSessionCredentials(
 		c.Request.Context(),
+		currentToken,
 		payload.CurrentPassword,
 		payload.Username,
 		payload.NewPassword,
+		sessionTTL,
+		s.now(),
 	)
 	if err != nil {
 		writeError(c, http.StatusUnprocessableEntity, err.Error())
 		return
 	}
-	password := payload.CurrentPassword
-	if payload.NewPassword != nil {
-		password = *payload.NewPassword
-	}
-	if err := s.setSession(c, username, password); err != nil {
-		writeError(c, http.StatusInternalServerError, "控制台会话创建失败")
-		return
+	if currentToken == "" {
+		s.setSessionCookie(c, token)
 	}
 	c.JSON(http.StatusOK, sessionStatus{Authenticated: true, Username: &username})
 }
@@ -1333,8 +1366,11 @@ func (s *Server) updateModelSyncSettings(c *gin.Context) {
 		writeError(c, http.StatusServiceUnavailable, "账号模型同步服务尚未就绪")
 		return
 	}
-	var payload business.AccountModelSyncSettings
-	if err := bindRequestJSON(c, &payload); err != nil {
+	var payload struct {
+		BlockedPatterns  []string `json:"blocked_patterns"`
+		ExpectedPatterns []string `json:"expected_patterns"`
+	}
+	if err := bindRequestJSON(c, &payload); err != nil || payload.ExpectedPatterns == nil || payload.BlockedPatterns == nil {
 		writeError(c, http.StatusUnprocessableEntity, "全局屏蔽模型设置参数无效")
 		return
 	}
@@ -1343,7 +1379,11 @@ func (s *Server) updateModelSyncSettings(c *gin.Context) {
 		writeError(c, http.StatusInternalServerError, "控制台会话读取失败")
 		return
 	}
-	settings, err := s.accountModelSync.ConfigureModelSyncSettings(c.Request.Context(), payload.BlockedPatterns, actor)
+	settings, err := s.accountModelSync.ConfigureModelSyncSettings(c.Request.Context(), payload.BlockedPatterns, payload.ExpectedPatterns, actor)
+	if errors.Is(err, business.ErrModelSyncSettingsChanged) {
+		c.JSON(http.StatusConflict, gin.H{"code": "model_sync_settings_changed", "detail": err.Error()})
+		return
+	}
 	if err != nil {
 		writeError(c, http.StatusUnprocessableEntity, err.Error())
 		return
@@ -2662,6 +2702,10 @@ func (s *Server) onboardingProbe(c *gin.Context) {
 	if !ok {
 		return
 	}
+	if mode == "animation" {
+		writeError(c, http.StatusUnprocessableEntity, "动画测试请通过探活后台任务启动")
+		return
+	}
 	result, err := s.onboarding.Probe(c.Request.Context(), host, groupID, model, mode)
 	if err != nil {
 		if result.RequestModel != "" {
@@ -2735,8 +2779,8 @@ func onboardingProbePayload(c *gin.Context, requireModel bool) (string, string, 
 		if raw, present := payload["mode"]; present {
 			value, ok := raw.(string)
 			mode = strings.ToLower(strings.TrimSpace(value))
-			if !ok || (mode != "stream" && mode != "default") {
-				writeError(c, http.StatusUnprocessableEntity, "探活模式必须是 stream 或 default")
+			if !ok || (mode != "stream" && mode != "default" && mode != "animation") {
+				writeError(c, http.StatusUnprocessableEntity, "探活模式必须是 stream、default 或 animation")
 				return "", "", "", "", false
 			}
 		}
@@ -2884,7 +2928,7 @@ func parseOnboardingRequest(payload map[string]any) (onboarding.Request, error) 
 	result := onboarding.Request{
 		Host: host, UpstreamType: strings.ToLower(upstreamType),
 		LocalGroupID: localGroupIDs[0], LocalGroupIDs: localGroupIDs, AccountIDs: accountIDs,
-		UpstreamGroupID: upstreamGroupID, Extra: map[string]any{},
+		UpstreamGroupID: upstreamGroupID, Extra: map[string]any{}, Schedulable: len(accountIDs) == 0,
 	}
 	if raw, present := payload["model_mapping"]; present {
 		values, ok := raw.(map[string]any)
@@ -3638,6 +3682,55 @@ func (s *Server) setGroupExcluded(c *gin.Context) {
 	c.JSON(http.StatusOK, row)
 }
 
+func (s *Server) batchGroupPolicy(c *gin.Context) {
+	var payload struct {
+		GroupIDs []string `json:"group_ids"`
+		Action   string   `json:"action"`
+	}
+	if err := bindRequestJSON(c, &payload); err != nil {
+		writeError(c, http.StatusUnprocessableEntity, "批量分组参数无效")
+		return
+	}
+	if len(payload.GroupIDs) == 0 || len(payload.GroupIDs) > 500 {
+		writeError(c, http.StatusUnprocessableEntity, "批量分组数量必须在 1 到 500 个之间")
+		return
+	}
+	var action business.GroupBatchAction
+	switch strings.TrimSpace(payload.Action) {
+	case string(business.GroupBatchReset):
+		action = business.GroupBatchReset
+	case string(business.GroupBatchExclude):
+		action = business.GroupBatchExclude
+	case string(business.GroupBatchInclude):
+		action = business.GroupBatchInclude
+	default:
+		writeError(c, http.StatusUnprocessableEntity, "不支持的批量分组操作")
+		return
+	}
+	actor, err := s.requestActor(c)
+	if err != nil {
+		writeError(c, http.StatusInternalServerError, "控制台会话读取失败")
+		return
+	}
+	batchBusiness, ok := s.business.(interface {
+		BatchGroupPolicy(context.Context, []string, business.GroupBatchAction, string) (int, error)
+	})
+	if !ok {
+		writeError(c, http.StatusServiceUnavailable, "批量分组操作尚未就绪")
+		return
+	}
+	count, err := batchBusiness.BatchGroupPolicy(c.Request.Context(), payload.GroupIDs, action, actor)
+	if errors.Is(err, business.ErrGroupNotFound) {
+		writeError(c, http.StatusNotFound, err.Error())
+		return
+	}
+	if err != nil {
+		writeError(c, http.StatusConflict, err.Error())
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"updated": count})
+}
+
 func bindRequestJSON(c *gin.Context, target any) error {
 	if err := requireJSONContentType(c.Request); err != nil {
 		return err
@@ -3683,6 +3776,12 @@ func requireJSONContentType(request *http.Request) error {
 }
 
 func (s *Server) requestActor(c *gin.Context) (string, error) {
+	// Keep the identity established for this request, including when its
+	// session is revoked while the operation runs. Later requests and streams
+	// still revalidate their sessions independently.
+	if username := strings.TrimSpace(c.GetString("session_user")); username != "" {
+		return username, nil
+	}
 	username, err := s.sessionUser(c)
 	if err != nil {
 		return "", err
@@ -5380,11 +5479,11 @@ func (s *Server) taskDetail(c *gin.Context) {
 		writeError(c, http.StatusInternalServerError, "任务状态读取失败")
 		return
 	}
-	if task.Operation == "managed-model-detection" {
-		c.Header("Cache-Control", "no-store")
-	}
+	c.Header("Cache-Control", "no-store")
 	task = s.detectionTaskDisplayGroups(c.Request.Context(), task)
-	c.JSON(http.StatusOK, task)
+	c.JSON(http.StatusOK, taskDetailResponse{
+		Task: task, DisplayAccountNames: s.taskDisplayAccountNames(c.Request.Context(), task),
+	})
 }
 
 func (s *Server) tasksList(c *gin.Context) {
@@ -5459,23 +5558,19 @@ func (s *Server) cancelTask(c *gin.Context) {
 		writeError(c, http.StatusConflict, "任务已经结束，无法取消")
 		return
 	}
-	if store, ok := s.tasks.(interface {
-		CancelRecovery(context.Context, string) (bool, error)
-	}); ok {
-		cancelled, err := store.CancelRecovery(c.Request.Context(), taskID)
-		if err != nil {
-			writeError(c, http.StatusInternalServerError, "任务取消状态保存失败")
-			return
-		}
-		if cancelled {
-			if !s.taskCanceller.CancelTask(taskID) && task.Operation == "automatic-inspection" {
-				if canceller, ok := s.inspection.(interface{ CancelTask(string) bool }); ok {
-					canceller.CancelTask(taskID)
-				}
+	cancelled, err := cancelStoredTask(c.Request.Context(), s.tasks, taskID)
+	if err != nil {
+		writeError(c, http.StatusInternalServerError, "任务取消状态保存失败")
+		return
+	}
+	if cancelled {
+		if !s.taskCanceller.CancelTask(taskID) && task.Operation == "automatic-inspection" {
+			if canceller, ok := s.inspection.(interface{ CancelTask(string) bool }); ok {
+				canceller.CancelTask(taskID)
 			}
-			c.JSON(http.StatusAccepted, gin.H{"cancelled": true})
-			return
 		}
+		c.JSON(http.StatusAccepted, gin.H{"cancelled": true})
+		return
 	}
 	if s.taskCanceller.CancelTask(taskID) {
 		c.JSON(http.StatusAccepted, gin.H{"cancelled": true})
@@ -5706,12 +5801,12 @@ func (s *Server) clearLogs(c *gin.Context) {
 		writeError(c, http.StatusUnprocessableEntity, "retention_days 必须在 1 到 3650 之间")
 		return
 	}
-	result, err := s.logMaintenance.ClearExpired(c.Request.Context(), retentionDays)
+	result, err := s.logMaintenance.Enqueue(c.Request.Context(), retentionDays)
 	if err != nil {
 		writeError(c, http.StatusConflict, err.Error())
 		return
 	}
-	c.JSON(http.StatusOK, result)
+	c.JSON(http.StatusAccepted, result)
 }
 
 func positiveQueryInteger(c *gin.Context, name string, fallback, minimum, maximum int) (int, error) {
@@ -5920,6 +6015,11 @@ func (s *Server) setSession(c *gin.Context, username, password string) error {
 	if err != nil {
 		return err
 	}
+	s.setSessionCookie(c, token)
+	return nil
+}
+
+func (s *Server) setSessionCookie(c *gin.Context, token string) {
 	http.SetCookie(c.Writer, &http.Cookie{
 		Name:     sessionCookie,
 		Value:    token,
@@ -5929,7 +6029,6 @@ func (s *Server) setSession(c *gin.Context, username, password string) error {
 		Secure:   s.config.CookieSecure,
 		SameSite: http.SameSiteLaxMode,
 	})
-	return nil
 }
 
 func (s *Server) sessionUser(c *gin.Context) (*string, error) {

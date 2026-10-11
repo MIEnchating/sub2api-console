@@ -9,25 +9,17 @@ export type DictionaryEntryLike = Readonly<{
   enabled: boolean;
 }>;
 
-/** Build options from the managed dictionary while retaining unseen runtime values. */
+/** Dictionary values are the sole source of selectable options. */
 export function orderedDictionaryOptions(
   entries: readonly DictionaryEntryLike[] | undefined,
-  discovered: readonly DictionaryOption[],
 ): DictionaryOption[] {
-  if (!entries) return [...discovered];
   const known = new Set<string>();
   const options: DictionaryOption[] = [];
-  for (const entry of entries) {
+  for (const entry of entries ?? []) {
     const value = entry.value.trim().toLocaleLowerCase();
     if (!value || known.has(value)) continue;
     known.add(value);
     if (entry.enabled) options.push({ value, label: entry.name.trim() || value });
-  }
-  for (const option of discovered) {
-    const value = option.value.trim().toLocaleLowerCase();
-    if (!value || known.has(value)) continue;
-    known.add(value);
-    options.push({ value, label: option.label || value });
   }
   return options;
 }

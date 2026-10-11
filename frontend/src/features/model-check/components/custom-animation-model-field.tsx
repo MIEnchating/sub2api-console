@@ -6,6 +6,7 @@ import { Controller, useWatch, type UseFormReturn } from "react-hook-form";
 import { api } from "@/api";
 import { FieldError } from "@/components/field-error";
 import { Button } from "@/components/ui/button";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Input } from "@/components/ui/input";
 import type { CustomAnimationForm } from "../lib/animation-schema";
 
@@ -50,8 +51,8 @@ export function CustomAnimationModelField(props: {
       control={props.form.control}
       name="model"
       render={({ field, fieldState }) => (
-        <div className="col-span-2 min-w-0 space-y-1 sm:col-span-1">
-          <label htmlFor="custom-animation-model" className="text-sm font-medium">
+        <div className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)] items-center gap-x-2 gap-y-1.5">
+          <label htmlFor="custom-animation-model" className="whitespace-nowrap text-xs font-medium">
             检测模型
           </label>
           <Autocomplete.Root
@@ -81,23 +82,30 @@ export function CustomAnimationModelField(props: {
                   render={<Input autoComplete="off" spellCheck={false} />}
                 />
               </div>
-              <Button
-                type="button"
-                variant="outline"
-                disabled={props.disabled || models.isFetching}
-                aria-label="获取模型"
-                aria-busy={models.isFetching}
-                onClick={() => void load()}
-              >
-                {models.isFetching ? (
-                  <span role="status" aria-label="正在读取模型">
-                    <LoaderCircle aria-hidden="true" className="animate-spin" />
-                  </span>
-                ) : (
-                  <RefreshCw aria-hidden="true" />
-                )}
-                获取模型
-              </Button>
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="icon"
+                      disabled={props.disabled || models.isFetching}
+                      aria-label="获取模型"
+                      aria-busy={models.isFetching}
+                      onClick={() => void load()}
+                    />
+                  }
+                >
+                  {models.isFetching ? (
+                    <span role="status" aria-label="正在读取模型">
+                      <LoaderCircle aria-hidden="true" className="animate-spin" />
+                    </span>
+                  ) : (
+                    <RefreshCw aria-hidden="true" />
+                  )}
+                </TooltipTrigger>
+                <TooltipContent>获取模型</TooltipContent>
+              </Tooltip>
             </div>
             <Autocomplete.Portal>
               <Autocomplete.Positioner anchor={anchor} sideOffset={4} className="z-50">
@@ -124,7 +132,11 @@ export function CustomAnimationModelField(props: {
             </Autocomplete.Portal>
           </Autocomplete.Root>
           {fieldState.error ? (
-            <FieldError id="custom-animation-model-error" message={fieldState.error.message} />
+            <FieldError
+              className="col-start-2"
+              id="custom-animation-model-error"
+              message={fieldState.error.message}
+            />
           ) : null}
         </div>
       )}

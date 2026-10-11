@@ -1,7 +1,15 @@
 import type { AnimationResult, Task } from "@/api";
+import { compareTimestamps } from "@/lib/time-order";
 import { z } from "zod";
 
-const animationResultSchema = z.object({
+export const animationResultSchema = z.object({
+  manual_verdict: z
+    .object({
+      verdict: z.enum(["passed", "not_passed", "unmarked"]),
+      updated_at: z.string(),
+      updated_by: z.string(),
+    })
+    .optional(),
   mode: z.enum(["animation", "precheck"]).optional(),
   precheck: z
     .object({
@@ -30,6 +38,7 @@ const animationResultSchema = z.object({
   phase: z.enum(["queued", "running", "generating", "completed"]).optional(),
   html: z.string().optional(),
   source: z.string().optional(),
+  source_truncated: z.boolean().optional(),
   prompt: z.string().optional(),
   reasoning_effort: z.string().optional(),
   usage: z
@@ -55,41 +64,102 @@ const animationTargetSchema = animationResultSchema.pick({
   platform: true,
 });
 
-function animationTaskResults(task: Task, precheck: boolean): Map<string, AnimationResult> {
-  const results = new Map<string, AnimationResult>();
-  if (!Array.isArray(task?.result.animations)) return results;
+const terminalTaskStatuses = new Set<Task["status"]>([
+  "succeeded",
+  "partial",
+  "failed",
+  "cancelled",
+]);
+
+function animationTaskRows(
+  task: Task,
+  accountID?: string,
+): {
+  prechecks: Map<string, AnimationResult>;
+  animations: Map<string, AnimationResult>;
+  phases: Map<string, AnimationResult["phase"]>;
+} {
+  const prechecks = new Map<string, AnimationResult>();
+  const animations = new Map<string, AnimationResult>();
+  const phases = new Map<string, AnimationResult["phase"]>();
+  if (!Array.isArray(task.result.animations)) return { prechecks, animations, phases };
   for (const item of task.result.animations) {
+    // Single-account consumers do not need to validate or copy the other rows.
+    if (
+      accountID !== undefined &&
+      (typeof item !== "object" || item === null || item.account_id !== accountID)
+    )
+      continue;
     const parsed = animationResultSchema.safeParse(item);
     if (!parsed.success) continue;
-    const result: AnimationResult = { ...parsed.data };
-    if (result.phase && result.phase !== "completed") continue;
+    const result: AnimationResult = parsed.data;
+    if (result.phase && result.phase !== "completed") phases.set(result.account_id, result.phase);
+    // Older managed tasks persisted their final rows with the last streaming
+    // phase. A terminal task proves that the row is no longer in flight.
+    if (result.phase && result.phase !== "completed" && !terminalTaskStatuses.has(task.status))
+      continue;
     const isPrecheck =
       result.mode === "precheck" ||
       (!result.mode &&
-        (task.operation === "account-model-precheck" || task.result.mode === "precheck"));
-    if (isPrecheck !== precheck) continue;
-    if (!isPrecheck) result.source_task_id = task.id;
+        (result.precheck !== undefined ||
+          task.operation === "account-model-precheck" ||
+          task.result.mode === "precheck"));
+    const results = isPrecheck ? prechecks : animations;
+    if (!isPrecheck) {
+      result.source_task_id = task.id;
+      result.source_task_status = task.status;
+    }
     const existing = results.get(result.account_id);
-    if (!existing || Date.parse(result.completed_at) >= Date.parse(existing.completed_at))
+    if (!existing || compareTimestamps(result.completed_at, existing.completed_at) >= 0)
       results.set(result.account_id, result);
   }
-  return results;
+  return { prechecks, animations, phases };
 }
 
-function animationTaskPhases(task: Task): Map<string, AnimationResult["phase"]> {
-  const phases = new Map<string, AnimationResult["phase"]>();
-  if (!Array.isArray(task?.result.animations)) return phases;
-  for (const item of task.result.animations) {
-    const parsed = animationResultSchema.safeParse(item);
-    if (parsed.success && parsed.data.phase && parsed.data.phase !== "completed") {
-      phases.set(parsed.data.account_id, parsed.data.phase);
-    }
+function animationTaskModes(task: Task): boolean[] {
+  const configuration = task.result.configuration;
+  if (
+    task.operation === "managed-model-detection" &&
+    configuration &&
+    typeof configuration === "object"
+  ) {
+    const config = configuration as Record<string, unknown>;
+    const modes: boolean[] = [];
+    if (config.precheck === true) modes.push(true);
+    if (config.animation !== false) modes.push(false);
+    return modes;
   }
-  return phases;
+  if (task.operation === "account-model-combined" || task.result.mode === "both")
+    return [true, false];
+  return [task.operation === "account-model-precheck" || task.result.mode === "precheck"];
 }
 
-function animationTaskAccountIDs(task: Task, results: Map<string, AnimationResult>): Set<string> {
-  const ids = new Set(results.keys());
+export type AnimationTaskSelection = {
+  status: Task["status"];
+  result: AnimationResult | undefined;
+};
+
+export function selectAnimationTaskResult(
+  task: Task,
+  accountID: string,
+  requestID: string,
+): AnimationTaskSelection {
+  const result = animationTaskModes(task).includes(false)
+    ? animationTaskRows(task, accountID).animations.get(accountID)
+    : undefined;
+  return {
+    status: task.status,
+    result: result?.request_id === requestID ? result : undefined,
+  };
+}
+
+function animationTaskAccountIDs(
+  task: Task,
+  prechecks: Map<string, AnimationResult>,
+  animations: Map<string, AnimationResult>,
+): Set<string> {
+  const ids = new Set(prechecks.keys());
+  for (const id of animations.keys()) ids.add(id);
   if (Array.isArray(task?.result.account_ids)) {
     for (const id of task.result.account_ids) if (typeof id === "string") ids.add(id);
   }
@@ -150,7 +220,13 @@ export function collectAnimationTasks(
   const activeTaskIDs = new Set<string>();
   const sorted = tasks
     .filter((task): task is Task => task !== undefined)
-    .sort((a, b) => Date.parse(a.created_at) - Date.parse(b.created_at));
+    .sort((a, b) => {
+      const timeOrder = compareTimestamps(a.created_at, b.created_at);
+      if (timeOrder !== 0) return timeOrder;
+      if (a.id < b.id) return -1;
+      if (a.id > b.id) return 1;
+      return 0;
+    });
   for (const task of sorted) {
     if (Array.isArray(task.result.targets)) {
       for (const target of task.result.targets) {
@@ -158,24 +234,11 @@ export function collectAnimationTasks(
         if (parsed.success) targets.set(parsed.data.account_id, parsed.data);
       }
     }
-    const precheck = task.operation === "account-model-precheck" || task.result.mode === "precheck";
-    const combined = task.operation === "account-model-combined" || task.result.mode === "both";
-    const taskPrechecks = animationTaskResults(task, true);
-    const taskAnimations = animationTaskResults(task, false);
-    const taskPhases = animationTaskPhases(task);
-    const ids = animationTaskAccountIDs(task, new Map([...taskPrechecks, ...taskAnimations]));
-    let modes = combined ? [true, false] : [precheck];
-    const configuration = task.result.configuration;
-    if (
-      task.operation === "managed-model-detection" &&
-      configuration &&
-      typeof configuration === "object"
-    ) {
-      const config = configuration as Record<string, unknown>;
-      modes = [];
-      if (config.precheck === true) modes.push(true);
-      if (config.animation !== false) modes.push(false);
-    }
+    const rows = animationTaskRows(task);
+    const taskPrechecks = rows.prechecks;
+    const taskAnimations = rows.animations;
+    const ids = animationTaskAccountIDs(task, taskPrechecks, taskAnimations);
+    const modes = animationTaskModes(task);
     const taskResults = modes.includes(false) ? taskAnimations : taskPrechecks;
     for (const isPrecheck of modes) {
       const resultMap = isPrecheck ? precheckResults : results;
@@ -186,7 +249,7 @@ export function collectAnimationTasks(
       }
       for (const [id, result] of phaseResults) {
         const existing = resultMap.get(id);
-        if (!existing || Date.parse(result.completed_at) >= Date.parse(existing.completed_at))
+        if (!existing || compareTimestamps(result.completed_at, existing.completed_at) >= 0)
           resultMap.set(id, result);
       }
       for (const id of ids) statusMap.set(id, phaseResults.get(id)?.status ?? task.status);
@@ -202,7 +265,7 @@ export function collectAnimationTasks(
           ...(modes.includes(true) && (!modes.includes(false) || !taskPrechecks.has(id))
             ? { mode: "precheck" as const }
             : {}),
-          status: animationActivityStatus(taskPhases.get(id), task.status),
+          status: animationActivityStatus(rows.phases.get(id), task.status),
           taskID: task.id,
           batchSize: ids.size,
           completed: taskResults.size,

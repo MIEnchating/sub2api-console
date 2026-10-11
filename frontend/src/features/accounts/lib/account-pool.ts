@@ -12,6 +12,7 @@ export type AccountPoolFilter =
   | "concurrency_limited"
   | "survivor"
   | "fused"
+  | "manual_fused"
   | "paused"
   | "disabled"
   | "excluded"
@@ -36,6 +37,7 @@ export const accountPoolFilters: Array<{
   { value: "cost_blocked", label: "成本墙拦截" },
   { value: "concurrency_limited", label: concurrencyLimitedLabel },
   { value: "fused", label: "已熔断" },
+  { value: "manual_fused", label: "人工熔断" },
   { value: "survivor", label: "保底强留" },
   { value: "paused", label: "已暂停" },
   { value: "disabled", label: "已停用" },
@@ -55,6 +57,7 @@ const stateMeta: Record<AccountPoolState, AccountPoolStateMeta> = {
   },
   survivor: { value: "survivor", label: "保底强留", tone: "purple" },
   fused: { value: "fused", label: "已熔断", tone: "danger" },
+  manual_fused: { value: "manual_fused", label: "人工熔断", tone: "danger" },
   paused: { value: "paused", label: "已暂停", tone: "warning" },
   disabled: { value: "disabled", label: "已停用", tone: "neutral" },
   excluded: { value: "excluded", label: "已排除", tone: "neutral" },
@@ -63,6 +66,7 @@ const stateMeta: Record<AccountPoolState, AccountPoolStateMeta> = {
 
 export function accountPoolState(account: AccountStatus): AccountPoolStateMeta {
   const state = stateMeta[effectiveAccountState(account)];
+  if (state.value === "fused" && account.manual_fused) return stateMeta.manual_fused;
   if (state.value === "healthy" && account.evidence_pending) {
     return { value: state.value, label: "异常待确认", tone: "warning" };
   }
@@ -85,6 +89,7 @@ export function accountPoolCounts(accounts: AccountStatus[]): Record<AccountPool
     concurrency_limited: 0,
     survivor: 0,
     fused: 0,
+    manual_fused: 0,
     paused: 0,
     disabled: 0,
     excluded: 0,

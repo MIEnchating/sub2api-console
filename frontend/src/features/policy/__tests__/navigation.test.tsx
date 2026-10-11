@@ -21,6 +21,7 @@ it("窄屏使用两列分类，宽屏使用四列且每项允许收缩换行", (
     "grid-cols-2",
     "sm:grid-cols-4",
     "items-stretch",
+    "rounded-lg",
   );
   for (const tab of screen.getAllByRole("tab")) {
     expect(tab).toHaveClass("min-w-0", "whitespace-normal", "h-auto", "py-2", "lg:py-3");

@@ -10,7 +10,14 @@ test.beforeAll(() => {
   bundleDirectory = mkdtempSync(join(tmpdir(), "console-style-surfaces-"));
   execFileSync(
     "bun",
-    ["build", "e2e/__tests__/fixtures/style-surfaces.tsx", "--outdir", bundleDirectory],
+    [
+      "build",
+      "e2e/__tests__/fixtures/style-surfaces.tsx",
+      "--outdir",
+      bundleDirectory,
+      "--define",
+      "import.meta.env={}",
+    ],
     { cwd: process.cwd(), stdio: "pipe" },
   );
 });

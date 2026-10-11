@@ -6,6 +6,7 @@ import (
 )
 
 func TestGroupProbeModelsReturnsModelsSharedByAccountsWithSyncedCatalogs(t *testing.T) {
+	t.Parallel()
 	store := openReadModelFixture(t)
 	ctx := context.Background()
 	statements := []string{

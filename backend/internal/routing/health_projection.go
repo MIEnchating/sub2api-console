@@ -88,10 +88,7 @@ func (s *Service) ProjectHealth(ctx context.Context, scope Scope) (map[string]He
 		primary := primaryMembership(memberships)
 		groupConfig := configs[primary.account.GroupName]
 		prior, _ := previousDecision(previous, accountID, primary.account.GroupName)
-		evidence, err := evaluateRoutingHealth(primary.account, sampleMap[accountID], prior, groupConfig, policy, now)
-		if err != nil {
-			return nil, err
-		}
+		evidence := evaluateRoutingHealth(primary.account, sampleMap[accountID], prior, groupConfig, now)
 		shortCount := int64(min(groupConfig.shortWindow, evidence.health.SampleCount))
 		projection := HealthProjection{
 			SampleCount: int64(evidence.health.SampleCount), ShortSampleCount: &shortCount,

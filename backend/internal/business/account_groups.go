@@ -56,7 +56,7 @@ func (s *Store) CommitAccountGroups(ctx context.Context, accountID string, befor
 				return err
 			}
 		}
-		if _, err := tx.ExecContext(ctx, `UPDATE local_groups SET account_count=(SELECT COUNT(*) FROM account_groups WHERE group_id=local_groups.remote_id OR (group_id IS NULL AND group_name=local_groups.name)),updated_at=?`, now); err != nil {
+		if err := refreshAccountGroupCounts(ctx, tx, now); err != nil {
 			return err
 		}
 		if _, err := tx.ExecContext(ctx, `UPDATE bindings SET local_group=?,updated_at=? WHERE local_account_id=?`, names[ids[0]], now, accountID); err != nil {
@@ -69,4 +69,22 @@ func (s *Store) CommitAccountGroups(ctx context.Context, accountID string, befor
 		_, err = tx.ExecContext(ctx, `UPDATE accounts SET updated_at=? WHERE id=?`, now, accountID)
 		return err
 	})
+}
+
+// Aggregate stable identities separately from legacy memberships without IDs.
+func refreshAccountGroupCounts(ctx context.Context, tx *sql.Tx, now string) error {
+	_, err := tx.ExecContext(ctx, `WITH
+		stable_counts AS MATERIALIZED (
+			SELECT group_id,COUNT(*) AS total FROM account_groups
+			WHERE group_id IS NOT NULL GROUP BY group_id
+		),
+		legacy_counts AS MATERIALIZED (
+			SELECT group_name,COUNT(*) AS total FROM account_groups
+			WHERE group_id IS NULL GROUP BY group_name
+		)
+		UPDATE local_groups SET account_count=
+			COALESCE((SELECT total FROM stable_counts WHERE group_id=local_groups.remote_id),0)+
+			COALESCE((SELECT total FROM legacy_counts WHERE group_name=local_groups.name),0),
+			updated_at=?`, now)
+	return err
 }

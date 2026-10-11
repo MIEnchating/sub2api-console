@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
-	"time"
 )
 
 type RunEvent struct {
@@ -490,42 +489,6 @@ type LogCleanupResult struct {
 	Runs    int64 `json:"runs"`
 	Events  int64 `json:"events"`
 	Changes int64 `json:"changes"`
-}
-
-func (s *Store) ClearLogRecords(ctx context.Context, before *time.Time) (LogCleanupResult, error) {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return LogCleanupResult{}, err
-	}
-	defer tx.Rollback()
-	result := LogCleanupResult{}
-	deletions := []struct {
-		table  string
-		column string
-		count  *int64
-		extra  string
-	}{
-		{table: "run_records", column: "updated_at", count: &result.Runs, extra: " AND COALESCE(status,'') NOT IN ('queued','running','waiting_input')"},
-		{table: "runtime_events", column: "created_at", count: &result.Events},
-		{table: "operation_audit", column: "created_at", count: &result.Changes},
-	}
-	for _, deletion := range deletions {
-		query := "DELETE FROM " + deletion.table + " WHERE 1=1" + deletion.extra
-		arguments := []any{}
-		if before != nil {
-			query += " AND " + deletion.column + " < ?"
-			arguments = append(arguments, before.UTC().Format(time.RFC3339Nano))
-		}
-		execution, err := tx.ExecContext(ctx, query, arguments...)
-		if err != nil {
-			return LogCleanupResult{}, err
-		}
-		*deletion.count, err = execution.RowsAffected()
-		if err != nil {
-			return LogCleanupResult{}, err
-		}
-	}
-	return result, tx.Commit()
 }
 
 func (s *Store) AuditEvents(ctx context.Context, limit *int, writebackOnly bool) ([]AuditEvent, error) {

@@ -1,3 +1,4 @@
+import { seedDictionaries } from "@/test/dictionary-fixtures";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
@@ -18,6 +19,7 @@ it("选择 OAuth 账号和模型后按稳定 ID 提交检测且不要求前端�
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false, staleTime: Infinity } },
   });
+  seedDictionaries(client);
   clients.push(client);
   client.setQueryData(
     ["accounts"],

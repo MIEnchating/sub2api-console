@@ -7,6 +7,7 @@ import (
 )
 
 func TestAccountControlPersistsPauseFuseAndRecoveryState(t *testing.T) {
+	t.Parallel()
 	store := openPolicyStore(t)
 	ctx := context.Background()
 	if _, err := store.db.ExecContext(ctx, `INSERT INTO accounts(id,name,metadata_json,updated_at) VALUES('41','channel-41','{}','now')`); err != nil {
@@ -53,6 +54,7 @@ func TestAccountControlPersistsPauseFuseAndRecoveryState(t *testing.T) {
 }
 
 func TestAccountControlDoesNotResetOtherAccountsRoutingHistory(t *testing.T) {
+	t.Parallel()
 	store := openPolicyStore(t)
 	ctx := context.Background()
 	epochAt := "2026-08-28T00:00:00Z"
@@ -83,6 +85,7 @@ func TestAccountControlDoesNotResetOtherAccountsRoutingHistory(t *testing.T) {
 }
 
 func TestAccountScopeControlRejectsRemoteSchedulingActions(t *testing.T) {
+	t.Parallel()
 	store := openPolicyStore(t)
 	if _, err := store.SetAccountScopeControl(context.Background(), "41", "pause", "operator"); err == nil {
 		t.Fatal("local scope control accepted a remote scheduling action")
@@ -100,6 +103,7 @@ func testControlOperation(id string) AccountOperation {
 }
 
 func TestAccountTestModelsPersistAndCanBeCleared(t *testing.T) {
+	t.Parallel()
 	store := openPolicyStore(t)
 	ctx := context.Background()
 	if _, err := store.db.ExecContext(ctx, `INSERT INTO accounts(id,name,metadata_json,updated_at) VALUES('41','channel-41','{}','now')`); err != nil {
@@ -123,6 +127,7 @@ func TestAccountTestModelsPersistAndCanBeCleared(t *testing.T) {
 }
 
 func TestNormalizeAccountTestModelsAcceptsPreviouslyStoredSingleModel(t *testing.T) {
+	t.Parallel()
 	models, err := normalizeAccountTestModels(" gpt-5.1-codex ")
 	if err != nil {
 		t.Fatal(err)

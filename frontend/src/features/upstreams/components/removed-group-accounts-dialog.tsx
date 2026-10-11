@@ -29,36 +29,62 @@ function boundAccountIDs(audit: UpstreamGroupBindingAudit, change: UpstreamGroup
   return [...new Set(item?.accounts.map((account) => account.id) ?? [])].sort();
 }
 
-export function RemovedGroupAccountsDialog(props: {
+type Props = {
   change: UpstreamGroupChange;
   expectedAccountIDs: string[];
   onClose: () => void;
   onFinished: () => void;
-}) {
+};
+
+export function RemovedGroupAccountsDialog(props: Props) {
+  const identity = JSON.stringify([
+    props.change.upstream_id,
+    props.change.group_id,
+    [...new Set(props.expectedAccountIDs)].sort(),
+  ]);
+  return <RemovedGroupAccountsContent key={identity} {...props} />;
+}
+
+function RemovedGroupAccountsContent(props: Props) {
   const queryClient = useQueryClient();
+  const mounted = useRef(false);
+  const submitting = useRef(false);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+  function requireActive(): void {
+    if (!mounted.current) throw new DOMException("删除确认窗口已关闭", "AbortError");
+  }
   const [taskID, setTaskID] = useState<string | null>(null);
   const completedTaskID = useRef<string | null>(null);
   const audit = useQuery({
     queryKey: ["upstream-group-binding-audit"],
-    queryFn: api.upstreamGroupBindingAudit,
+    queryFn: ({ signal }) => api.upstreamGroupBindingAudit(signal),
     refetchOnMount: "always",
     retry: false,
   });
   const currentIDs = audit.data ? boundAccountIDs(audit.data, props.change) : [];
-  const expectedIDs = [...props.expectedAccountIDs].sort();
+  const expectedIDs = [...new Set(props.expectedAccountIDs)].sort();
   const unchanged =
     currentIDs.length === expectedIDs.length &&
     currentIDs.every((id, index) => id === expectedIDs[index]);
   const batchIDs = currentIDs.slice(0, 50);
   const preview = useQuery({
     queryKey: ["account-delete-batch-preview", batchIDs],
-    queryFn: () => api.accountDeleteBatchPreview(batchIDs),
+    queryFn: ({ signal }) => api.accountDeleteBatchPreview(batchIDs, signal),
     enabled: unchanged && !audit.isError && batchIDs.length > 0 && !taskID,
     retry: false,
   });
   const deletion = useMutation({
+    retry: false,
+    networkMode: "always",
     mutationFn: async () => {
+      requireActive();
       const latestAudit = await api.upstreamGroupBindingAudit();
+      requireActive();
       const latestIDs = boundAccountIDs(latestAudit, props.change);
       if (
         latestIDs.length !== currentIDs.length ||
@@ -67,17 +93,27 @@ export function RemovedGroupAccountsDialog(props: {
         throw new Error("分组绑定账号已变化，请关闭弹窗后重新查看影响范围");
       }
       const latestPreview = await api.accountDeleteBatchPreview(batchIDs);
+      requireActive();
       if (JSON.stringify(latestPreview) !== JSON.stringify(preview.data)) {
         throw new Error("账号删除影响范围已变化，请刷新预览后重新确认");
       }
       return api.deleteAccounts(latestPreview);
     },
-    onSuccess: (task) => setTaskID(task.id),
-    onError: (error) => notifyOperationError(error, "绑定账号删除启动失败"),
+    onSuccess: (task) => {
+      queryClient.setQueryData(["account-delete-batch", task.id], task);
+      void queryClient.invalidateQueries({ queryKey: ["tasks"] });
+      if (mounted.current) setTaskID(task.id);
+    },
+    onError: (error) => {
+      if (mounted.current) notifyOperationError(error, "绑定账号删除启动失败");
+    },
+    onSettled: () => {
+      submitting.current = false;
+    },
   });
   const task = useQuery({
     queryKey: ["account-delete-batch", taskID],
-    queryFn: () => api.task(taskID!),
+    queryFn: ({ signal }) => api.task(taskID!, signal),
     enabled: Boolean(taskID),
     refetchInterval: taskPollInterval,
     retry: false,
@@ -164,7 +200,20 @@ export function RemovedGroupAccountsDialog(props: {
                   disabled={
                     preview.isFetching || audit.isFetching || preview.isError || audit.isError
                   }
-                  onClick={() => deletion.mutate()}
+                  onClick={() => {
+                    if (
+                      submitting.current ||
+                      !unchanged ||
+                      !preview.data ||
+                      preview.isFetching ||
+                      audit.isFetching ||
+                      preview.isError ||
+                      audit.isError
+                    )
+                      return;
+                    submitting.current = true;
+                    deletion.mutate();
+                  }}
                 >
                   <Trash2 aria-hidden="true" />
                   确认删除 {batchIDs.length} 个账号

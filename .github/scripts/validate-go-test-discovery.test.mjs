@@ -3,7 +3,9 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import process from "node:process";
 import test from "node:test";
+import { URL } from "node:url";
 
 const script = new URL("../../backend/scripts/check-go.sh", import.meta.url);
 
@@ -37,7 +39,7 @@ for (const mode of ["vet", "test"]) {
     execFileSync("bash", [join(root, "scripts/check-go.sh"), mode], { cwd: dirname(root), env });
     const args = JSON.parse(readFileSync(capture, "utf8"));
     assert.deepEqual(args, [
-      ...(mode === "test" ? ["test", "-race", "-timeout=20m"] : ["vet"]),
+      ...(mode === "test" ? ["test", "-p=4", "-parallel=4", "-race", "-timeout=20m"] : ["vet"]),
       "./...",
       ...packages,
     ]);

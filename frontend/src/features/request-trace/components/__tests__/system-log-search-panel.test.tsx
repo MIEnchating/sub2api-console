@@ -2,12 +2,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { describe, expect, it } from "vitest";
 
-import {
-  nextSystemLogSubmission,
-  readableSystemLog,
-  readableUsage,
-  SystemLogSearchPanel,
-} from "../system-log-search-panel";
+import { readableSystemLog, readableUsage, SystemLogSearchPanel } from "../system-log-search-panel";
 
 describe("SystemLogSearchPanel", () => {
   it("shows only request_id as a searchable field", () => {
@@ -138,19 +133,5 @@ describe("SystemLogSearchPanel", () => {
         cache_write_tokens: null,
       }),
     ).toBeNull();
-  });
-
-  it("creates a new execution when the same search is submitted again", () => {
-    const query = {
-      requestId: "req-1",
-      page: 1,
-      pageSize: 20,
-    };
-
-    const first = nextSystemLogSubmission(null, query);
-    const second = nextSystemLogSubmission(first, query);
-
-    expect(first.query).toEqual(second.query);
-    expect(second.execution).toBe(first.execution + 1);
   });
 });

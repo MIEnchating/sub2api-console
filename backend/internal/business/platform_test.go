@@ -3,6 +3,7 @@ package business
 import "testing"
 
 func TestNormalizePlatformAliasesMatchOnboardingCatalogNames(t *testing.T) {
+	t.Parallel()
 	tests := map[string]string{
 		"OpenAI": "openai", "newapi": "openai", "GLM": "zhipu", "Zhipu AI": "zhipu",
 		"Claude": "anthropic", "Google": "gemini", "Moonshot": "kimi",
@@ -15,6 +16,7 @@ func TestNormalizePlatformAliasesMatchOnboardingCatalogNames(t *testing.T) {
 }
 
 func TestAccountPlatformCanJoinCompositeGroup(t *testing.T) {
+	t.Parallel()
 	platforms := []string{"anthropic", "openai", "gemini", "antigravity", "grok", "kimi", "zhipu", "deepseek"}
 	for _, platform := range platforms {
 		if !AccountPlatformCanJoinGroup(platform, platform) {

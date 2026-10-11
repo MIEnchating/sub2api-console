@@ -1,5 +1,5 @@
 import { QueryClientProvider } from "@tanstack/react-query";
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 import { toast } from "sonner";
 
@@ -32,9 +32,13 @@ async function selectModelThenAnotherAccount(): Promise<(response: Response) => 
     sol_models: ["gpt-5.6-sol", "gpt-5.6-luna"],
   });
   client.setQueryData(["model-check-account-statuses"], []);
+  client.setQueryData(["dictionaries", "group"], { items: [] });
   client.setQueryData(["model-check-account-models", "41"], { models: ["gpt-5.6-sol"] });
   let resolveModels!: (response: Response) => void;
-  vi.stubGlobal("fetch", () => new Promise<Response>((resolve) => (resolveModels = resolve)));
+  const fetcher = vi.fn<typeof fetch>(
+    () => new Promise<Response>((resolve) => (resolveModels = resolve)),
+  );
+  vi.stubGlobal("fetch", fetcher);
   render(
     <QueryClientProvider client={client}>
       <RegularCheckPanel />
@@ -44,6 +48,9 @@ async function selectModelThenAnotherAccount(): Promise<(response: Response) => 
   fireEvent.click(await screen.findByRole("checkbox", { name: /gpt-5.6-sol/ }));
   fireEvent.click(screen.getByRole("checkbox", { name: /选择账号 备用账号/ }));
   expect(screen.getByRole("button", { name: /开始检测/ })).toBeDisabled();
+  await waitFor(() =>
+    expect(fetcher).toHaveBeenCalledWith("/api/accounts/42/models", expect.anything()),
+  );
   return resolveModels;
 }
 
@@ -72,6 +79,7 @@ it("新增账号读取成功但不支持原模型时清除失效选择并禁止�
   const resolveModels = await selectModelThenAnotherAccount();
 
   await act(async () => resolveModels(Response.json({ models: ["gpt-5.6-luna"] })));
+  expect(await screen.findByText("所选账号没有共同可检测模型")).toBeVisible();
   fireEvent.click(screen.getByRole("checkbox", { name: /选择账号 备用账号/ }));
 
   expect(await screen.findByRole("checkbox", { name: /gpt-5.6-sol/ })).not.toBeChecked();

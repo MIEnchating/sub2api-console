@@ -5,7 +5,7 @@ import (
 	"errors"
 
 	"github.com/MIEnchating/sub2api-console/backend/internal/targetguard"
-	"github.com/MIEnchating/sub2api-console/backend/internal/taskrunner"
+	"github.com/MIEnchating/sub2api-console/backend/internal/taskrecovery"
 	"github.com/MIEnchating/sub2api-console/backend/internal/taskstore"
 )
 
@@ -46,7 +46,7 @@ func (s *Service) ResumeTask(ctx context.Context, task taskstore.Task) error {
 			return errors.New("自动倍率同步已关闭或运行模式已变化")
 		}
 	}
-	return taskrunner.GoTask(s.taskRunner, task.ID, func(parent context.Context) {
+	return taskrecovery.Enqueue(s.taskRunner, s.tasks, task, nil, func(parent context.Context, task taskstore.Task) {
 		parent = preserveAutomaticInspection(parent, input.Automatic)
 		parent = targetguard.Expect(parent, target)
 		s.executeMaintenanceContext(parent, task, task.Operation, ids, input.Actor)

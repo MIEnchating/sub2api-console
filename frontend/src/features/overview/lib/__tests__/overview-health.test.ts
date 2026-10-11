@@ -5,6 +5,7 @@ import {
   buildAttentionAccounts,
   buildGroupHealth,
   buildOverviewMetrics,
+  buildOverviewHealth,
   visibleOverviewGroups,
   strategyLabel,
 } from "../overview-health";
@@ -69,6 +70,63 @@ function group(overrides: Partial<GroupStatus> = {}): GroupStatus {
 }
 
 describe("overview health calculations", () => {
+  it("总览聚合保留分组顺序，多分组和重复成员名称不重复统计账号", () => {
+    const shared = account({
+      groups: [" CODEX ", "codex", "pro"],
+      health: "fused",
+      routing_state: "fused",
+      health_score: 20,
+    });
+    const other = account({ id: "2", groups: ["pro"], health_score: 80 });
+    const data = buildOverviewHealth(
+      [shared, other, account({ id: "3", groups: ["excluded"], apply_pending: true })],
+      [
+        group({ id: "8", name: "pro" }),
+        group(),
+        group({ name: "excluded", participation_status: "out_of_scope" }),
+      ],
+    );
+    expect(data.healthRows.map((row) => row.group.id)).toEqual(["8", "6"]);
+    expect(data.healthRows.map((row) => row.accounts.map((item) => item.id))).toEqual([
+      ["1", "2"],
+      ["1"],
+    ]);
+    expect(data.metrics).toMatchObject({
+      managedAccounts: 2,
+      assignedConcurrency: 16,
+      averageHealthScore: 50,
+      fusedAccounts: 1,
+      riskGroups: 2,
+    });
+    expect(data.attention.map((item) => item.account.id)).toEqual(["1"]);
+  });
+
+  it("无可见分组时总览不纳入未分组或范围外账号", () => {
+    const data = buildOverviewHealth(
+      [account({ groups: [] }), account({ groups: ["legacy"] })],
+      [group({ name: "legacy", participation_status: "out_of_scope" })],
+    );
+    expect(data.healthRows).toEqual([]);
+    expect(data.attention).toEqual([]);
+    expect(data.metrics).toMatchObject({
+      managedAccounts: 0,
+      averageHealthScore: null,
+      riskGroups: 0,
+    });
+  });
+
+  it("名称与对象原型属性相同的分组正常聚合，空分组保留风险卡片", () => {
+    const data = buildOverviewHealth(
+      [account({ groups: ["__proto__"] })],
+      [
+        group({ name: "__proto__" }),
+        group({ name: "empty", account_count: 0, scheduling_open: 0 }),
+      ],
+    );
+    expect(data.healthRows[0].accounts).toHaveLength(1);
+    expect(data.healthRows[1]).toMatchObject({ totalCount: 0, livePercent: 0, tone: "critical" });
+    expect(data.metrics.managedAccounts).toBe(1);
+  });
   it("等待并发额度的账号单独计数并列为待关注，已有健康分不受容量不足影响", () => {
     const limited = account({
       health: "concurrency_limited",

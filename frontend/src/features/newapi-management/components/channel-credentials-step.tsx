@@ -164,7 +164,7 @@ export function ChannelCredentialsStep(props: {
                   >
                     <SelectValue placeholder="选择分组" />
                   </SelectTrigger>
-                  <SelectContent>
+                  <SelectContent dictionaryKind="group">
                     {props.groups.map((group) => (
                       <SelectItem key={group.id} value={group.id}>
                         {group.name}

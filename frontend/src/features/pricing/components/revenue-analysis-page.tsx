@@ -77,7 +77,8 @@ export function revenueReportFromTask(task: Task | undefined): RevenueReport | n
     !value.rows.every(isRevenueRow) ||
     !Array.isArray(value.summaries) ||
     !value.summaries.every(isRevenueSummary) ||
-    !Array.isArray(value.issues)
+    !Array.isArray(value.issues) ||
+    !value.issues.every(isRevenueIssue)
   ) {
     return null;
   }
@@ -86,6 +87,10 @@ export function revenueReportFromTask(task: Task | undefined): RevenueReport | n
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
+}
+
+function isRevenueIssue(value: unknown): boolean {
+  return isRecord(value) && typeof value.host === "string" && typeof value.reason === "string";
 }
 
 function isRevenueDecimal(value: unknown): value is string {
@@ -304,6 +309,7 @@ export function RevenueCalculationProgress(props: { progress: number }) {
 export function RevenueAnalysisPage() {
   const queryClient = useQueryClient();
   const [date, setDate] = useState(defaultRevenueDate);
+  const dateInitialized = useRef(false);
   const [view, setView] = useState<RevenueAnalysisView>("details");
   const pageRef = useRef<HTMLDivElement>(null);
   function changeView(nextView: RevenueAnalysisView): void {
@@ -314,11 +320,17 @@ export function RevenueAnalysisPage() {
   const [taskID, setTaskID] = useState<string | null>(null);
   const latest = useQuery({
     queryKey: ["pricing-revenue-latest"],
-    queryFn: api.latestRevenue,
+    queryFn: async ({ signal }) => {
+      const latestTask = await api.latestRevenue(signal);
+      if (latestTask && !revenueReportFromTask(latestTask)) {
+        throw new Error("最近收益报告格式无效，请重新读取或重新分析");
+      }
+      return latestTask;
+    },
   });
   const task = useQuery({
     queryKey: ["task", taskID],
-    queryFn: () => api.task(taskID!),
+    queryFn: ({ signal }) => api.task(taskID!, signal),
     enabled: Boolean(taskID),
     refetchInterval: taskPollInterval,
   });
@@ -352,12 +364,17 @@ export function RevenueAnalysisPage() {
   }, [currentReport, queryClient, task.data]);
 
   useEffect(() => {
-    if (!taskID && latestReport) setDate(latestReport.report_date);
+    if (!taskID && latestReport && !dateInitialized.current) {
+      dateInitialized.current = true;
+      setDate(latestReport.report_date);
+    }
   }, [latestReport, taskID]);
 
+  const reportDate = report?.report_date;
+  const reportGeneratedAt = report?.generated_at;
   useEffect(() => {
-    if (report) setView("details");
-  }, [report]);
+    if (reportDate) setView("details");
+  }, [reportDate, reportGeneratedAt]);
 
   return (
     <PageLayout fixedContent navigation={navigation}>
@@ -377,7 +394,10 @@ export function RevenueAnalysisPage() {
               toDate={revenueDateValue(defaultRevenueDate())}
               label="核算日期"
               clearable={false}
-              onSelect={(value) => setDate(revenueDateText(value))}
+              onSelect={(value) => {
+                dateInitialized.current = true;
+                setDate(revenueDateText(value));
+              }}
               className="w-36 sm:w-44"
             />
             <Button

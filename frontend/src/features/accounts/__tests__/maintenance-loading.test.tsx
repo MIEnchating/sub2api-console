@@ -51,7 +51,9 @@ it("复验绑定任务已创建而首次状态尚未返回时持续展示加载�
   await screen.findByText("待校验账号");
   fireEvent.click(screen.getByRole("button", { name: "账号维护" }));
   fireEvent.click(await screen.findByRole("menuitem", { name: "复验绑定" }));
-  await waitFor(() => expect(readTask).toHaveBeenCalledWith("revalidation"));
+  await waitFor(() =>
+    expect(readTask).toHaveBeenCalledWith("revalidation", expect.any(AbortSignal)),
+  );
   expect(within(screen.getByRole("dialog")).getByRole("status")).toBeVisible();
   client.clear();
 });

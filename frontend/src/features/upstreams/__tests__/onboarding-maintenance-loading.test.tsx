@@ -27,6 +27,8 @@ it("开户页维护任务已创建而首次状态尚未返回时持续展示加�
   client = renderOnboarding(boundCandidate("active"));
   await screen.findByRole("button", { name: "预览更新绑定" });
   fireEvent.click(screen.getByRole("button", { name: "复验绑定" }));
-  await waitFor(() => expect(readTask).toHaveBeenCalledWith("onboarding-revalidate"));
+  await waitFor(() =>
+    expect(readTask).toHaveBeenCalledWith("onboarding-revalidate", expect.any(AbortSignal)),
+  );
   expect(within(screen.getByRole("dialog")).getByRole("status")).toBeVisible();
 });

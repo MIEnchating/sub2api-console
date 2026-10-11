@@ -8,6 +8,7 @@ import (
 )
 
 func TestCapacityFailuresUseGatewayHealthWithoutCredentialOrQuotaPenalty(t *testing.T) {
+	t.Parallel()
 	for _, reason := range []string{
 		"Our servers are currently overloaded. Please try again later.",
 		"The service is busy. Please retry later.",
@@ -32,6 +33,7 @@ func TestCapacityFailuresUseGatewayHealthWithoutCredentialOrQuotaPenalty(t *test
 }
 
 func TestCapacityTextDoesNotOverrideExplicitAuthenticationOrQuotaFailure(t *testing.T) {
+	t.Parallel()
 	for _, scenario := range []struct {
 		status int
 		event  routing.Event
@@ -41,7 +43,7 @@ func TestCapacityTextDoesNotOverrideExplicitAuthenticationOrQuotaFailure(t *test
 	} {
 		classified, err := routing.ClassifySample(routing.Sample{
 			Result: "失败", Source: "traffic", StatusCode: &scenario.status,
-			FailureReason: "The service is busy. Please retry later.",
+			FailureReason: `{"code":"server_error","message":"The service\nis busy. Please retry later."}`,
 		}, nil)
 		if err != nil {
 			t.Fatal(err)
@@ -53,6 +55,7 @@ func TestCapacityTextDoesNotOverrideExplicitAuthenticationOrQuotaFailure(t *test
 }
 
 func TestRepeatedCapacityFailuresLowerHealthAndResetRecovery(t *testing.T) {
+	t.Parallel()
 	health, err := routing.HealthScore([]routing.Sample{
 		{Result: "失败", Source: "traffic", FailureReason: "The service is busy. Please retry later."},
 		{Result: "失败", Source: "traffic", FailureReason: "Our servers are currently overloaded. Please try again later."},
@@ -67,6 +70,7 @@ func TestRepeatedCapacityFailuresLowerHealthAndResetRecovery(t *testing.T) {
 }
 
 func TestSuccessfulResultWithCapacityTextDoesNotBecomeHealthFailure(t *testing.T) {
+	t.Parallel()
 	classified, err := routing.ClassifySample(routing.Sample{
 		Result: "通过", Source: "traffic", FailureReason: "The service is busy. Please retry later.",
 	}, nil)
@@ -75,5 +79,28 @@ func TestSuccessfulResultWithCapacityTextDoesNotBecomeHealthFailure(t *testing.T
 	}
 	if classified.Event != routing.EventHealthy || classified.Failure || classified.Fatal || classified.RateLimited {
 		t.Fatalf("non-error capacity text changed a successful result: %+v", classified)
+	}
+}
+
+func TestStructuredCapacityErrorUsesMessageRatherThanRequestMetadata(t *testing.T) {
+	for _, tt := range []struct {
+		name, reason string
+		event        routing.Event
+	}{
+		{"escaped busy message", `{"code":"server_error","message":"The service\nis busy."}`, routing.EventGateway},
+		{"nested busy message", `{"response":{"error":{"message":"The server\tis busy."}}}`, routing.EventGateway},
+		{"capacity word in request ID", `{"message":"Generation rejected","request_id":"overloaded-request"}`, routing.EventUnknown},
+		{"numeric metadata preserves JSON parsing", `{"message":"Generation rejected","request_id":"overloaded-request","offset":-1}`, routing.EventUnknown},
+		{"normalized plain message stays compatible", "service-is-busy", routing.EventGateway},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			classified, err := routing.ClassifySample(routing.Sample{Result: "失败", Source: "traffic", FailureReason: tt.reason}, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if classified.Event != tt.event {
+				t.Fatalf("misclassified structured error: %+v", classified)
+			}
+		})
 	}
 }

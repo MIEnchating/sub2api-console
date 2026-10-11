@@ -9,28 +9,38 @@ import (
 )
 
 func validateObjectIDs(ids []int64, objects map[string]json.RawMessage, unique bool) error {
-	seen := map[int64]bool{}
+	if len(ids) == 0 {
+		return nil
+	}
+	// Index only the requested identities. Directory keys are not stable IDs
+	// (status pages can be keyed by slug), and names must never bind resources.
+	pending := make(map[int64]bool, len(ids))
+	var invalid error
 	for _, id := range ids {
-		if id <= 0 || unique && seen[id] {
-			return failure("kuma_invalid_resource_ids", "目标 ID 无效或重复，请刷新后选择", 422)
+		if id <= 0 || unique && pending[id] {
+			invalid = failure("kuma_invalid_resource_ids", "目标 ID 无效或重复，请刷新后选择", 422)
+			break
 		}
-		seen[id] = true
-		found := false
-		for _, raw := range objects {
-			var v IDReference
-			if json.Unmarshal(raw, &v) != nil {
-				return protocolError()
-			}
-			if v.ID == id {
-				found = true
-				break
-			}
+		pending[id] = true
+	}
+	if len(pending) == 0 {
+		return invalid
+	}
+	// Resolve the valid prefix before returning a later invalid ID, preserving
+	// the original missing-target / invalid-input error precedence.
+	// Parse each visited entry once rather than rescanning and decoding the
+	// directory for every association. Repeated display memberships are allowed.
+	for _, raw := range objects {
+		var v IDReference
+		if json.Unmarshal(raw, &v) != nil {
+			return protocolError()
 		}
-		if !found {
-			return failure("kuma_invalid_resource_ids", "目标已被删除，请刷新后重新选择", 409)
+		delete(pending, v.ID)
+		if len(pending) == 0 {
+			return invalid
 		}
 	}
-	return nil
+	return failure("kuma_invalid_resource_ids", "目标已被删除，请刷新后重新选择", 409)
 }
 func decodeResource(id int64, kind string, raw map[string]json.RawMessage) ResourceItem {
 	item := ResourceItem{ID: id, Revision: stableResourceRevision(raw), Active: true}
@@ -98,7 +108,7 @@ func (s *Service) Resources(ctx context.Context, kind string) (ResourceList, err
 	return result, nil
 }
 func (s *Service) resourceDetail(ctx context.Context, c configstore.UptimeKumaConfig, conn *socket, kind string, id int64, associations bool) (ResourceItem, map[string]json.RawMessage, []PublicGroup, error) {
-	all, err := resourceRaw(conn, kind)
+	all, err := selectedResourceRaw(conn, kind, id)
 	if err != nil {
 		return ResourceItem{}, nil, nil, err
 	}

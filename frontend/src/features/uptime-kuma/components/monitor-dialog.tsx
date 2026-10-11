@@ -1,5 +1,5 @@
 import { ContentLoading } from "@/components/content-loading";
-import type { Task } from "@/api";
+import type { KumaProgressTask } from "./kuma-task-progress";
 import { OperationDialogFooter } from "./operation-dialog-footer";
 import { notifyOperationError } from "@/lib/operation-feedback";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -32,7 +32,8 @@ export function MonitorDialog(props: {
   templatesError?: boolean;
   onTemplatesRetry?: () => void;
   pending: boolean;
-  task?: Pick<Task, "message" | "progress"> | null;
+  starting?: boolean;
+  task?: KumaProgressTask | null;
   error?: Error | null;
   onClose: () => void;
   onSubmit: (values: MonitorValues) => void;
@@ -201,7 +202,7 @@ export function MonitorDialog(props: {
             </fieldset>
           </form>
         </DialogBody>
-        <OperationDialogFooter pending={props.pending} task={props.task}>
+        <OperationDialogFooter pending={props.pending} task={props.task} starting={props.starting}>
           <Button variant="outline" disabled={props.pending} onClick={props.onClose}>
             取消
           </Button>

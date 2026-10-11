@@ -60,7 +60,10 @@ describe("参考价格缓存有效期", () => {
     expect(api.managementModelPrices).toHaveBeenCalledOnce();
     await client.fetchQuery(modelPriceCatalogQueryOptions("secondary"));
     expect(api.managementModelPrices).toHaveBeenCalledTimes(2);
-    expect(api.managementModelPrices).toHaveBeenLastCalledWith("secondary");
+    expect(api.managementModelPrices).toHaveBeenLastCalledWith(
+      "secondary",
+      expect.any(AbortSignal),
+    );
   });
 
   it("部分模型参考价不完整时再次同步会重新查询，避免等满一天才恢复", async () => {

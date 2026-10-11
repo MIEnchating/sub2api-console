@@ -9,7 +9,7 @@ import (
 
 func TestKumaTemplateRoutesRequireAuthentication(t *testing.T) {
 	router, _ := testRouter(t, config.Config{AdminToken: "test-token"}, fakeBusiness{})
-	for _, tc := range []struct{ method, path string }{{"GET", "/api/uptime-kuma/templates"}, {"POST", "/api/uptime-kuma/templates"}, {"PUT", "/api/uptime-kuma/templates/id"}, {"DELETE", "/api/uptime-kuma/templates/id"}} {
+	for _, tc := range []struct{ method, path string }{{"GET", "/api/uptime-kuma/templates/id/distribution?revision=1"}, {"POST", "/api/uptime-kuma/templates/id/distribution"}, {"GET", "/api/uptime-kuma/templates"}, {"POST", "/api/uptime-kuma/templates"}, {"PUT", "/api/uptime-kuma/templates/id"}, {"DELETE", "/api/uptime-kuma/templates/id"}} {
 		if r := request(t, router, tc.method, tc.path, nil, ""); r.Code != 401 {
 			t.Fatalf("%s %s: %d", tc.method, tc.path, r.Code)
 		}

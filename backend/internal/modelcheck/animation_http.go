@@ -11,12 +11,15 @@ import (
 	"strings"
 )
 
-func sendAnimation(ctx context.Context, client *http.Client, credential directCredential, model, requestID string, usage *AnimationUsage, onFirstOutput func()) (string, string, error) {
+func sendAnimation(ctx context.Context, client *http.Client, credential directCredential, model, prompt, requestID string, usage *AnimationUsage, onFirstOutput func()) (string, string, error) {
+	if prompt == "" {
+		prompt = animationPrompt
+	}
 	path := "/v1/responses"
-	body := map[string]any{"model": model, "input": animationPrompt, "max_output_tokens": 16384, "stream": true, "reasoning": map[string]string{"effort": "low"}}
+	body := map[string]any{"model": model, "input": prompt, "max_output_tokens": 16384, "stream": true, "reasoning": map[string]string{"effort": "low"}}
 	if credential.Platform == "anthropic" {
 		path = "/v1/messages"
-		body = map[string]any{"model": model, "messages": []map[string]string{{"role": "user", "content": animationPrompt}}, "max_tokens": 16384, "stream": true, "output_config": map[string]string{"effort": "low"}}
+		body = map[string]any{"model": model, "messages": []map[string]string{{"role": "user", "content": prompt}}, "max_tokens": 16384, "stream": true, "output_config": map[string]string{"effort": "low"}}
 	}
 	text, responseModel, status, raw, retryAfter, err := animationHTTP(ctx, client, credential, path, body, requestID, usage, onFirstOutput)
 	if err != nil {
@@ -24,7 +27,7 @@ func sendAnimation(ctx context.Context, client *http.Client, credential directCr
 	}
 	if credential.Platform != "anthropic" && responsesEndpointUnsupported(status, raw) {
 		path = "/v1/chat/completions"
-		body = map[string]any{"model": model, "messages": []map[string]string{{"role": "user", "content": animationPrompt}}, "max_tokens": 16384, "stream": true}
+		body = map[string]any{"model": model, "messages": []map[string]string{{"role": "user", "content": prompt}}, "max_tokens": 16384, "stream": true}
 		body["reasoning_effort"] = "low"
 		body["stream_options"] = map[string]bool{"include_usage": true}
 		text, responseModel, status, raw, retryAfter, err = animationHTTP(ctx, client, credential, path, body, requestID, usage, onFirstOutput)
@@ -171,6 +174,7 @@ func animationStream(reader io.Reader, path string, usage *AnimationUsage, onFir
 					output.WriteString(delta)
 					if firstOutput != nil {
 						firstOutput()
+						firstOutput = nil
 					}
 				}
 			}
@@ -204,6 +208,7 @@ func animationStream(reader io.Reader, path string, usage *AnimationUsage, onFir
 					output.WriteString(text)
 					if firstOutput != nil {
 						firstOutput()
+						firstOutput = nil
 					}
 				}
 			}
@@ -219,6 +224,7 @@ func animationStream(reader io.Reader, path string, usage *AnimationUsage, onFir
 					output.WriteString(content)
 					if firstOutput != nil {
 						firstOutput()
+						firstOutput = nil
 					}
 				}
 				reason := stringField(choice, "finish_reason")

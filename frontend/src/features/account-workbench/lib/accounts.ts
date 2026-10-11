@@ -7,18 +7,36 @@ export function accountStatus(account: WorkbenchAccount): string {
   if (status === "active") return "active";
   return !status || status === "unknown" ? "unknown" : "error";
 }
-export function matchesAccount(account: WorkbenchAccount, filter: AccountFilter): boolean {
-  const words = [
-    account.name,
-    account.email,
-    account.id,
-    ...account.groups.map((group) => group.name),
-  ]
-    .join(" ")
-    .toLowerCase();
-  return (
-    words.includes(filter.query.trim().toLowerCase()) &&
-    (filter.status === "all" || accountStatus(account) === filter.status) &&
-    (filter.group === "all" || account.groups.some((group) => group.id === filter.group))
-  );
+type AccountSearchEntry = {
+  account: WorkbenchAccount;
+  words: string;
+  status: string;
+};
+
+export function createAccountSearchIndex(
+  accounts: readonly WorkbenchAccount[],
+): AccountSearchEntry[] {
+  return accounts.map((account) => ({
+    account,
+    status: accountStatus(account),
+    words: [account.name, account.email, account.id, ...account.groups.map((group) => group.name)]
+      .join(" ")
+      .toLowerCase(),
+  }));
+}
+
+export function filterAccountSearchIndex(
+  index: readonly AccountSearchEntry[],
+  filter: AccountFilter,
+): WorkbenchAccount[] {
+  const query = filter.query.trim().toLowerCase();
+  const matches: WorkbenchAccount[] = [];
+  for (const entry of index) {
+    if (filter.status !== "all" && entry.status !== filter.status) continue;
+    if (filter.group !== "all" && !entry.account.groups.some((group) => group.id === filter.group))
+      continue;
+    if (query && !entry.words.includes(query)) continue;
+    matches.push(entry.account);
+  }
+  return matches;
 }

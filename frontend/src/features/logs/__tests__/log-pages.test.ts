@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from "@/test/dictionary";
 import { describe, expect, it } from "vitest";
 
 import type { UnifiedLogEntry } from "../../../api";
-import { navItems, viewForPath } from "../../../App";
+import { navItems, viewForPath } from "../../../app-shell";
 import {
   LogChangesList,
   LogDetailsContent,
@@ -172,6 +172,7 @@ describe("log center contracts", () => {
     expect(logTitleLabel("inspection-run")).toBe("巡检任务");
     expect(logTitleLabel("upstream.sync")).toBe("上游同步");
     expect(logTitleLabel("automatic-inspection")).toBe("自动巡检");
+    expect(logTitleLabel("log-cleanup")).toBe("日志清理");
     expect(logStatusLabel("waiting_input")).toBe("等待输入");
   });
 

@@ -48,15 +48,15 @@ export function DetectionAccountControlProvider(props: { children: ReactNode }):
   const [running, setRunning] = useState<(ControlSelection & { taskID: string }) | null>(null);
   const notified = useRef<string | null>(null);
   const current = useQuery({
-    queryKey: ["account-detail", selection?.accountID],
-    queryFn: () => api.account(selection!.accountID),
+    queryKey: ["account-detail", selection?.accountID, "control-state"],
+    queryFn: ({ signal }) => api.accountControlState(selection!.accountID, signal),
     enabled: selection !== null,
     staleTime: 0,
     retry: false,
   });
   const task = useQuery({
     queryKey: ["account-scheduling", running?.accountID, running?.taskID],
-    queryFn: () => api.task(running!.taskID),
+    queryFn: ({ signal }) => api.task(running!.taskID, signal),
     enabled: running !== null,
     refetchInterval: taskPollInterval,
   });

@@ -55,12 +55,9 @@ export function ConfigForm(props: {
     else notifyOperationError(props.error, "保存失败，请重试");
   }, [form, props.error]);
   const onSubmit = (values: ConfigValues): void => {
-    if (
-      (!props.config.api_key_configured ||
-        values.base_url.replace(/\/dashboard\/?$/, "").replace(/\/$/, "") !==
-          props.config.base_url) &&
-      !values.api_key
-    ) {
+    const submittedAddressChanged =
+      values.base_url.replace(/\/dashboard\/?$/, "").replace(/\/$/, "") !== props.config.base_url;
+    if ((!props.config.api_key_configured || submittedAddressChanged) && !values.api_key) {
       form.setError("api_key", { message: "首次接入或更换地址时请输入 API 密钥" });
       return;
     }
@@ -68,7 +65,9 @@ export function ConfigForm(props: {
       !values.disable_management &&
       values.username &&
       !values.password &&
-      (!props.config.management_configured || values.username !== props.config.username)
+      (!props.config.management_configured ||
+        submittedAddressChanged ||
+        values.username !== props.config.username)
     ) {
       form.setError("password", { message: "请输入管理账号的密码" });
       return;

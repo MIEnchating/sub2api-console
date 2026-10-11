@@ -36,7 +36,8 @@ func TestDetectionTasksRemainVisibleWithoutExplicitFlagAcrossLifecycleAndReopen(
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
-	rows, err := store.ListConsoleSummaries(ctx, nil)
+	limit := 100
+	rows, err := store.ListConsoleSummaries(ctx, &limit)
 	if err != nil {
 		t.Fatal(err)
 	}

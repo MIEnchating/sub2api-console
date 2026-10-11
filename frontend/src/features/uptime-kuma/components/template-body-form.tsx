@@ -1,7 +1,7 @@
 import { useId, useState } from "react";
 import type { UseFormReturn } from "react-hook-form";
 import { ChevronDown, ChevronUp } from "lucide-react";
-import { FormField } from "@/App";
+import { FormField } from "@/components/form-field";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";

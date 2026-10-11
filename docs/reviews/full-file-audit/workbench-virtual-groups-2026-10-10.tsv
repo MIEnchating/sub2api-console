@@ -1,0 +1,3 @@
+frontend/src/features/account-workbench/components/account-group-filter.tsx	3cb1757739fd2a5f702d80b9a1f3aa05dce8dfe577a587e504ab38517f26edc1	reviewed	全文检查；大分组菜单虚拟化，验证见第140轮
+frontend/src/features/account-workbench/components/virtual-group-filter.tsx	dc634746e7915f7b8655e1f6178df0a58625ebd8408773360583faf665e5a9a1	reviewed	全文检查；大分组菜单虚拟化，验证见第140轮
+frontend/e2e/__tests__/workbench-group-menu.e2e.ts	a1b9773c5bbf52399f390574787d7e5d4e1bc9e603fe61818eaa867f96131c4c	reviewed	全文检查；大分组菜单虚拟化，验证见第140轮

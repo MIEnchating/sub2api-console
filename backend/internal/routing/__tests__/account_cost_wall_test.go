@@ -7,6 +7,7 @@ import (
 )
 
 func TestAccountCostWallExemptionRestoresWeightAndCanBeDisabled(t *testing.T) {
+	t.Parallel()
 	for _, rate := range []string{"1", "1.25"} {
 		t.Run(rate, func(t *testing.T) {
 			store, db := costWallStore(t, rate)
@@ -35,6 +36,7 @@ func TestAccountCostWallExemptionRestoresWeightAndCanBeDisabled(t *testing.T) {
 }
 
 func TestAccountCostWallExemptionAllowsProbesAcrossAllMemberships(t *testing.T) {
+	t.Parallel()
 	store, db := costWallStore(t, "1.25")
 	if _, err := db.Exec(`INSERT INTO local_groups(name,remote_id,rate_multiplier,updated_at) VALUES('premium','8','0.8','now'); INSERT INTO account_groups(account_id,group_name,group_id) VALUES('41','premium','8')`); err != nil {
 		t.Fatal(err)
@@ -59,6 +61,7 @@ func TestAccountCostWallExemptionAllowsProbesAcrossAllMemberships(t *testing.T) 
 }
 
 func TestExemptAccountPreventsUnnecessaryCostFallback(t *testing.T) {
+	t.Parallel()
 	store, db := costWallStore(t, "1.25")
 	if _, err := db.Exec(`UPDATE accounts SET multiplier='2' WHERE id='42'`); err != nil {
 		t.Fatal(err)
@@ -79,6 +82,7 @@ func TestExemptAccountPreventsUnnecessaryCostFallback(t *testing.T) {
 }
 
 func TestAccountCostWallExemptionPreservesOtherRestrictions(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct{ name, sql, state string }{
 		{"manual pause", `UPDATE accounts SET paused=1,schedulable=0 WHERE id='41'`, "paused"},
 		{"fused", `UPDATE accounts SET routing_state='fused',schedulable=0 WHERE id='41'`, "fused"},

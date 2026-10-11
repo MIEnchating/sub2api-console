@@ -154,3 +154,36 @@ describe("accountPoolState", () => {
     expect(accounts.filter((item) => accountMatchesPoolFilter(item, "degraded"))).toHaveLength(1);
   });
 });
+
+describe("人工熔断状态", () => {
+  it("已确认的人工熔断单独展示、统计和筛选", () => {
+    const manual = { ...account({ health: "fused", schedulable: false }), manual_fused: true };
+    const automatic = account({ health: "fused", schedulable: false });
+    expect(accountPoolState(manual)).toEqual({
+      value: "manual_fused",
+      label: "人工熔断",
+      tone: "danger",
+    });
+    expect(accountPoolCounts([manual, automatic])).toMatchObject({
+      all: 2,
+      manual_fused: 1,
+      fused: 1,
+    });
+    expect(accountMatchesPoolFilter(manual, "manual_fused")).toBe(true);
+    expect(accountMatchesPoolFilter(manual, "fused")).toBe(false);
+    expect(accountMatchesPoolFilter(automatic, "fused")).toBe(true);
+  });
+
+  it.each(["healthy", "paused", "disabled"])(
+    "人工熔断未生效或被更高优先状态 %s 覆盖时保留当前状态",
+    (health) => {
+      expect(accountPoolState({ ...account({ health }), manual_fused: true }).value).toBe(health);
+    },
+  );
+
+  it("只有原因文字提及人工熔断时不误判为人工熔断", () => {
+    expect(accountPoolState(account({ health: "fused", decision_reason: "人工熔断" })).value).toBe(
+      "fused",
+    );
+  });
+});

@@ -3,6 +3,7 @@ package officialpricing
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"regexp"
 	"strings"
 )
@@ -57,9 +58,18 @@ func ParseKimi(raw []byte) ([]Price, error) {
 			if !strings.HasPrefix(name, "kimi-") {
 				return nil, errors.New("Kimi 官方模型名称格式已变更")
 			}
-			write5, hasWrite5 := kimiOptionalRate(cells, indexes, "缓存写入（TTL 5min）")
-			write1h, hasWrite1h := kimiOptionalRate(cells, indexes, "缓存写入（TTL 1h）")
-			if hasWrite5 && hasWrite1h {
+			write5, err := kimiOptionalRate(cells, indexes, "缓存写入（TTL 5min）")
+			if err != nil {
+				return nil, err
+			}
+			write1h, err := kimiOptionalRate(cells, indexes, "缓存写入（TTL 1h）")
+			if err != nil {
+				return nil, err
+			}
+			if (write5 == "") != (write1h == "") {
+				return nil, errors.New("Kimi 官方缓存写入价格档位不完整")
+			}
+			if write5 != "" {
 				if err := addTier(prices, name, "实时调用", "TTL 5min", `param("cache_ttl") != "1h"`, priceWithCacheWrite(price, write5)); err != nil {
 					return nil, err
 				}
@@ -67,9 +77,6 @@ func ParseKimi(raw []byte) ([]Price, error) {
 					return nil, err
 				}
 				continue
-			}
-			if hasWrite5 {
-				price.CacheWritePrice = write5
 			}
 			if err := addTier(prices, name, "实时调用", "标准", "", price); err != nil {
 				return nil, err
@@ -111,20 +118,23 @@ func kimiRates(cells []string, indexes map[string]int) (Rates, error) {
 	return rates, nil
 }
 
-func kimiOptionalRate(cells []string, indexes map[string]int, title string) (string, bool) {
+func kimiOptionalRate(cells []string, indexes map[string]int, title string) (string, error) {
 	index, ok := indexes[title]
 	if !ok {
-		return "", false
+		return "", nil
+	}
+	if cells[index] == "-" || cells[index] == "—" || cells[index] == "不支持" {
+		return "", nil
 	}
 	value := strings.TrimPrefix(cells[index], "¥")
 	if value == cells[index] {
-		return "", false
+		return "", fmt.Errorf("Kimi 官方%s单价格式已变更", title)
 	}
 	rate, err := number(value, 1_000_000)
 	if err != nil {
-		return "", false
+		return "", fmt.Errorf("Kimi 官方%s单价无效：%w", title, err)
 	}
-	return rate, true
+	return rate, nil
 }
 
 func priceWithCacheWrite(price Rates, cacheWrite string) Rates {

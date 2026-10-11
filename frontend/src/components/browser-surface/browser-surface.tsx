@@ -1,5 +1,5 @@
 import type { ReactElement } from "react";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import type { BrowserFrame, BrowserInput } from "@/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -23,8 +23,39 @@ export function BrowserSurface(props: {
   onInput: (value: BrowserInput) => Promise<unknown>;
 }): ReactElement {
   const [text, setText] = useState("");
+  const pending = useRef<Promise<void> | null>(null);
+  const enqueue = (value: BrowserInput): Promise<unknown> => {
+    const invoke = (): Promise<unknown> => props.onInput(value);
+    if (pending.current === null) {
+      let first: Promise<unknown>;
+      try {
+        first = Promise.resolve(invoke());
+      } catch (error) {
+        first = Promise.reject(error);
+      }
+      const tracked = first.then(
+        () => undefined,
+        () => undefined,
+      );
+      const completion = tracked.finally(() => {
+        if (pending.current === completion) pending.current = null;
+      });
+      pending.current = completion;
+      return first;
+    }
+    const next = pending.current.then(invoke);
+    const tracked = next.then(
+      () => undefined,
+      () => undefined,
+    );
+    const completion = tracked.finally(() => {
+      if (pending.current === completion) pending.current = null;
+    });
+    pending.current = completion;
+    return next;
+  };
   const send = (value: BrowserInput): void => {
-    void props.onInput(value).catch(() => undefined);
+    void enqueue(value).catch(() => undefined);
   };
   return (
     <div className="grid min-w-0 gap-3">
@@ -151,8 +182,11 @@ export function BrowserSurface(props: {
           disabled={props.disabled || !text}
           onClick={() => {
             const value = text;
-            setText("");
-            send({ kind: "text", text: value });
+            void enqueue({ kind: "text", text: value })
+              .then(() => {
+                setText((current) => (current === value ? "" : current));
+              })
+              .catch(() => undefined);
           }}
         >
           发送文字

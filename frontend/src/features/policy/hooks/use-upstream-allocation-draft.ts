@@ -17,30 +17,40 @@ export function useUpstreamAllocationDraft(
   enabled: boolean,
 ): UpstreamAllocationDraft {
   const client = useQueryClient();
-  const [draft, setDraft] = useState<boolean | undefined>();
+  const [draft, setDraft] = useState<{
+    kind: UpstreamAllocationTarget;
+    id: string;
+    enabled: boolean;
+    checked: boolean;
+    base: UpstreamAllocationSetting;
+  }>();
   const key = ["upstream-allocation", kind, id];
   const query = useQuery({
     queryKey: key,
-    queryFn: () => api.upstreamAllocationSetting(kind, id),
+    queryFn: ({ signal }) => api.upstreamAllocationSetting(kind, id, signal),
     enabled,
   });
   useEffect(() => setDraft(undefined), [kind, id, enabled]);
-  const checked = draft ?? query.data?.effective ?? false;
+  const currentDraft =
+    draft?.kind === kind && draft.id === id && draft.enabled === enabled ? draft : undefined;
+  const checked = currentDraft?.checked ?? query.data?.effective ?? false;
   const ready = !enabled || Boolean(query.data);
 
   async function save(): Promise<void> {
     if (!enabled) return;
-    const data = query.data;
+    const data = currentDraft?.base ?? query.data;
     if (!data) throw new Error(labels.refresh);
-    if (draft === undefined || draft === data.effective) return;
+    if (!currentDraft || currentDraft.checked === data.effective) return;
     try {
+      await client.cancelQueries({ queryKey: key, exact: true });
       const value = await api.setUpstreamAllocationSetting(kind, id, {
-        override: draft,
+        override: currentDraft.checked,
         expected_revision: data.revision,
         expected_upstream_id: data.upstream_id,
       });
+      await client.cancelQueries({ queryKey: key, exact: true });
       client.setQueryData(key, value);
-      setDraft(undefined);
+      setDraft((latest) => (latest === currentDraft ? undefined : latest));
       // Keep the acknowledged value visible until the next read; invalidating an
       // active editor here could overwrite its draft during the remaining save.
       await Promise.all([
@@ -54,5 +64,9 @@ export function useUpstreamAllocationDraft(
     }
   }
 
-  return { query, checked, ready, onCheckedChange: setDraft, save };
+  const onCheckedChange = (checked: boolean): void => {
+    if (!query.data) return;
+    setDraft({ kind, id, enabled, checked, base: currentDraft?.base ?? query.data });
+  };
+  return { query, checked, ready, onCheckedChange, save };
 }

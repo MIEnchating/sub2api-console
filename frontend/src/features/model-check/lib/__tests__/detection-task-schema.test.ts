@@ -34,15 +34,16 @@ it.each([0, 17, 1.5, Number.NaN])("同时检测账号数为 %s 时阻止保存",
 it.each([
   [true, false, false, ["动画检测"]],
   [false, true, false, ["前置检测"]],
-  [false, false, true, ["终端检测 3 轮"]],
   [true, true, false, ["前置检测", "动画检测"]],
-  [true, false, true, ["终端检测 3 轮", "动画检测"]],
-  [false, true, true, ["前置检测", "终端检测 3 轮"]],
-  [true, true, true, ["前置检测", "终端检测 3 轮", "动画检测"]],
+  [true, false, true, ["动画检测"]],
+  [false, true, true, ["前置检测"]],
+  [true, true, true, ["前置检测", "动画检测"]],
 ] as const)(
   "选择动画 %s / 前置 %s / 终端 %s 时仅按选择生成执行摘要",
   (animation, precheck, terminal, stages) => {
     const value = detectionTaskSchema.parse({ ...base, animation, precheck, terminal });
+    expect(value.terminal).toBe(false);
+    expect(value.terminal_rounds).toBe(0);
     expect(detectionTaskStages(value)).toEqual(stages);
     expect(detectionTaskDescription(value)).toBe(
       `每天 09:00、20:00（北京时间）依次执行${stages.join(" → ")}`,
@@ -50,7 +51,7 @@ it.each([
   },
 );
 
-it("三种检测均未选择时返回检测内容的字段错误", () => {
+it("动画和前置检测均未选择时返回检测内容的字段错误", () => {
   const parsed = detectionTaskSchema.safeParse(base);
   expect(parsed.success).toBe(false);
   if (!parsed.success)
@@ -75,4 +76,8 @@ it("旧配置缺少动画开关时摘要保留原有动画阶段", () => {
   expect(detectionTaskStages({ precheck: false, terminal: false, terminal_rounds: 3 })).toEqual([
     "动画检测",
   ]);
+});
+
+it("旧配置仅选择终端检测时不能保存", () => {
+  expect(detectionTaskSchema.safeParse({ ...base, terminal: true }).success).toBe(false);
 });

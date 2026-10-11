@@ -74,11 +74,20 @@ func (s *Store) routingCapacityInventoryForAccount(ctx context.Context, accountI
 }
 
 func routingCapacityInventoryForAccount(ctx context.Context, queryer policyQueryer, accountID *string) (map[string]routingCapacityAccount, error) {
+	return routingCapacityInventoryForScope(ctx, queryer, accountID, nil)
+}
+
+func routingCapacityInventoryForScope(ctx context.Context, queryer policyQueryer, accountID, upstreamID *string) (map[string]routingCapacityAccount, error) {
 	bindingScope, accountScope := "", ""
 	arguments := []any{}
 	if accountID != nil {
 		bindingScope, accountScope = "WHERE b.local_account_id=?", "WHERE a.id=?"
 		arguments = append(arguments, strings.TrimSpace(*accountID), strings.TrimSpace(*accountID))
+	} else if upstreamID != nil {
+		// Aggregate every binding before filtering so a conflicting account is
+		// never silently assigned to one of its upstreams or omitted entirely.
+		accountScope = "WHERE COALESCE(bound.upstream_id,h.upstream_id,'')=? OR bound.identity_count>1"
+		arguments = append(arguments, *upstreamID)
 	}
 	rows, err := queryer.QueryContext(ctx, fmt.Sprintf(upstreamCapacityAccountQuery, bindingScope, accountScope), arguments...)
 	if err != nil {
@@ -150,8 +159,8 @@ func addConfiguredConcurrency(total *int64, unknown *bool, concurrency *int64, s
 	*total += *concurrency
 }
 
-func (s *Store) upstreamConcurrencyTotals(ctx context.Context) (map[string]upstreamConcurrencyTotals, error) {
-	inventory, err := s.routingCapacityInventory(ctx)
+func (s *Store) upstreamConcurrencyTotals(ctx context.Context, upstreamID *string) (map[string]upstreamConcurrencyTotals, error) {
+	inventory, err := routingCapacityInventoryForScope(ctx, s.db, nil, upstreamID)
 	if err != nil {
 		return nil, err
 	}

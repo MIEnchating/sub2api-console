@@ -27,6 +27,7 @@ export const accountStatusLabels: Record<string, string> = {
   unknown: "未知",
 };
 export const workbenchKeys = { accounts: ["account-workbench", "accounts"] as const };
+export const rememberedAccountKey = ["account-workbench", "remembered-accounts"] as const;
 export const templateKeys = { library: ["account-workbench", "templates"] as const };
 export const runKeys = { list: ["account-workbench", "runs"] as const };
 export const maintenanceKey = ["account-workbench", "maintenance"] as const;

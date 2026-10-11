@@ -6,6 +6,7 @@ import (
 )
 
 func TestPolicyChangeThresholdRejectsNonDecimalOrUnboundedValues(t *testing.T) {
+	t.Parallel()
 	for _, value := range []string{"1/2", "0x1", "1e-1001"} {
 		t.Run(value, func(t *testing.T) {
 			store := openPolicyStore(t)

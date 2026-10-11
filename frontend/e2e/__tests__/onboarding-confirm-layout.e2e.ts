@@ -1,3 +1,4 @@
+import { dictionaryResponse } from "./fixtures/dictionaries";
 import { expect, test } from "@playwright/test";
 import { pageFixtures } from "./fixtures/page-shell";
 
@@ -43,7 +44,9 @@ test.beforeEach(async ({ page }) => {
       },
       "/api/setup/status": { initialized: true, configuration_errors: [] },
       "/api/auth/session": { authenticated: true, username: "布局测试" },
-      "/api/dictionaries": { items: [] },
+      "/api/dictionaries": dictionaryResponse(route.request().url(), [
+        { value: "3", name: "国产-平价" },
+      ]),
       "/api/upstreams/layout.example.test/configuration": upstream,
       "/api/groups": [{ id: "3", name: "国产-平价", platform: "openai", account_count: 0 }],
       "/api/onboarding/prepare": {

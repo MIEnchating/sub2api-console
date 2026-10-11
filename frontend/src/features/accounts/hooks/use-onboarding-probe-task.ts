@@ -4,6 +4,8 @@ import { z } from "zod";
 import { api, type OnboardingProbeMode, type Task } from "@/api";
 import { taskIsTerminal, taskPollInterval } from "@/lib/task-state";
 
+import { animationResultSchema } from "@/features/model-check/lib/animation-task-results";
+
 const probeStepsSchema = z.array(
   z.object({
     stage: z.string(),
@@ -14,6 +16,7 @@ const probeStepsSchema = z.array(
 );
 export type ProbeStep = z.infer<typeof probeStepsSchema>[number];
 export const probeTaskResultSchema = z.object({
+  animation: animationResultSchema.optional(),
   status: z.enum(["passed", "failed", "skipped"]),
   message: z.string(),
   request_model: z.string(),
@@ -40,7 +43,7 @@ export function useOnboardingProbeTask(host: string, groupId: string) {
   const mounted = useRef(true);
   const query = useQuery({
     queryKey: ["onboarding-probe-task", taskId],
-    queryFn: () => api.task(taskId!),
+    queryFn: ({ signal }) => api.task(taskId!, signal),
     enabled: taskId !== null,
     refetchInterval: (value) => taskPollInterval(value, 250),
   });

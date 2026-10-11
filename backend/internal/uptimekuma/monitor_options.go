@@ -45,20 +45,25 @@ var supportedMonitorTypes = map[string]bool{"http": true, "keyword": true, "port
 
 func isHTTP(kind string) bool { return kind == "http" || kind == "keyword" }
 func rawString(raw map[string]json.RawMessage, key string) string {
+	rawValue, ok := raw[key]
+	if !ok || len(rawValue) == 0 || string(rawValue) == "null" {
+		return ""
+	}
 	var value string
-	_ = json.Unmarshal(raw[key], &value)
+	_ = json.Unmarshal(rawValue, &value)
 	return value
 }
 func rawInt(raw map[string]json.RawMessage, key string, fallback int) int {
-	if string(raw[key]) == "null" {
+	rawValue, ok := raw[key]
+	if !ok || len(rawValue) == 0 || string(rawValue) == "null" {
 		return fallback
 	}
 	var n int
-	if json.Unmarshal(raw[key], &n) == nil {
+	if json.Unmarshal(rawValue, &n) == nil {
 		return n
 	}
 	var text string
-	if json.Unmarshal(raw[key], &text) == nil {
+	if json.Unmarshal(rawValue, &text) == nil {
 		if v, err := strconv.Atoi(text); err == nil {
 			return v
 		}
@@ -66,11 +71,24 @@ func rawInt(raw map[string]json.RawMessage, key string, fallback int) int {
 	return fallback
 }
 func rawBool(raw map[string]json.RawMessage, key string) bool {
+	rawValue, ok := raw[key]
+	if !ok || len(rawValue) == 0 || string(rawValue) == "null" {
+		return false
+	}
 	var value bool
-	if json.Unmarshal(raw[key], &value) == nil {
+	if json.Unmarshal(rawValue, &value) == nil {
 		return value
 	}
-	return rawInt(raw, key, 0) != 0
+	var number int
+	if json.Unmarshal(rawValue, &number) == nil {
+		return number != 0
+	}
+	var text string
+	if json.Unmarshal(rawValue, &text) == nil {
+		n, err := strconv.Atoi(text)
+		return err == nil && n != 0
+	}
+	return false
 }
 func monitorOptions(raw map[string]json.RawMessage) *MonitorOptions {
 	o := &MonitorOptions{Hostname: rawString(raw, "hostname"), Port: rawInt(raw, "port", 0), Keyword: rawString(raw, "keyword"), DNSRecordType: rawString(raw, "dns_resolve_type"), DNSResolver: rawString(raw, "dns_resolve_server"), Method: rawString(raw, "method"), Timeout: rawInt(raw, "timeout", 16), RetryInterval: rawInt(raw, "retryInterval", 60), MaxRetries: rawInt(raw, "maxretries", 0), ResendInterval: rawInt(raw, "resendInterval", 0), MaxRedirects: rawInt(raw, "maxredirects", 10), IgnoreTLS: rawBool(raw, "ignoreTls"), UpsideDown: rawBool(raw, "upsideDown"), AuthMethod: rawString(raw, "authMethod"), HeadersConfigured: rawString(raw, "headers") != "", BodyConfigured: rawString(raw, "body") != "", AuthConfigured: rawString(raw, "basic_auth_pass") != "" || rawString(raw, "bearer_token") != "", AcceptedStatusCodes: []string{"200-299"}, NotificationIDs: []int64{}}

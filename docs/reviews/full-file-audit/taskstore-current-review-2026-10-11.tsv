@@ -1,0 +1,1 @@
+backend/internal/taskstore/store_test.go	a375184fa505e24127d127529bcbc86bedd8a7cc6152f408e969f84ac8da6394	reviewed	匹配基线审默认列表上限回归：由显式 20 改为 nil，仍断言最新二十项及倒序，临时数据库；覆盖默认参数契约，没有删掉断言或放宽验证。 基线 825ebb06ca3fffb13490d7c17081218b072bb75a / 91edeb66393c66e833f3dc78de7530b4e83ec6ae919b9cc850cec4d768826c1a，原记录 history-json-projection-2026-10-09.tsv。 本轮未确认新增缺陷，无业务/测试修改，未重复执行检查。

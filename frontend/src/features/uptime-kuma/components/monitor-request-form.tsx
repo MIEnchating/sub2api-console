@@ -1,6 +1,6 @@
 import { Controller, type UseFormReturn } from "react-hook-form";
 import type { KumaMonitor } from "@/api";
-import { FormField } from "@/App";
+import { FormField } from "@/components/form-field";
 import { JsonEditorField } from "@/components/json-editor/form-field";
 import { Checkbox } from "@/components/ui/checkbox";
 import {

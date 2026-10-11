@@ -26,7 +26,9 @@ func TestAccountHistoryReadsUseCoveringIndexesOnFreshAndExistingDatabases(t *tes
 	for _, existing := range []bool{false, true} {
 		if existing {
 			if _, err := db.Exec(`INSERT INTO accounts(id,name,updated_at) VALUES('41','preserved','now');
-    DROP INDEX IF EXISTS ix_account_stability_covering;
+    DROP INDEX IF EXISTS ix_account_stability_grouped;
+    CREATE INDEX ix_account_stability_covering ON account_stability_samples(account_id,observed_at,outcome);
+    CREATE INDEX ix_account_stability_window ON account_stability_samples(account_id,observed_at);
     DROP INDEX IF EXISTS ix_health_samples_account_window;
     DROP INDEX IF EXISTS ix_health_samples_source_window`); err != nil {
 				t.Fatal(err)
@@ -37,6 +39,10 @@ func TestAccountHistoryReadsUseCoveringIndexesOnFreshAndExistingDatabases(t *tes
 			}
 			if err := reopened.Close(); err != nil {
 				t.Fatal(err)
+			}
+			var obsolete int
+			if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_schema WHERE name IN ('ix_account_stability_covering','ix_account_stability_window')`).Scan(&obsolete); err != nil || obsolete != 0 {
+				t.Fatalf("obsolete stability indexes after upgrade=%d err=%v", obsolete, err)
 			}
 			var name string
 			if err := db.QueryRow(`SELECT name FROM accounts WHERE id='41'`).Scan(&name); err != nil || name != "preserved" {

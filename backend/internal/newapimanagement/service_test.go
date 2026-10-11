@@ -742,7 +742,7 @@ func TestSaveModelPricesRollsBackEarlierOptionsWhenLaterWriteFails(t *testing.T)
 	}}, &repositoryStub{}, server.Client(), nil, nil)
 
 	_, err := service.SaveModelPrices(context.Background(), "platform-1", []ModelPriceInput{{
-		Model: "fixed-model", ModelPrice: "3.5",
+		Model: "token-model", InputRatio: "1", CompletionRatio: "2",
 	}})
 
 	if err == nil {

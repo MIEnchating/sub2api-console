@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/MIEnchating/sub2api-console/backend/internal/accountautomation"
 	"github.com/MIEnchating/sub2api-console/backend/internal/accountdelete"
 	"github.com/MIEnchating/sub2api-console/backend/internal/accountops"
 	"github.com/MIEnchating/sub2api-console/backend/internal/accountworkbench"
@@ -38,7 +39,6 @@ import (
 	"github.com/MIEnchating/sub2api-console/backend/internal/probe"
 	"github.com/MIEnchating/sub2api-console/backend/internal/routing"
 	"github.com/MIEnchating/sub2api-console/backend/internal/routingwrite"
-	"github.com/MIEnchating/sub2api-console/backend/internal/runtimepolicy"
 	"github.com/MIEnchating/sub2api-console/backend/internal/systeminfo"
 	"github.com/MIEnchating/sub2api-console/backend/internal/taskcontext"
 	"github.com/MIEnchating/sub2api-console/backend/internal/taskrecovery"
@@ -151,6 +151,7 @@ func run() error {
 	logTasksRunner := newTaskRunner("logs")
 	uptimeKumaTasksRunner := newTaskRunner("uptime_kuma")
 	newAPIChannelTasksRunner := newTaskRunner("newapi_channel")
+	accountModelAutomationGroupRunner := newTaskRunner("account_model_automation_group")
 	liveTasks := newTaskRunner("live")
 	workbenchTasks := newTaskRunner("workbench")
 	// Recovery dispatch must not queue behind long-lived housekeeping loops.
@@ -162,7 +163,7 @@ func run() error {
 		modelAnimationSchedulerRunner,
 		upstreamSyncTasksRunner, upstreamDeleteTasksRunner, accountDeleteTasksRunner,
 		onboardingTasksRunner, authRecoveryTasksRunner, inspectionTasksRunner, logTasksRunner,
-		uptimeKumaTasksRunner, newAPIChannelTasksRunner, liveTasks, workbenchTasks,
+		uptimeKumaTasksRunner, newAPIChannelTasksRunner, accountModelAutomationGroupRunner, liveTasks, workbenchTasks,
 	}
 	taskRunners := make([]taskrunner.TaskRunner, 0, len(taskGroups))
 	for _, group := range taskGroups {
@@ -236,6 +237,7 @@ func run() error {
 	upstreamDeleteService := upstreamdelete.New(businessStore, privateStore, taskStore)
 	accountDeleteService := accountdelete.New(businessStore, privateStore, upstreamReader, taskStore)
 	onboardingService := onboarding.New(businessStore, privateStore, upstreamReader, taskStore)
+	onboardingService.UseAnimationService(modelChecks)
 	captchaManager := authrecovery.NewCaptchaManager(
 		privateStore,
 		authClient,
@@ -301,6 +303,8 @@ func run() error {
 	logService := consolelogs.New(businessStore, taskStore)
 	logService.UseTaskRunner(logTasksRunner)
 	logMaintenance := consolelogs.NewMaintenance(privateStore, businessStore, taskStore)
+	logMaintenance.UseTaskRunner(logTasksRunner, taskStore)
+	logMaintenance.UseCacheInvalidator(logService.Invalidate)
 	evidenceService := evidence.New(businessStore, probeTasks)
 	liveResults := evidence.NewLive(func(ctx context.Context, accountID string) error {
 		policy, err := businessStore.ControlPolicy(ctx)
@@ -313,30 +317,7 @@ func run() error {
 	routingService := routing.NewService(businessStore)
 	routingWriteService := routingwrite.New(privateStore, businessStore)
 	managementTasks.UseRateReconciliation(func(ctx context.Context, ids []string, actor string) error {
-		mode, err := businessStore.Mode(ctx)
-		if err != nil || mode != runtimepolicy.Full {
-			return err
-		}
-		priceErr := pricingTasks.ReconcileAccountRates(ctx, ids, actor)
-		// A failed migration must still enforce the current cost boundary.
-		manualResult, manualErr := routingWriteService.EnforceManualCostWall(ctx, ids, actor)
-		if manualResult.Failed > 0 {
-			manualErr = errors.Join(manualErr, fmt.Errorf("手动账号成本墙写回失败 %d 项", manualResult.Failed))
-		}
-		var routingErr error
-		for _, id := range ids {
-			calculated, err := routingService.Calculate(ctx, routing.Scope{AccountID: &id}, true)
-			if err != nil {
-				routingErr = errors.Join(routingErr, err)
-				continue
-			}
-			applied, err := routingWriteService.Apply(ctx, calculated.AccountTargets, actor)
-			if applied.Failed > 0 {
-				err = errors.Join(err, fmt.Errorf("账号 %s 成本复核写回失败", id))
-			}
-			routingErr = errors.Join(routingErr, err)
-		}
-		return errors.Join(priceErr, manualErr, routingErr)
+		return reconcileConfirmedRates(ctx, ids, actor, businessStore, pricingTasks, routingService, routingWriteService)
 	})
 	inspectionRunner := inspection.NewRunner(
 		businessStore,
@@ -376,6 +357,23 @@ func run() error {
 	}()
 	manualInspections := inspection.NewManualService(inspectionScheduler, inspectionRunner, taskStore)
 	manualInspections.UseTaskRunner(inspectionTasksRunner)
+	newAPIManagement := newapimanagement.New(
+		privateStore,
+		businessStore,
+		&http.Client{Timeout: 20 * time.Second},
+		upstreamReader,
+		authClient,
+	)
+	accountModelAutomation := accountautomation.New(accountTasks, newAPIManagement, businessStore, taskStore, newAPIChannelTasksRunner, businessStore)
+	accountModelAutomation.UseScheduleRepository(privateStore)
+	accountModelAutomation.UseGroupRunner(accountModelAutomationGroupRunner)
+	accountModelAutomation.StartSchedules(serviceContext)
+	automationSchedulesStarted := true
+	defer func() {
+		if automationSchedulesStarted {
+			accountModelAutomation.StopSchedules()
+		}
+	}()
 	recoveryHandlers := map[string]taskrecovery.Handler{
 		"account-rate-sync":           managementTasks.ResumeTask,
 		"automatic-inspection":        manualInspections.ResumeTask,
@@ -385,6 +383,7 @@ func run() error {
 		"account-model-combined":      modelChecks.ResumeTask,
 		"account-terminal-continuity": modelChecks.ResumeTask,
 		"managed-model-detection":     modelChecks.ResumeTask,
+		"account-model-automation":    accountModelAutomation.ResumeTask,
 	}
 	if len(pendingRecovery) > 0 {
 		log.Printf("准备恢复 %d 个中断的后台任务", len(pendingRecovery))
@@ -392,49 +391,43 @@ func run() error {
 			return err
 		}
 	}
-	newAPIManagement := newapimanagement.New(
-		privateStore,
-		businessStore,
-		&http.Client{Timeout: 20 * time.Second},
-		upstreamReader,
-		authClient,
-	)
 	systemMetrics := systeminfo.New(cfg.DataDir)
 
 	handler := api.New(cfg, privateStore, businessStore, api.Dependencies{
-		TaskSettings:       taskSettings,
-		UptimeKuma:         uptimekuma.NewTasks(uptimekuma.New(privateStore, nil), taskStore, uptimeKumaTasksRunner),
-		AccountResultsLive: liveResults,
-		Notification:       notificationService,
-		NotificationTarget: notificationTargetDiscovery,
-		Inspection:         inspectionScheduler,
-		InspectionTasks:    manualInspections,
-		RoutingControl:     routingWriteService,
-		Tasks:              taskStore,
-		TaskCanceller:      taskrunner.CompositeCanceller{Groups: taskRunners},
-		Logs:               logService,
-		LogMaintenance:     logMaintenance,
-		AlertTasks:         alertTasks,
-		ManagementTasks:    managementTasks,
-		AccountMaintenance: managementTasks,
-		AccountTasks:       accountTasks,
-		AccountModelSync:   accountTasks,
-		AccountDelete:      accountDeleteService,
-		ProbeTasks:         probeTasks,
-		ModelChecks:        modelChecks,
-		AccountWorkbench:   accountWorkbench,
-		UpstreamDetect:     upstreamDetector,
-		UpstreamConfigs:    upstreamConfigurations,
-		UpstreamSync:       upstreamSyncTasks,
-		UpstreamDelete:     upstreamDeleteService,
-		AuthRecovery:       authRecoveryService,
-		Onboarding:         onboardingService,
-		RequestTrace:       opsTrafficService,
-		SystemLogs:         opsTrafficService,
-		Pricing:            pricingTasks,
-		NewAPIManagement:   newAPIManagement,
-		NewAPIChannelTasks: newapimanagement.NewChannelTasks(newAPIManagement, taskStore, newAPIChannelTasksRunner),
-		SystemMetrics:      systemMetrics,
+		TaskSettings:           taskSettings,
+		UptimeKuma:             uptimekuma.NewTasks(uptimekuma.New(privateStore, nil), taskStore, uptimeKumaTasksRunner),
+		AccountResultsLive:     liveResults,
+		Notification:           notificationService,
+		NotificationTarget:     notificationTargetDiscovery,
+		Inspection:             inspectionScheduler,
+		InspectionTasks:        manualInspections,
+		RoutingControl:         routingWriteService,
+		Tasks:                  taskStore,
+		TaskCanceller:          taskrunner.CompositeCanceller{Groups: taskRunners},
+		Logs:                   logService,
+		LogMaintenance:         logMaintenance,
+		AlertTasks:             alertTasks,
+		ManagementTasks:        managementTasks,
+		AccountMaintenance:     managementTasks,
+		AccountTasks:           accountTasks,
+		AccountModelSync:       accountTasks,
+		AccountModelAutomation: accountModelAutomation,
+		AccountDelete:          accountDeleteService,
+		ProbeTasks:             probeTasks,
+		ModelChecks:            modelChecks,
+		AccountWorkbench:       accountWorkbench,
+		UpstreamDetect:         upstreamDetector,
+		UpstreamConfigs:        upstreamConfigurations,
+		UpstreamSync:           upstreamSyncTasks,
+		UpstreamDelete:         upstreamDeleteService,
+		AuthRecovery:           authRecoveryService,
+		Onboarding:             onboardingService,
+		RequestTrace:           opsTrafficService,
+		SystemLogs:             opsTrafficService,
+		Pricing:                pricingTasks,
+		NewAPIManagement:       newAPIManagement,
+		NewAPIChannelTasks:     newapimanagement.NewChannelTasks(newAPIManagement, taskStore, newAPIChannelTasksRunner),
+		SystemMetrics:          systemMetrics,
 	})
 	servers := []httpServeTarget{{
 		name:     cfg.ListenAddress,
@@ -490,6 +483,11 @@ func run() error {
 		maintenanceErr = fmt.Errorf("停止日志维护任务失败: %w", maintenanceErr)
 	}
 	var taskErr error
+	automationErr := accountModelAutomation.StopSchedulesContext(shutdown)
+	automationSchedulesStarted = false
+	if automationErr != nil {
+		automationErr = fmt.Errorf("停止运营任务调度器失败: %w", automationErr)
+	}
 	for _, group := range taskGroups {
 		taskErr = errors.Join(taskErr, group.Shutdown(shutdown))
 	}
@@ -501,11 +499,11 @@ func run() error {
 		serveErr = errors.Join(serveErr, <-serveErrors)
 		remainingServers--
 	}
-	if schedulerErr != nil || maintenanceErr != nil || taskErr != nil || httpErr != nil {
+	if schedulerErr != nil || maintenanceErr != nil || automationErr != nil || taskErr != nil || httpErr != nil {
 		// Do not explicitly close databases while a task or HTTP handler may still be finalizing.
 		closeStores = false
 	}
-	return errors.Join(serveErr, httpErr, schedulerErr, maintenanceErr, taskErr)
+	return errors.Join(serveErr, httpErr, schedulerErr, maintenanceErr, automationErr, taskErr)
 }
 
 func frontendHandler(apiHandler http.Handler, directory string) http.Handler {

@@ -11,14 +11,83 @@ import (
 	"github.com/MIEnchating/sub2api-console/backend/internal/usagequality"
 )
 
+const accountStabilityCacheTTL = 5 * time.Second
+
+func (s *Store) cachedAccountStability(now time.Time, revision int64, accounts map[string]*accountProjection) (map[string]accountquality.Statistics, bool) {
+	s.stabilityCacheMu.Lock()
+	defer s.stabilityCacheMu.Unlock()
+	if len(s.stabilityCache) == 0 || revision != s.stabilityCacheVersion || now.Before(s.stabilityCacheAt) || now.Sub(s.stabilityCacheAt) >= accountStabilityCacheTTL {
+		return nil, false
+	}
+	for accountID := range accounts {
+		if _, ok := s.stabilityCache[accountID]; !ok {
+			return nil, false
+		}
+	}
+	result := make(map[string]accountquality.Statistics, len(accounts))
+	for accountID := range accounts {
+		result[accountID] = s.stabilityCache[accountID]
+	}
+	return result, true
+}
+
+func (s *Store) cacheAccountStability(now time.Time, revision int64, accounts map[string]*accountProjection) {
+	values := make(map[string]accountquality.Statistics, len(accounts))
+	for accountID, account := range accounts {
+		if account.Stability != nil {
+			values[accountID] = *account.Stability
+		}
+	}
+	s.stabilityCacheMu.Lock()
+	defer s.stabilityCacheMu.Unlock()
+	// An older WAL snapshot finishing later must not evict a newer cache.
+	if revision < s.stabilityCacheVersion || (revision == s.stabilityCacheVersion && now.Before(s.stabilityCacheAt)) {
+		return
+	}
+	s.stabilityCacheAt = now
+	s.stabilityCacheVersion = revision
+	s.stabilityCache = values
+}
+
+func (s *Store) invalidateAccountStabilityCache() {
+	s.stabilityCacheMu.Lock()
+	s.stabilityCacheAt = time.Time{}
+	s.stabilityCache = nil
+	s.stabilityCacheMu.Unlock()
+}
+
 func (s *Store) loadAccountStability(ctx context.Context, accounts map[string]*accountProjection) error {
-	now := time.Now().UTC()
+	now, snapshot := s.ReadSnapshotTime(ctx)
+	if !snapshot {
+		// Pin version and aggregate reads together even for non-HTTP callers.
+		return s.WithReadSnapshot(ctx, func(snapshot context.Context) error {
+			return s.loadAccountStability(snapshot, accounts)
+		})
+	}
 	for _, account := range accounts {
 		stats := accountquality.New(now)
 		account.Stability = &stats
 	}
 	if len(accounts) == 0 {
 		return nil
+	}
+	var revision int64
+	cacheable := len(accounts) > 1
+	if cacheable {
+		// The version changes in the same SQLite transaction as the samples,
+		// so this read identifies exactly the data visible to a WAL snapshot.
+		if err := s.db.QueryRowContext(ctx, `SELECT revision FROM account_stability_version WHERE id=1`).Scan(&revision); err != nil {
+			return err
+		}
+		if cached, ok := s.cachedAccountStability(now, revision, accounts); ok {
+			for accountID, account := range accounts {
+				if statistics, present := cached[accountID]; present {
+					value := statistics
+					account.Stability = &value
+				}
+			}
+			return nil
+		}
 	}
 	args := []any{now.Add(-24 * time.Hour).Format(healthSampleTimeLayout), now.Add(-30 * 24 * time.Hour).Format(healthSampleTimeLayout), now.Format(healthSampleTimeLayout)}
 	ids := make([]string, 0, len(accounts))
@@ -46,6 +115,9 @@ func (s *Store) loadAccountStability(ctx context.Context, accounts map[string]*a
 	}
 	for _, account := range accounts {
 		account.Stability.Calculate(false)
+	}
+	if cacheable {
+		s.cacheAccountStability(now, revision, accounts)
 	}
 	return nil
 }

@@ -1,7 +1,6 @@
 import { useId, type ReactElement } from "react";
 import type { UseFormReturn } from "react-hook-form";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Input } from "@/components/ui/input";
 import { FieldError } from "@/components/field-error";
 import { cn } from "@/lib/utils";
 import { detectionStageOptions } from "../constants";
@@ -24,7 +23,7 @@ export function DetectionTaskStages(props: {
       <p id={`${id}-hint`} className="text-xs text-muted-foreground">
         可多选，至少选择一项。
       </p>
-      <div className="grid min-w-0 gap-3 sm:grid-cols-3">
+      <div className="grid min-w-0 gap-3 sm:grid-cols-2">
         {detectionStageOptions.map((option) => (
           <label
             key={option.value}
@@ -61,38 +60,17 @@ export function DetectionTaskStages(props: {
         ))}
       </div>
       <FieldError id={`${id}-error`} message={errors.animation?.message} />
-      {(value.precheck || value.terminal) && (
-        <div className="grid min-w-0 items-start gap-4 rounded-lg bg-muted/30 p-3 sm:grid-cols-2">
-          {value.precheck && (
-            <div className="min-w-0 space-y-2">
-              <p className="text-sm font-medium">前置检测题目</p>
-              <PrecheckQuestionSelector
-                value={value.precheck_questions}
-                onChange={(questions) =>
-                  form.setValue("precheck_questions", questions, { shouldValidate: true })
-                }
-                disabled={props.pending}
-              />
-              <FieldError message={errors.precheck_questions?.message} />
-            </div>
-          )}
-          {value.terminal && (
-            <div className="min-w-0 space-y-2">
-              <label className="block space-y-1 text-sm">
-                终端检测轮数
-                <Input
-                  type="number"
-                  min={1}
-                  max={20}
-                  {...form.register("terminal_rounds", { valueAsNumber: true })}
-                  disabled={props.pending}
-                  aria-invalid={!!errors.terminal_rounds}
-                />
-              </label>
-              <FieldError message={errors.terminal_rounds?.message} />
-              <p className="text-xs text-muted-foreground">每轮独立请求并保存结果，最多 20 轮。</p>
-            </div>
-          )}
+      {value.precheck && (
+        <div className="min-w-0 space-y-2">
+          <p className="text-sm font-medium">前置检测题目</p>
+          <PrecheckQuestionSelector
+            value={value.precheck_questions}
+            onChange={(questions) =>
+              form.setValue("precheck_questions", questions, { shouldValidate: true })
+            }
+            disabled={props.pending}
+          />
+          <FieldError message={errors.precheck_questions?.message} />
         </div>
       )}
       <p className="text-xs text-muted-foreground wrap-anywhere">

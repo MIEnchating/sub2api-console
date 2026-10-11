@@ -1,0 +1,3 @@
+frontend/src/components/task-startup-state.tsx	54d8d9d73c4d2193e6da7337544352603405b6c776fcdf8e6cfa7331490b053b	reviewed	全文检查；通用取消入口生命周期与缓存刷新，证据见第133轮
+frontend/src/components/__tests__/task-cancel-lifecycle.test.tsx	2ac36e68be015083681e68682c6579f0b69c9d5f697a3054034d2a58ca9a117a	reviewed	全文检查；通用取消入口生命周期与缓存刷新，证据见第133轮
+frontend/src/components/__tests__/task-startup-state.test.tsx	f9f09312a253d9b12ea3134fd9858bdb74931365ed7c5bbbba0065facbfca1d5	reviewed	全文检查；通用取消入口生命周期与缓存刷新，证据见第133轮

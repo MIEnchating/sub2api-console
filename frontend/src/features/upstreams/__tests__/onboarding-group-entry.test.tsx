@@ -1,3 +1,4 @@
+import { seedDictionaries, dictionaryItems } from "@/test/dictionary-fixtures";
 import type { QueryClient } from "@tanstack/react-query";
 import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
@@ -69,6 +70,12 @@ it("Claude 上游分组在存在 Anthropic 或 Composite 本地分组时可以�
       platform: index === 0 ? "anthropic" : "composite",
     })),
   );
+  seedDictionaries(client, {
+    group: [
+      { value: "1", name: "CCMAX-特价" },
+      { value: "2", name: "国产-平价" },
+    ],
+  });
   await act(async () => {
     await client!.invalidateQueries({ queryKey: ["groups"] });
   });
@@ -99,6 +106,9 @@ it("本地分组为空后刷新取得兼容分组时重新提供选择", async (
       status: "healthy",
     },
   ]);
+  vi.spyOn(api, "dictionaries").mockResolvedValue({
+    items: dictionaryItems("group", [{ value: "1", name: "已同步分组" }]),
+  });
   fireEvent.click(refresh);
   const selector = await screen.findByRole("combobox", { name: "已有绑定分组 本地分组" });
   await waitFor(() =>

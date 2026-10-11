@@ -71,6 +71,11 @@ type accountNameRepository interface {
 	AccountNamesForMaintenance(context.Context, []string) (map[string]string, error)
 }
 
+type maintenanceAccountIDRepository interface {
+	BoundAccountIDsForMaintenance(context.Context) ([]string, error)
+	BoundAccountIDsForMaintenanceHost(context.Context, string) ([]string, error)
+}
+
 type UpstreamAuthResolver interface {
 	ResolveAuth(context.Context, string, string) (*configstore.AuthRecord, error)
 }
@@ -216,6 +221,9 @@ func (s *Service) accountMutationProtectionReason(
 	if allowManualPriority {
 		protection.ManualPriority = false
 	}
+	// A fuse stops scheduling, but address, catalog and cost maintenance must
+	// continue. Destructive operations use the full protection independently.
+	protection.ManualFused = false
 	if !protection.Protected() {
 		return nil, nil
 	}
@@ -284,11 +292,10 @@ func (s *Service) EnqueueHostAccountRateSync(ctx context.Context, host, actor st
 	if err != nil || !allowed {
 		return "", err
 	}
-	bound, err := s.repository.BoundAccountsForMaintenance(ctx, nil)
+	accountIDs, err := s.maintenanceAccountIDsForHost(ctx, host)
 	if err != nil {
 		return "", fmt.Errorf("读取上游绑定账号失败：%w", err)
 	}
-	accountIDs := accountIDsForHost(bound, host)
 	if len(accountIDs) == 0 {
 		return "", nil
 	}
@@ -304,11 +311,10 @@ func (s *Service) EnqueueHostAccountBaseURLSync(ctx context.Context, host, actor
 	if err != nil || !allowed {
 		return "", err
 	}
-	bound, err := s.repository.BoundAccountsForMaintenance(ctx, nil)
+	accountIDs, err := s.maintenanceAccountIDsForHost(ctx, host)
 	if err != nil {
 		return "", fmt.Errorf("读取上游绑定账号失败：%w", err)
 	}
-	accountIDs := accountIDsForHost(bound, host)
 	if len(accountIDs) == 0 {
 		return "", nil
 	}
@@ -324,11 +330,10 @@ func (s *Service) EnqueueAllAccountRateSync(ctx context.Context, actor string) (
 	if err != nil || !allowed {
 		return "", err
 	}
-	bound, err := s.repository.BoundAccountsForMaintenance(ctx, nil)
+	accountIDs, err := s.maintenanceAccountIDs(ctx)
 	if err != nil {
 		return "", fmt.Errorf("读取上游绑定账号失败：%w", err)
 	}
-	accountIDs := uniqueMaintenanceAccountIDs(bound)
 	if len(accountIDs) == 0 {
 		return "", nil
 	}
@@ -347,11 +352,10 @@ func (s *Service) EnqueueAccountRateSyncBatch(ctx context.Context, batchSize, ba
 	if err != nil || !allowed {
 		return "", err
 	}
-	bound, err := s.repository.BoundAccountsForMaintenance(ctx, nil)
+	accountIDs, err := s.maintenanceAccountIDs(ctx)
 	if err != nil {
 		return "", fmt.Errorf("读取上游绑定账号失败：%w", err)
 	}
-	accountIDs := uniqueMaintenanceAccountIDs(bound)
 	if len(accountIDs) == 0 {
 		return "", nil
 	}
@@ -414,6 +418,28 @@ func (s *Service) automaticRateSyncAllowed(ctx context.Context) (bool, error) {
 		return false, err
 	}
 	return mode == runtimepolicy.Full, nil
+}
+
+func (s *Service) maintenanceAccountIDs(ctx context.Context) ([]string, error) {
+	if reader, ok := s.repository.(maintenanceAccountIDRepository); ok {
+		return reader.BoundAccountIDsForMaintenance(ctx)
+	}
+	bound, err := s.repository.BoundAccountsForMaintenance(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	return uniqueMaintenanceAccountIDs(bound), nil
+}
+
+func (s *Service) maintenanceAccountIDsForHost(ctx context.Context, host string) ([]string, error) {
+	if reader, ok := s.repository.(maintenanceAccountIDRepository); ok {
+		return reader.BoundAccountIDsForMaintenanceHost(ctx, host)
+	}
+	bound, err := s.repository.BoundAccountsForMaintenance(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	return accountIDsForHost(bound, host), nil
 }
 
 func accountIDsForHost(bound []business.BoundAccountMaintenance, host string) []string {
@@ -534,7 +560,7 @@ func (s *Service) executeMaintenanceContext(parent context.Context, task tasksto
 	} else if operation == "account-configuration-check" {
 		runningMessage = "正在校验 Base URL 并修复错误开户参数"
 	} else if operation == "account-base-url-repair" {
-		runningMessage = "正在修复 Base URL、恢复账号状态并开启调度"
+		runningMessage = "正在修复 Base URL 与账号状态；熔断账号保持停止调度"
 	} else if operation == "account-upstream-host-repair" {
 		runningMessage = "正在根据账号绑定修复归属 Host"
 	} else if operation == "account-defaults-repair" {
@@ -587,7 +613,7 @@ func (s *Service) executeMaintenanceContext(parent context.Context, task tasksto
 					result["updated"], result["unchanged"], result["skipped"], result["fallback"], result["missing"], result["failed"])
 			}
 		} else if operation == "account-base-url-sync" {
-			task.Message = fmt.Sprintf("上游账号 Base URL 同步完成：更新 %v 个，未变 %v 个，失败 %v 个", result["updated"], result["unchanged"], result["failed"])
+			task.Message = fmt.Sprintf("上游账号 Base URL 同步完成：更新 %v 个，未变 %v 个，跳过 %v 个，失败 %v 个", result["updated"], result["unchanged"], result["skipped"], result["failed"])
 			if failed, _ := result["failed"].(int); failed > 0 {
 				task.Status = "failed"
 			}
@@ -1066,6 +1092,12 @@ func (s *Service) repairAccountBaseURLs(ctx context.Context, accountIDs []string
 			results[index] = repairResult{item: item, kind: "skipped"}
 			return
 		}
+		fused, fuseErr := s.accountMaintenanceFused(accountCtx, accountID)
+		if fuseErr != nil {
+			item["status"], item["error"] = "熔断状态读取失败", fuseErr.Error()
+			results[index] = repairResult{item: item, kind: "failed"}
+			return
+		}
 		remoteWritten := false
 		if !explicitTarget {
 			if _, updateErr := client.UpdateAccount(accountCtx, accountID, map[string]any{
@@ -1077,46 +1109,48 @@ func (s *Service) repairAccountBaseURLs(ctx context.Context, accountIDs []string
 			}
 			remoteWritten = true
 		}
-		recoveredRow, recoverErr := client.RecoverAccountState(accountCtx, accountID)
-		if recoverErr != nil {
-			item["status"], item["error"] = "账号状态恢复失败", recoverErr.Error()
-			results[index] = repairResult{item: item, kind: "failed", written: remoteWritten}
-			return
-		}
-		remoteWritten = true
-		if !strings.EqualFold(strings.TrimSpace(fmt.Sprint(firstValue(recoveredRow, "status"))), "active") {
-			if _, statusErr := client.UpdateAccount(accountCtx, accountID, map[string]any{"status": "active"}); statusErr != nil {
-				item["status"], item["error"] = "账号状态恢复失败", statusErr.Error()
+		if !fused {
+			recoveredRow, recoverErr := client.RecoverAccountState(accountCtx, accountID)
+			if recoverErr != nil {
+				item["status"], item["error"] = "账号状态恢复失败", recoverErr.Error()
+				results[index] = repairResult{item: item, kind: "failed", written: remoteWritten}
+				return
+			}
+			remoteWritten = true
+			if !strings.EqualFold(strings.TrimSpace(fmt.Sprint(firstValue(recoveredRow, "status"))), "active") {
+				if _, statusErr := client.UpdateAccount(accountCtx, accountID, map[string]any{"status": "active"}); statusErr != nil {
+					item["status"], item["error"] = "账号状态恢复失败", statusErr.Error()
+					results[index] = repairResult{item: item, kind: "failed", written: true}
+					return
+				}
+			}
+			if _, schedulingErr := client.SetAccountSchedulable(accountCtx, accountID, true); schedulingErr != nil {
+				item["status"], item["error"] = "调度开启失败", schedulingErr.Error()
 				results[index] = repairResult{item: item, kind: "failed", written: true}
 				return
 			}
 		}
-		if _, schedulingErr := client.SetAccountSchedulable(accountCtx, accountID, true); schedulingErr != nil {
-			item["status"], item["error"] = "调度开启失败", schedulingErr.Error()
-			results[index] = repairResult{item: item, kind: "failed", written: true}
-			return
-		}
-		item["remote_write"] = true
+		item["remote_write"] = remoteWritten
 		confirmedRow, confirmErr := client.Account(accountCtx, accountID)
 		if confirmErr != nil {
 			item["status"], item["error"] = "写后确认失败", confirmErr.Error()
-			results[index] = repairResult{item: item, kind: "failed", written: true}
+			results[index] = repairResult{item: item, kind: "failed", written: remoteWritten}
 			return
 		}
 		confirmedID := strings.TrimSpace(fmt.Sprint(firstValue(confirmedRow, "id", "account_id")))
 		if confirmedID != accountID {
 			item["status"] = "写后确认失败"
 			item["error"] = fmt.Sprintf("账号读回的稳定 ID 为 %q，与请求账号 %s 不一致", confirmedID, accountID)
-			results[index] = repairResult{item: item, kind: "failed", written: true}
+			results[index] = repairResult{item: item, kind: "failed", written: remoteWritten}
 			return
 		}
 		confirmed, confirmedSource, confirmedAvailable := managementRowBaseURL(confirmedRow)
 		confirmedStatus := strings.ToLower(strings.TrimSpace(fmt.Sprint(firstValue(confirmedRow, "status"))))
 		confirmedSchedulable, schedulableOK := confirmedRow["schedulable"].(bool)
 		if !confirmedAvailable || confirmedSource != "explicit" || !sameBaseURL(confirmed, target) ||
-			confirmedStatus != "active" || !schedulableOK || !confirmedSchedulable {
-			item["status"], item["error"] = "写后确认失败", "Base URL、账号状态或调度状态未全部恢复"
-			results[index] = repairResult{item: item, kind: "failed", written: true}
+			(!fused && confirmedStatus != "active") || !schedulableOK || confirmedSchedulable == fused {
+			item["status"], item["error"] = "写后确认失败", "Base URL、账号状态或调度状态与预期不一致"
+			results[index] = repairResult{item: item, kind: "failed", written: remoteWritten}
 			return
 		}
 		commitMu.Lock()
@@ -1126,11 +1160,14 @@ func (s *Service) repairAccountBaseURLs(ctx context.Context, accountIDs []string
 		commitMu.Unlock()
 		if commitErr != nil {
 			item["status"], item["error"] = "Base URL 修复结果保存失败", commitErr.Error()
-			results[index] = repairResult{item: item, kind: "failed", written: true}
+			results[index] = repairResult{item: item, kind: "failed", written: remoteWritten}
 			return
 		}
 		item["status"], item["readback_confirmed"] = "已修复并恢复调度", true
-		results[index] = repairResult{item: item, kind: "repaired", written: true}
+		if fused {
+			item["status"] = "Base URL 已修复，保持熔断"
+		}
+		results[index] = repairResult{item: item, kind: "repaired", written: remoteWritten}
 	}
 	jobs := make(chan int)
 	var workers sync.WaitGroup

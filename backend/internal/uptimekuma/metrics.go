@@ -1,7 +1,6 @@
 package uptimekuma
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -39,20 +38,20 @@ func (s *Service) metrics(ctx context.Context, cfg configstore.UptimeKumaConfig)
 	if res.StatusCode != 200 {
 		return nil, failure("kuma_metrics_unavailable", "指标接口不可用，请填写 Uptime Kuma 服务地址并检查 /metrics 接口", 502)
 	}
-	body, err := io.ReadAll(io.LimitReader(res.Body, (8<<20)+1))
-	if err != nil || len(body) > 8<<20 {
-		return nil, protocolError()
-	}
-	return parseMetrics(body)
+	return parseMetrics(res.Body)
 }
-func parseMetrics(body []byte) ([]Monitor, error) {
+func parseMetrics(body io.Reader) ([]Monitor, error) {
+	// Parse directly from the bounded response instead of retaining a second
+	// complete copy alongside Prometheus' metric families.
+	limited := &io.LimitedReader{R: body, N: (8 << 20) + 1}
+	reader := &metricsHelpReader{Reader: limited}
 	parser := expfmt.NewTextParser(model.UTF8Validation)
-	families, err := parser.TextToMetricFamilies(bytes.NewReader(body))
-	if err != nil {
+	families, err := parser.TextToMetricFamilies(reader)
+	if err != nil || limited.N == 0 {
 		return nil, protocolError()
 	}
 	// An empty Kuma instance still exposes the monitor_status gauge declaration.
-	if _, ok := families["monitor_status"]; !ok && !bytes.Contains(body, []byte("# HELP monitor_status ")) {
+	if _, ok := families["monitor_status"]; !ok && !reader.found {
 		return nil, protocolError()
 	}
 	items := map[string]*Monitor{}
@@ -62,29 +61,44 @@ func parseMetrics(body []byte) ([]Monitor, error) {
 			continue
 		}
 		for _, metric := range family.Metric {
-			labels := map[string]string{}
+			var rawID, name, kind, url, hostname, port, window string
 			for _, l := range metric.Label {
-				labels[l.GetName()] = l.GetValue()
+				switch l.GetName() {
+				case "monitor_id":
+					rawID = l.GetValue()
+				case "monitor_name":
+					name = l.GetValue()
+				case "monitor_type":
+					kind = l.GetValue()
+				case "monitor_url":
+					url = l.GetValue()
+				case "monitor_hostname":
+					hostname = l.GetValue()
+				case "monitor_port":
+					port = l.GetValue()
+				case "window":
+					window = l.GetValue()
+				}
 			}
-			if labels["monitor_name"] == "" || labels["monitor_type"] == "" || metric.Gauge == nil {
+			if name == "" || kind == "" || metric.Gauge == nil {
 				return nil, protocolError()
 			}
 			id := int64(0)
-			if raw := labels["monitor_id"]; raw != "" {
-				id, err = strconv.ParseInt(raw, 10, 64)
+			if rawID != "" {
+				id, err = strconv.ParseInt(rawID, 10, 64)
 				if err != nil || id <= 0 {
 					return nil, protocolError()
 				}
 			}
 			key := "id:" + strconv.FormatInt(id, 10)
 			if id == 0 {
-				sum := sha256.Sum256([]byte(strings.Join([]string{labels["monitor_name"], labels["monitor_type"], labels["monitor_url"], labels["monitor_hostname"], labels["monitor_port"]}, "\x00")))
+				sum := sha256.Sum256([]byte(strings.Join([]string{name, kind, url, hostname, port}, "\x00")))
 				key = "metric:" + hex.EncodeToString(sum[:])
 			}
 			item := items[key]
 			if item == nil {
-				u, redacted := publicURL(labels["monitor_url"])
-				item = &Monitor{ID: id, Key: key, Name: labels["monitor_name"], Type: labels["monitor_type"], URL: u, URLRedacted: redacted, Active: true}
+				u, redacted := publicURL(url)
+				item = &Monitor{ID: id, Key: key, Name: name, Type: kind, URL: u, URLRedacted: redacted, Active: true}
 				items[key] = item
 			}
 			v := metric.Gauge.GetValue()
@@ -105,7 +119,7 @@ func parseMetrics(body []byte) ([]Monitor, error) {
 			case "monitor_cert_days_remaining":
 				item.CertificateDays = &v
 			case "monitor_uptime_ratio":
-				if labels["window"] == "1d" && v >= 0 && v <= 1 {
+				if window == "1d" && v >= 0 && v <= 1 {
 					item.Uptime = &v
 				}
 			}
@@ -117,4 +131,37 @@ func parseMetrics(body []byte) ([]Monitor, error) {
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i].Key < result[j].Key })
 	return result, nil
+}
+
+// expfmt removes empty metric families. Retain only whether the existing empty
+// instance marker was seen, including when it spans reads, without saving the
+// response. All protocol validation still belongs to the Prometheus parser.
+type metricsHelpReader struct {
+	io.Reader
+	matched int
+	found   bool
+}
+
+func (r *metricsHelpReader) Read(p []byte) (int, error) {
+	n, err := r.Reader.Read(p)
+	if r.found {
+		return n, err
+	}
+	const marker = "# HELP monitor_status "
+	for _, c := range p[:n] {
+		if c == marker[r.matched] {
+			r.matched++
+		} else if c == marker[0] {
+			// The marker contains no other '#', so only its first byte can
+			// start an overlapping match.
+			r.matched = 1
+		} else {
+			r.matched = 0
+		}
+		if r.matched == len(marker) {
+			r.found = true
+			break
+		}
+	}
+	return n, err
 }

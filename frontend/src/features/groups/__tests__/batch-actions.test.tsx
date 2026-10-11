@@ -2,6 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import userEvent from "@testing-library/user-event";
+import { toast } from "sonner";
 
 import { GroupsPage } from "@/App";
 import { api, type GroupStatus } from "@/api";
@@ -104,7 +105,7 @@ it("顶部维护菜单未勾选时预览当前筛选分组，取消前不执行�
 
 it("顶部维护菜单已有勾选时只处理选中分组，确认后按稳定 ID 写入", async () => {
   const user = userEvent.setup();
-  const control = vi.spyOn(api, "setGroupExcluded").mockResolvedValue(group("2"));
+  const control = vi.spyOn(api, "batchGroupPolicy").mockResolvedValue({ updated: 1 });
   renderGroups([group("1"), group("2")]);
   await user.click(screen.getByRole("checkbox", { name: "选择分组 分组 2" }));
   screen.getByRole("button", { name: "分组维护" }).focus();
@@ -117,7 +118,7 @@ it("顶部维护菜单已有勾选时只处理选中分组，确认后按稳定 
   expect(dialog).toHaveTextContent("分组 2（#2）");
   expect(control).not.toHaveBeenCalled();
   await user.click(within(dialog).getByRole("button", { name: "确认处理 1 个分组" }));
-  await waitFor(() => expect(control).toHaveBeenCalledWith("2", false));
+  await waitFor(() => expect(control).toHaveBeenCalledWith(["2"], "include"));
 });
 
 it("当前页全选只选择有稳定 ID 的分组，跨页保留选择且筛选后清空", () => {
@@ -153,8 +154,7 @@ it.each([
   { label: "排除分组", excluded: true },
   { label: "恢复管控", excluded: false },
 ])("批量$label先展示范围，确认后按稳定 ID 执行并清空选择", async ({ label, excluded }) => {
-  const clear = vi.spyOn(api, "clearGroupPolicy").mockResolvedValue(group("1"));
-  const control = vi.spyOn(api, "setGroupExcluded").mockResolvedValue(group("1"));
+  const control = vi.spyOn(api, "batchGroupPolicy").mockResolvedValue({ updated: 2 });
   renderGroups([group("1", "同名分组"), group("2", "同名分组")]);
   fireEvent.click(screen.getByRole("checkbox", { name: "选择当前页分组" }));
   fireEvent.click(
@@ -163,29 +163,23 @@ it.each([
   const dialog = screen.getByRole("dialog", { name: `批量${label}` });
   expect(dialog).toHaveTextContent("#1");
   expect(dialog).toHaveTextContent("#2");
-  expect(clear).not.toHaveBeenCalled();
+  expect(control).not.toHaveBeenCalled();
   expect(control).not.toHaveBeenCalled();
   fireEvent.click(within(dialog).getByRole("button", { name: "确认处理 2 个分组" }));
   await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
-  if (excluded === null) {
-    expect(clear.mock.calls).toEqual([["1"], ["2"]]);
-    expect(control).not.toHaveBeenCalled();
-  } else {
-    expect(control.mock.calls).toEqual([
-      ["1", excluded],
-      ["2", excluded],
-    ]);
-    expect(clear).not.toHaveBeenCalled();
-  }
+  let action = "include";
+  if (excluded === null) action = "reset";
+  else if (excluded) action = "exclude";
+  expect(control).toHaveBeenCalledWith(["1", "2"], action);
   expect(screen.queryByRole("toolbar", { name: /批量操作/ })).not.toBeInTheDocument();
 });
 
-it("批量请求部分失败时显示原因，并仅保留失败项供重试", async () => {
+it("批量响应失败时提示核对状态且保留全部分组供重试", async () => {
+  const notify = vi.spyOn(toast, "error");
   const control = vi
-    .spyOn(api, "setGroupExcluded")
-    .mockResolvedValueOnce(group("1"))
+    .spyOn(api, "batchGroupPolicy")
     .mockRejectedValueOnce(new Error("分组已被移除，请刷新后重试"))
-    .mockResolvedValueOnce(group("2"));
+    .mockResolvedValueOnce({ updated: 2 });
   renderGroups([group("1"), group("2")]);
   fireEvent.click(screen.getByRole("checkbox", { name: "选择当前页分组" }));
   fireEvent.click(
@@ -194,22 +188,22 @@ it("批量请求部分失败时显示原因，并仅保留失败项供重试", a
     }),
   );
   fireEvent.click(screen.getByRole("button", { name: "确认处理 2 个分组" }));
-  expect(await screen.findByRole("alert")).toHaveTextContent("分组已被移除，请刷新后重试");
-  expect(screen.getByRole("alert")).toHaveTextContent("成功 1 个，失败 1 个");
-  fireEvent.click(screen.getByRole("button", { name: "重试失败的 1 个分组" }));
+  await waitFor(() => expect(notify).toHaveBeenCalled());
+  expect(notify.mock.calls[0]?.[0]).toContain("分组已被移除");
+  expect(notify.mock.calls[0]?.[0]).toContain("核对");
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  expect(screen.getByRole("list", { name: "本次处理的分组" })).toHaveTextContent("#1");
+  expect(screen.getByRole("list", { name: "本次处理的分组" })).toHaveTextContent("#2");
+  fireEvent.click(screen.getByRole("button", { name: "重试全部 2 个分组" }));
   await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
-  expect(control.mock.calls).toEqual([
-    ["1", true],
-    ["2", true],
-    ["2", true],
-  ]);
+  expect(control).toHaveBeenLastCalledWith(["1", "2"], "exclude");
 });
 
 it("执行中禁止重复提交和关闭确认窗口", async () => {
-  let resolve!: (value: GroupStatus) => void;
-  vi.spyOn(api, "clearGroupPolicy").mockReturnValue(
+  let resolve!: () => void;
+  vi.spyOn(api, "batchGroupPolicy").mockReturnValue(
     new Promise((done) => {
-      resolve = done;
+      resolve = () => done({ updated: 1 });
     }),
   );
   renderGroups([group("1")]);
@@ -222,14 +216,16 @@ it("执行中禁止重复提交和关闭确认窗口", async () => {
   fireEvent.click(screen.getByRole("button", { name: "确认处理 1 个分组" }));
   await waitFor(() => expect(screen.getByRole("button", { name: /处理中/ })).toBeDisabled());
   expect(screen.getByRole("button", { name: "取消" })).toBeDisabled();
+  expect(screen.getByRole("status")).toHaveTextContent("正在提交");
+  expect(screen.getByRole("status")).not.toHaveTextContent("0/");
   fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
   expect(screen.getByRole("dialog")).toBeVisible();
-  await act(async () => resolve(group("1")));
+  await act(async () => resolve());
 });
 
 it("键盘勾选分组后可取消确认，长名称在有滚动上限的范围列表中完整显示", async () => {
   const user = userEvent.setup();
-  const clear = vi.spyOn(api, "clearGroupPolicy");
+  const clear = vi.spyOn(api, "batchGroupPolicy");
   const name = "包含很长名称的业务分组".repeat(20);
   renderGroups([group("1", name)]);
   screen.getByRole("checkbox", { name: `选择分组 ${name}` }).focus();

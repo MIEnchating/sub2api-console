@@ -254,6 +254,7 @@ function AccountPanel(props: ModelCheckSelectionProps) {
         <div className="flex shrink-0 flex-wrap items-center justify-end gap-1.5">
           <FilterMenu
             label="分组"
+            dictionaryKind="group"
             options={accountGroups}
             value={props.accountGroup ?? null}
             onValueChange={props.onAccountGroupChange ?? (() => undefined)}

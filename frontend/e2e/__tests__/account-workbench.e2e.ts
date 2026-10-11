@@ -77,9 +77,9 @@ test("工作台五个功能页键盘切换同步选中状态且窄屏不撑宽�
     );
     await page.screenshot({ path: test.info().outputPath(`${name}.png`), fullPage: true });
     if (name === "自动维护") {
-      const save = page.getByRole("button", { name: "预览并保存" });
-      await save.scrollIntoViewIfNeeded();
-      await expect(save).toBeInViewport();
+      const settings = page.getByRole("button", { name: "维护设置", exact: true });
+      await settings.scrollIntoViewIfNeeded();
+      await expect(settings).toBeInViewport();
     }
   }
   await tabs.getByRole("tab", { name: "自动维护" }).focus();
@@ -163,7 +163,7 @@ test("低高度窗口展开检测设置后仍能操作，切换输出方式隐�
   await expect(page.getByRole("button", { name: "解析并预览" })).toBeInViewport();
 });
 
-test("账号筛选显示名称，维护设置和结果在桌面分栏、手机顺序排列", async ({ page }, info) => {
+test("账号筛选显示名称，维护设置弹窗关闭后恢复结果表格与入口焦点", async ({ page }) => {
   await page.goto("/account-workbench");
   await page.getByRole("tab", { name: "账号列表", exact: true }).click();
   const status = page.getByRole("combobox", { name: "筛选账号状态" });
@@ -174,18 +174,23 @@ test("账号筛选显示名称，维护设置和结果在桌面分栏、手机�
   await page.getByRole("option", { name: "默认分组", exact: true }).click();
   await expect(group).toContainText("默认分组");
   await page.getByRole("tab", { name: "自动维护", exact: true }).click();
-  const settings = page.getByRole("form", { name: "维护设置" });
   const results = page.getByRole("region", { name: "维护结果" });
-  await expect(settings).toBeVisible();
   await expect(results).toBeVisible();
-  const settingsBox = await settings.boundingBox();
-  const resultsBox = await results.boundingBox();
-  if (info.project.name === "desktop-light") {
-    expect(resultsBox!.x).toBeGreaterThan(settingsBox!.x + settingsBox!.width);
-    expect(resultsBox!.y).toBe(settingsBox!.y);
-  } else {
-    expect(resultsBox!.y).toBeGreaterThan(settingsBox!.y + settingsBox!.height);
-  }
+  await expect(results.getByRole("table", { name: "维护运行状态" })).toBeVisible();
+  const trigger = page.getByRole("button", { name: "维护设置", exact: true });
+  await trigger.click();
+  const dialog = page.getByRole("dialog", { name: "维护设置", exact: true });
+  await expect(dialog.getByRole("form", { name: "维护设置" })).toBeVisible();
+  const save = dialog.getByRole("button", { name: "预览并保存" });
+  await expect(save).toBeEnabled();
+  await save.scrollIntoViewIfNeeded();
+  await expect(save).toBeInViewport();
+  expect(await dialog.evaluate((node) => node.scrollWidth <= node.clientWidth)).toBe(true);
+  await page.keyboard.press("Escape");
+  await expect(dialog).toHaveCount(0);
+  await expect(trigger).toBeFocused();
+  await expect(results).toBeVisible();
+  expect(await results.evaluate((node) => node.scrollWidth <= node.clientWidth)).toBe(true);
 });
 
 test("多模板自适应排列，长名称和处理记录展开不会撑宽页面", async ({ page }, info) => {
@@ -449,6 +454,67 @@ test("维护结果包含长邮箱时仅表格横向滚动，运行时间和停�
   await stop.scrollIntoViewIfNeeded();
   await expect(stop).toBeInViewport();
   await expect(stop).toBeEnabled();
-  await expect(page.getByRole("button", { name: "预览并保存" })).toBeDisabled();
+  await page.getByRole("button", { name: "维护设置", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "维护设置", exact: true });
+  await expect(dialog.getByRole("button", { name: "预览并保存" })).toBeDisabled();
+  await expect(dialog.getByRole("button", { name: "停止维护" })).toBeEnabled();
+  await dialog.getByRole("button", { name: "取消", exact: true }).click();
   await page.screenshot({ path: test.info().outputPath("维护运行结果.png"), fullPage: true });
+});
+
+test("窄屏工具栏说明与操作分行排列，筛选区和按钮保持在页面内", async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 664 });
+  await page.goto("/account-workbench?tab=templates");
+  const toolbar = page.getByRole("group", { name: "工作台操作", exact: true });
+  const actions = toolbar.getByRole("group", { name: "页面操作", exact: true });
+  const description = toolbar.getByText("复用账号配置，统一导入时的分组与调度设置。");
+  await expect(description).toBeVisible();
+  const descriptionBox = await description.boundingBox();
+  const actionsBox = await actions.boundingBox();
+  expect(actionsBox!.y).toBeGreaterThanOrEqual(descriptionBox!.y + descriptionBox!.height);
+  for (const button of await actions.getByRole("button").all()) {
+    await expect(button).toBeInViewport();
+  }
+  expect(await toolbar.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(
+    true,
+  );
+  await page.getByRole("tab", { name: "账号列表", exact: true }).click();
+  await expect(toolbar.getByRole("searchbox", { name: "搜索账号" })).toBeVisible();
+  await expect(toolbar.getByRole("button", { name: "刷新列表" })).toBeInViewport();
+  expect(await toolbar.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(
+    true,
+  );
+});
+
+test("导入设置展开且模板名称超长时分区不溢出，低高度窗口始终显示确认入口", async ({ page }) => {
+  await page.route("**/api/account-workbench/templates", (route) =>
+    route.fulfill({
+      json: {
+        revision: 1,
+        preferred_id: "long",
+        items: [{ id: "long", name: "工作台配置模板".repeat(30) }],
+      },
+    }),
+  );
+  await page.setViewportSize({ width: 1024, height: 600 });
+  await page.goto("/account-workbench");
+  const settings = page.getByRole("region", { name: "处理设置", exact: true });
+  await settings.getByRole("combobox", { name: "配置模板" }).click();
+  await page.getByRole("option", { name: "工作台配置模板".repeat(30), exact: true }).click();
+  await settings.getByRole("checkbox", { name: "使用登录 / 检测代理" }).check();
+  await settings.getByText("检测设置", { exact: true }).click();
+  const model = settings.getByRole("textbox", { name: "检测模型" });
+  await model.scrollIntoViewIfNeeded();
+  await expect(model).toBeInViewport();
+  await expect(page.getByRole("button", { name: "解析并预览" })).toBeInViewport();
+  expect(await settings.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(
+    true,
+  );
+  await page.setViewportSize({ width: 320, height: 600 });
+  await model.scrollIntoViewIfNeeded();
+  await expect(model).toBeInViewport();
+  await expect(page.getByRole("button", { name: "解析并预览" })).toBeInViewport();
+  expect(await settings.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(
+    true,
+  );
 });

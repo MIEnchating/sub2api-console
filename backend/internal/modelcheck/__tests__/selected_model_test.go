@@ -12,7 +12,7 @@ import (
 )
 
 func TestSelectedModelReachesEveryManualStage(t *testing.T) {
-	for _, mode := range []string{"animation", "precheck", "terminal"} {
+	for _, mode := range []string{"animation", "precheck"} {
 		t.Run(mode, func(t *testing.T) {
 			f := setup(t, 1, "openai", func(w http.ResponseWriter, r *http.Request) {
 				var body struct {
@@ -37,20 +37,12 @@ func TestSelectedModelReachesEveryManualStage(t *testing.T) {
 				if mode == "precheck" {
 					answer = "21"
 				}
-				if mode == "terminal" {
-					answer = `{"tool":"exec_command","command":"git status --short"}`
-				}
 				fmt.Fprintf(w, `{"output_text":%q}`, answer)
 			})
 			input := request("1")
 			input.Targets[0].Model = " selected-model "
 			input.Mode = mode
-			var err error
-			if mode == "terminal" {
-				_, err = f.service.EnqueueTerminalContinuity(context.Background(), modelcheck.TerminalContinuityRequest{Targets: input.Targets, TimeoutSeconds: 5})
-			} else {
-				_, err = f.service.EnqueueAnimation(context.Background(), input)
-			}
+			_, err := f.service.EnqueueAnimation(context.Background(), input)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -58,11 +50,7 @@ func TestSelectedModelReachesEveryManualStage(t *testing.T) {
 			if final.Status != "succeeded" {
 				t.Fatalf("task failed: %#v", final)
 			}
-			if mode == "terminal" {
-				if final.Result["checks"].([]modelcheck.TerminalContinuityResult)[0].Model != "selected-model" {
-					t.Fatal("terminal result lost requested model")
-				}
-			} else if final.Result["animations"].([]modelcheck.AnimationResult)[0].Model != "selected-model" {
+			if final.Result["animations"].([]modelcheck.AnimationResult)[0].Model != "selected-model" {
 				t.Fatal("result lost requested model")
 			}
 		})

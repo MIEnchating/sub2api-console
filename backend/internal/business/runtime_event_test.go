@@ -10,6 +10,7 @@ import (
 )
 
 func TestRecordRuntimeEventPersistsBackgroundTaskID(t *testing.T) {
+	t.Parallel()
 	store, err := Open(filepath.Join(t.TempDir(), "runtime-event.sqlite3"))
 	if err != nil {
 		t.Fatal(err)

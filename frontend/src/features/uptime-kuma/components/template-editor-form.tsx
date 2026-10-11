@@ -3,7 +3,7 @@ import { useEffect } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { ApiError, type KumaTemplateDetail } from "@/api";
-import { FormField } from "@/App";
+import { FormField } from "@/components/form-field";
 import { Input } from "@/components/ui/input";
 import { notifyOperationError } from "@/lib/operation-feedback";
 import { templateSchema, templateDefaults, type TemplateValues } from "../lib/template-schema";

@@ -1,8 +1,9 @@
 import { createContext, useContext } from "react";
 
-import type { View } from "./App";
+import type { View } from "./app-shell";
 
 export type AppShellContextValue = {
+  autoInspectionConnected?: boolean;
   hiddenNavigationItemIDs: Set<View>;
   setNavigationItemVisibility: (itemID: View, visible: boolean) => void;
   resetNavigation: () => void;

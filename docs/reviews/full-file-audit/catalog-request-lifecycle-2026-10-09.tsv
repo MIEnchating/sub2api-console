@@ -1,0 +1,6 @@
+frontend/src/features/accounts/hooks/use-account-collection.ts	884f214d41f741e4262c1279db44abb9c4bfd95549077147f0b7be06ed49805e	fixed	完整复审；账号目录及检测状态传递signal，保留暂停、30秒缓存/轮询及健康快照共享；共享观察者最后卸载取消读取。
+frontend/src/features/model-check/components/regular-check-panel.tsx	a61f4736006d72af89cdc2749df6bdec330341535a243e73fac59dd53805dffd	fixed	完整复审；账号、能力、状态Query显式传递signal；保持模型选择、任务SSE版本顺序及HTTP回退；真实面板离页与共享观察者回归通过。
+frontend/src/features/system-info/components/task-details-dialog.tsx	cfc0df39901382d81fa71fd0362ffe7371ed53a112fbc7788a89733a8112b9dc	fixed	完整复审；按需账号名称读取传递signal；保持任务详情、正式执行任务轮询和原加载/失败展示；仍挂载但禁用的观察者边界未调整。
+frontend/src/features/accounts/components/manual-priority-dialog.tsx	377521c1de1c78b906ec7774336db4236f0c0aae90f7d4b4d392cadd6a6f55d4	fixed	完整复审；缓存观察者显式传递signal，保持仅打开时订阅；账号字段变化可能覆盖草稿，待专项复现，本轮不宣称解决。
+frontend/src/features/config/components/account-creation-settings-card.tsx	f0e954e34bb73ff60bf105e550bd73037c607b49f4260c2b57ea68022c3413c6	fixed	完整复审；共享账号目录传递signal；保留分组设置、池模式任务及草稿逻辑；其他设置与任务读取取消尚未覆盖。
+frontend/src/features/model-check/components/__tests__/catalog-request-lifecycle.test.tsx	fec318e3476bf09ab1e3dbad9bee330202aac260917df297587c2d2e225f7a79	reviewed	完整阅读；真实面板与账号Hook通过Fetch边界覆盖离页取消、迟到结果不入缓存及共享观察者最后卸载；两个用例先失败后通过。

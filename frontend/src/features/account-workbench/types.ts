@@ -14,6 +14,17 @@ export type WorkbenchAccount = {
   fingerprint: string;
 };
 
+export type RememberedAccount = {
+  id: string;
+  account_id: string;
+  name: string;
+  email: string;
+  plan: string;
+  login_available: boolean;
+  last_imported_at: string;
+  revision: number;
+};
+
 export type AccountFilter = { query: string; status: string; group: string };
 
 export type TemplateConfig = {

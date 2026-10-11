@@ -9,6 +9,7 @@ import (
 )
 
 func TestSuccessfulWriteWithoutOptionalReadbackStartsScalingCooldown(t *testing.T) {
+	t.Parallel()
 	service, fixture := newUpstreamCapacityWriteFixture(t, writeCapacityPointer(100), 4, 5, true)
 	for _, state := range fixture.states {
 		state["rate_multiplier"] = "0.5"
@@ -61,6 +62,7 @@ func TestSuccessfulWriteWithoutOptionalReadbackStartsScalingCooldown(t *testing.
 }
 
 func TestUnconfirmedOrFailedWriteDoesNotStartCooldown(t *testing.T) {
+	t.Parallel()
 	for _, scenario := range []struct {
 		name      string
 		state     string

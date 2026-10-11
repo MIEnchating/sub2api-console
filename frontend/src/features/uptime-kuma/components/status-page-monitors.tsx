@@ -1,7 +1,7 @@
 import { ArrowDown, ArrowUp, Trash2 } from "lucide-react";
 import { SortableList, SortableItem } from "@/components/sortable-list";
 import type { KumaMonitor } from "@/api";
-import { FormField } from "@/App";
+import { FormField } from "@/components/form-field";
 import { MultiSelect } from "@/components/multi-select";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";

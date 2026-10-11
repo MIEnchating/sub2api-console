@@ -73,13 +73,17 @@ func TestRateSyncRestartReadsCurrentValuesAndDoesNotRepeatMatchingWrite(t *testi
 			if err != nil || len(pending) != 1 {
 				t.Fatalf("not recoverable: %v %v", pending, err)
 			}
+			recoveryTask, err := tasks.RecoveryTask(context.Background(), pending[0].ID)
+			if err != nil {
+				t.Fatal(err)
+			}
 			if changed {
 				target.changeKey()
 			}
 			restarted := management.New(target, store, tasks, accountops.New(target, store, tasks))
 			next := &recoveryRunner{}
 			restarted.UseTaskRunner(next)
-			err = restarted.ResumeTask(context.Background(), pending[0])
+			err = restarted.ResumeTask(context.Background(), recoveryTask)
 			if changed {
 				if !errors.Is(err, targetguard.ErrChanged) {
 					t.Fatalf("changed target: %v", err)

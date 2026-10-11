@@ -45,6 +45,7 @@ type storedInput struct {
 	ProxyURL         string         `json:"proxy_url,omitempty"`
 }
 type privatePreview struct {
+	RememberedSource *rememberedSource          `json:"remembered_source,omitempty"`
 	Scope            string                     `json:"scope"`
 	Public           Preview                    `json:"public"`
 	Owner            string                     `json:"owner"`
@@ -143,7 +144,7 @@ func (s *Service) Preview(ctx context.Context, owner string, input PreviewInput)
 	}
 	document.Public = result
 	key := "preview:" + owner
-	_, revision, err := s.private.WorkbenchDocument(ctx, key)
+	revision, err := s.private.WorkbenchDocumentRevision(ctx, key)
 	if err != nil {
 		return Preview{}, err
 	}
@@ -176,11 +177,11 @@ func (s *Service) readPreview(ctx context.Context, owner, id string, revision in
 		if _, err = targetguard.Pin(targetguard.Expect(ctx, document.Target), s.private); err != nil {
 			return privatePreview{}, err
 		}
-		library, err := s.readTemplates(ctx, document.Target)
+		revision, err := s.templateRevision(ctx, document.Target)
 		if err != nil {
 			return privatePreview{}, err
 		}
-		if library.Revision != document.TemplateRevision {
+		if revision != document.TemplateRevision {
 			return privatePreview{}, errors.New("模板已变化，请重新预览")
 		}
 	}

@@ -11,6 +11,7 @@ import (
 )
 
 func TestFusedRecoveryRejectsSuccessesBeforeFuseAndAcceptsNewEvidence(t *testing.T) {
+	t.Parallel()
 	for _, source := range []string{"traffic", "active-probe"} {
 		t.Run(source, func(t *testing.T) {
 			ctx := context.Background()

@@ -6,8 +6,19 @@ import {
   policy,
 } from "../../src/features/alert-policy/components/__tests__/fixtures";
 
-async function holdPolicy(page: Page, theme: string | null): Promise<Route[]> {
-  const requests: Route[] = [];
+type PolicyResponse = Parameters<Route["fulfill"]>[0];
+
+type PolicyController = { hold: () => void; respond: (value: PolicyResponse) => void };
+
+async function holdPolicy(page: Page, theme: string | null): Promise<PolicyController> {
+  let resolveResponse!: (response: PolicyResponse) => void;
+  let response: Promise<PolicyResponse>;
+  const hold = (): void => {
+    response = new Promise<PolicyResponse>((resolve) => {
+      resolveResponse = resolve;
+    });
+  };
+  hold();
   await page.addInitScript(
     (value) => localStorage.setItem("sub2api-console-theme", value ?? "light"),
     theme,
@@ -15,8 +26,7 @@ async function holdPolicy(page: Page, theme: string | null): Promise<Route[]> {
   await page.route("**/api/**", async (route) => {
     const path = new URL(route.request().url()).pathname;
     if (path === "/api/alerts/policy") {
-      requests.push(route);
-      return;
+      return route.fulfill(await response);
     }
     const fixtures: Record<string, unknown> = {
       "/api/setup/status": { initialized: true, configuration_errors: [] },
@@ -38,14 +48,14 @@ async function holdPolicy(page: Page, theme: string | null): Promise<Route[]> {
       await route.fulfill({ status: 503, json: { detail: "隔离测试未配置此接口" } });
     }
   });
-  return requests;
+  return { hold, respond: (value: PolicyResponse): void => resolveResponse(value) };
 }
 
 test("告警策略读取前后的三张卡保持分栏和列宽，手机按检测阈值通知顺序排列", async ({
   page,
   colorScheme,
 }) => {
-  const requests = await holdPolicy(page, colorScheme);
+  const policyRequest = await holdPolicy(page, colorScheme);
   await page.goto("/alert-policy");
   const loading = page.getByRole("status", { name: "正在读取告警策略", exact: true });
   await expect(loading).toHaveCount(1);
@@ -73,8 +83,7 @@ test("告警策略读取前后的三张卡保持分栏和列宽，手机按检�
   }
   expect(await loading.evaluate((node) => node.scrollWidth <= node.clientWidth)).toBe(true);
   await page.screenshot({ path: test.info().outputPath("alert-policy-loading.png") });
-  await expect.poll(() => requests.length).toBe(1);
-  await requests[0].fulfill({ json: policy });
+  policyRequest.respond({ json: policy });
   await expect(loading).toHaveCount(0);
   const ready = ["告警检测", "阈值与范围", "通知发送"].map((name) =>
     page.getByRole("region", { name, exact: true }),
@@ -95,30 +104,28 @@ test("告警策略刷新失败和重试期间保留表单与草稿，读取成�
   page,
   colorScheme,
 }) => {
-  const requests = await holdPolicy(page, colorScheme);
+  const policyRequest = await holdPolicy(page, colorScheme);
   await page.goto("/alert-policy");
-  await expect.poll(() => requests.length).toBe(1);
-  await requests[0].fulfill({ json: policy });
+  policyRequest.respond({ json: policy });
   const threshold = page.getByRole("spinbutton", { name: "连续主动探测失败次数", exact: true });
   await expect(threshold).toHaveValue("3");
   await threshold.fill("7");
   const refresh = page.getByRole("button", { name: "刷新告警策略", exact: true });
   const save = page.getByRole("button", { name: "保存策略", exact: true });
+  policyRequest.hold();
   await refresh.click();
-  await expect.poll(() => requests.length).toBe(2);
   await expect(save).toBeDisabled();
   await expect(threshold).toHaveValue("7");
   await expect(page.getByRole("status", { name: "正在读取告警策略" })).toHaveCount(0);
   const failure = { status: 503, json: { detail: "隔离测试：策略暂时不可用" } };
-  await page.route("**/api/alerts/policy", (route) => route.fulfill(failure));
-  await requests[1].fulfill(failure);
+  policyRequest.respond(failure);
   await expect(refresh).toBeEnabled({ timeout: 15_000 });
   await expect(threshold).toHaveValue("7");
   await expect(save).toBeDisabled();
-  await page.unroute("**/api/alerts/policy");
+  policyRequest.hold();
   await refresh.click();
-  await expect.poll(() => requests.length).toBe(3);
-  await requests[2].fulfill({ json: { ...policy, probe_failure_streak: 4 } });
+  await expect(save).toBeDisabled();
+  policyRequest.respond({ json: { ...policy, probe_failure_streak: 4 } });
   await expect(save).toBeEnabled();
   await expect(threshold).toHaveValue("7");
 });

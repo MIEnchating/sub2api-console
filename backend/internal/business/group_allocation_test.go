@@ -6,6 +6,7 @@ import (
 )
 
 func TestGroupAllocationDoesNotReuseManualAccountCostBlock(t *testing.T) {
+	t.Parallel()
 	store := openReadModelFixture(t)
 	ctx := context.Background()
 	if _, err := store.db.ExecContext(ctx, `UPDATE accounts SET schedulable=1,health_status='cost_blocked' WHERE id='41'`); err != nil {
@@ -40,6 +41,7 @@ func TestGroupAllocationDoesNotReuseManualAccountCostBlock(t *testing.T) {
 }
 
 func TestGroupAllocationUsesCurrentGroupDecisionMetrics(t *testing.T) {
+	t.Parallel()
 	store := openReadModelFixture(t)
 	ctx := context.Background()
 	if _, err := store.db.ExecContext(ctx, `UPDATE accounts SET multiplier='0.17' WHERE id='41'`); err != nil {
@@ -95,6 +97,7 @@ func TestGroupAllocationUsesCurrentGroupDecisionMetrics(t *testing.T) {
 }
 
 func TestGroupAllocationReusesCanonicalAccountStateInEveryMembership(t *testing.T) {
+	t.Parallel()
 	store := openReadModelFixture(t)
 	ctx := context.Background()
 	if _, err := store.db.ExecContext(ctx, `INSERT INTO local_groups(
@@ -132,6 +135,7 @@ func TestGroupAllocationReusesCanonicalAccountStateInEveryMembership(t *testing.
 }
 
 func TestGroupAllocationDoesNotExposeDecisionsBeforeCurrentModeEpoch(t *testing.T) {
+	t.Parallel()
 	store := openReadModelFixture(t)
 	ctx := context.Background()
 	if _, err := store.db.ExecContext(ctx, `UPDATE app_state SET updated_at='2026-08-26T11:00:00Z'
@@ -153,6 +157,7 @@ func TestGroupAllocationDoesNotExposeDecisionsBeforeCurrentModeEpoch(t *testing.
 }
 
 func TestGroupAllocationCountsUnprobedSchedulableAccountAsAvailable(t *testing.T) {
+	t.Parallel()
 	schedulable := true
 	allocation := GroupAllocation{}
 	classifyAllocationChannel(&allocation, GroupAllocationChannel{

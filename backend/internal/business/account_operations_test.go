@@ -8,6 +8,7 @@ import (
 )
 
 func TestAccountOperationPersistsBackgroundTaskID(t *testing.T) {
+	t.Parallel()
 	store := openPolicyStore(t)
 	ctx := taskcontext.WithID(context.Background(), "inspection-task-42")
 	if err := store.RecordAccountOperation(ctx, AccountOperation{
@@ -27,6 +28,7 @@ func TestAccountOperationPersistsBackgroundTaskID(t *testing.T) {
 }
 
 func TestAccountMultiplierChangeAlertsRequireANumericChange(t *testing.T) {
+	t.Parallel()
 	store := openPolicyStore(t)
 	ctx := context.Background()
 	if _, err := store.db.ExecContext(ctx, `INSERT INTO accounts(id,name,multiplier,metadata_json,updated_at)
@@ -82,6 +84,7 @@ func TestAccountMultiplierChangeAlertsRequireANumericChange(t *testing.T) {
 }
 
 func TestAccountMultiplierChangeAlertDirectionSwitchesAreIndependent(t *testing.T) {
+	t.Parallel()
 	store := openPolicyStore(t)
 	ctx := context.Background()
 	payload := alertPolicyDocument(DefaultAlertPolicy())
@@ -123,6 +126,7 @@ func TestAccountMultiplierChangeAlertDirectionSwitchesAreIndependent(t *testing.
 }
 
 func TestAccountMultiplierChangeAlertsRequireConfirmedSuccessfulReadback(t *testing.T) {
+	t.Parallel()
 	store := openPolicyStore(t)
 	ctx := context.Background()
 	operations := []AccountOperation{
@@ -157,6 +161,7 @@ func TestAccountMultiplierChangeAlertsRequireConfirmedSuccessfulReadback(t *test
 }
 
 func TestAccountGroupReadbackCopiesAccountCostInsteadOfGroupSalePrice(t *testing.T) {
+	t.Parallel()
 	store := openReadModelFixture(t)
 	ctx := context.Background()
 	if _, err := store.db.ExecContext(ctx, `UPDATE local_groups SET rate_multiplier='3' WHERE remote_id='2'`); err != nil {
@@ -179,6 +184,7 @@ func TestAccountGroupReadbackCopiesAccountCostInsteadOfGroupSalePrice(t *testing
 }
 
 func TestAccountHostEditPreservesStableBindingIdentity(t *testing.T) {
+	t.Parallel()
 	store := openReadModelFixture(t)
 	ctx := context.Background()
 	if err := store.ensureStableUpstreamRelations(ctx); err != nil {

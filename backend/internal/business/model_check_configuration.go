@@ -77,6 +77,9 @@ func (s *Store) saveModelCheckState(ctx context.Context, raw []byte, actor, acti
 	if key == "model-detection-tasks" {
 		objectType, objectName = "model-detection-task", "检测任务配置"
 	}
+	if key == "model-animation-prompt" {
+		objectType, objectName = "model-animation-prompt", "动画提示词"
+	}
 	operationID := fmt.Sprintf("model-check-profile-%d", time.Now().UnixNano())
 	if _, err := tx.ExecContext(ctx, `INSERT INTO operation_audit(
 		source_id,operation_id,operation_type,state,phase,actor,source,remote_confirmed,readback_confirmed,
@@ -107,4 +110,11 @@ func (s *Store) LoadAnimationConfiguration(ctx context.Context) ([]byte, error) 
 
 func (s *Store) SaveAnimationConfiguration(ctx context.Context, raw []byte, actor string) error {
 	return s.saveModelCheckState(ctx, raw, actor, "animation.schedule.saved", "model-animation-schedules")
+}
+
+func (s *Store) LoadAnimationPrompt(ctx context.Context) ([]byte, error) {
+	return s.loadModelCheckState(ctx, "model-animation-prompt")
+}
+func (s *Store) SaveAnimationPrompt(ctx context.Context, raw []byte, actor string) error {
+	return s.saveModelCheckState(ctx, raw, actor, "animation.prompt.saved", "model-animation-prompt")
 }

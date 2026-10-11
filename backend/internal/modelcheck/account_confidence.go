@@ -1,9 +1,10 @@
 package modelcheck
 
 import (
+	"time"
+
 	"github.com/MIEnchating/sub2api-console/backend/internal/accountquality"
 	"github.com/MIEnchating/sub2api-console/backend/internal/taskstore"
-	"time"
 )
 
 func accountConfidence(tasks []taskstore.Task, now time.Time) map[string]accountquality.Statistics {
@@ -12,29 +13,27 @@ func accountConfidence(tasks []taskstore.Task, now time.Time) map[string]account
 		if task.Status == "queued" || task.Status == "running" || task.Status == "waiting_input" {
 			continue
 		}
-		at, err := time.Parse(time.RFC3339Nano, task.UpdatedAt)
 		for _, id := range taskAccountIDs(task) {
+			if _, ok := result[id]; !ok {
+				result[id] = accountquality.New(now)
+			}
+		}
+		at, err := time.Parse(time.RFC3339Nano, task.UpdatedAt)
+		if err != nil {
+			continue
+		}
+		// Visit each check once, rather than allocating and scanning all rows
+		// again for every account in a multi-account task.
+		for _, row := range taskResultRows(task.Result["tests"]) {
+			id, ok := row["account_id"].(string)
+			if !ok {
+				continue
+			}
 			stats, ok := result[id]
 			if !ok {
-				stats = accountquality.New(now)
+				continue
 			}
-			if err == nil {
-				for _, row := range taskResultRows(task.Result["tests"]) {
-					if row["account_id"] != id {
-						continue
-					}
-					outcome := "inconclusive"
-					if !modelCheckRequestFailed(row) {
-						switch row["verdict"] {
-						case "MATCH", "GROUP_MATCH", "SOL_CONSISTENT":
-							outcome = "passed"
-						case "MISMATCH", "LUNA_LIKE", "TERRA_LIKE":
-							outcome = "failed"
-						}
-					}
-					stats.Add(now, at, outcome)
-				}
-			}
+			stats.Add(now, at, modelCheckOutcome(row))
 			result[id] = stats
 		}
 	}
@@ -43,4 +42,16 @@ func accountConfidence(tasks []taskstore.Task, now time.Time) map[string]account
 		result[id] = stats
 	}
 	return result
+}
+
+func modelCheckOutcome(row map[string]any) string {
+	if !modelCheckRequestFailed(row) {
+		switch row["verdict"] {
+		case "MATCH", "GROUP_MATCH", "SOL_CONSISTENT":
+			return "passed"
+		case "MISMATCH", "LUNA_LIKE", "TERRA_LIKE":
+			return "failed"
+		}
+	}
+	return "inconclusive"
 }

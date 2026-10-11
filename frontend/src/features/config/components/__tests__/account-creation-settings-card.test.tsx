@@ -1,3 +1,4 @@
+import { seedDictionaries } from "@/test/dictionary-fixtures";
 import { Toaster, toast } from "sonner";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor, within } from "@testing-library/react";
@@ -60,10 +61,18 @@ function renderCard(
   const queryClient = new QueryClient({
     defaultOptions: { queries: { enabled: false, retry: false } },
   });
+  seedDictionaries(queryClient);
   queryClient.setQueryData(["account-creation-settings"], configuredSettings);
   queryClient.setQueryData(["groups"], configuredGroups);
   queryClient.setQueryData(["dictionaries", "group"], {
-    items: order.map((value) => ({ value, enabled: true })),
+    items: (order.length
+      ? order
+      : configuredGroups.flatMap((group) => (group.id ? [group.id] : []))
+    ).map((value) => ({
+      value,
+      name: configuredGroups.find((group) => group.id === value)?.name,
+      enabled: true,
+    })),
   });
   queryClient.setQueryData(
     ["accounts"],
@@ -265,6 +274,7 @@ describe("账号创建设置卡片", () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false, staleTime: Number.POSITIVE_INFINITY } },
     });
+    seedDictionaries(queryClient);
     queryClient.setQueryData(["groups"], [group]);
     render(
       <QueryClientProvider client={queryClient}>

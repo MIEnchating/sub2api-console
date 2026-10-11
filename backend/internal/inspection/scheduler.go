@@ -14,6 +14,7 @@ import (
 
 	"github.com/MIEnchating/sub2api-console/backend/internal/business"
 	"github.com/MIEnchating/sub2api-console/backend/internal/mutationguard"
+	"github.com/MIEnchating/sub2api-console/backend/internal/taskcontext"
 	"github.com/MIEnchating/sub2api-console/backend/internal/taskrunner"
 )
 
@@ -123,8 +124,8 @@ type Scheduler struct {
 	lastTaskID          *string
 	lastRunDurationMS   int64
 	lastSummary         InspectionSummary
-	loopCancel          context.CancelFunc
-	currentCancel       context.CancelFunc
+	loopCancel          context.CancelCauseFunc
+	currentCancel       context.CancelCauseFunc
 	cancelRequested     bool
 	monitoringEnabled   bool
 	monitoringKnown     bool
@@ -138,6 +139,8 @@ type Scheduler struct {
 	previewItem         *QueueItem
 	previewedAt         time.Time
 	previewLoading      bool
+	previewVersion      uint64
+	previewCancel       context.CancelFunc
 	taskRunner          taskrunner.Runner
 }
 
@@ -169,18 +172,38 @@ func (s *Scheduler) Status(ctx context.Context) (Status, error) {
 	if err != nil {
 		return Status{}, err
 	}
+	monitoringProvider, monitoringAvailable := s.executor.(MonitoringConfiguration)
+	monitoringCtx, cancelMonitoring := context.WithCancel(ctx)
+	defer cancelMonitoring()
+	type monitoringResult struct {
+		configured bool
+		available  bool
+	}
+	monitoringResultCh := make(chan monitoringResult, 1)
+	if monitoringAvailable {
+		go func() {
+			configured, configErr := monitoringProvider.MonitoringConfigured(monitoringCtx)
+			monitoringResultCh <- monitoringResult{configured: configured, available: configErr == nil}
+		}()
+	} else {
+		monitoringResultCh <- monitoringResult{}
+	}
 	now := s.now().UTC()
 	if _, err := s.repository.ReconcileInterruptedInspections(ctx, now); err != nil {
+		cancelMonitoring()
 		return Status{}, err
 	}
 	activeCheckedAt, err := s.repository.ActiveInspectionCheckedAt(ctx, now)
 	if err != nil {
+		cancelMonitoring()
 		return Status{}, err
 	}
 	history, err := s.repository.InspectionHeartbeats(ctx, 20)
 	if err != nil {
+		cancelMonitoring()
 		return Status{}, err
 	}
+	monitoring := <-monitoringResultCh
 	completedAt := now.Format(time.RFC3339Nano)
 	for index := range history {
 		if history[index].Status == "running" && (activeCheckedAt == nil || history[index].CheckedAt != *activeCheckedAt) {
@@ -201,14 +224,7 @@ func (s *Scheduler) Status(ctx context.Context) (Status, error) {
 		MonitoringCheckedAt: cloneString(s.monitoringCheckedAt),
 	}
 	s.mu.Unlock()
-	monitoringConfigurationKnown := false
-	if provider, available := s.executor.(MonitoringConfiguration); available {
-		configured, configErr := provider.MonitoringConfigured(ctx)
-		if configErr == nil {
-			monitoringConfigurationKnown = true
-			result.MonitoringConfigured = configured
-		}
-	}
+	result.MonitoringConfigured = monitoring.configured
 	if !config.Enabled {
 		result.NextRunAt = nil
 	}
@@ -241,7 +257,7 @@ func (s *Scheduler) Status(ctx context.Context) (Status, error) {
 		result.MonitoringEnabled = *enabled
 		result.MonitoringCheckedAt = checkedAt
 	}
-	if monitoringConfigurationKnown && !result.MonitoringConfigured {
+	if monitoring.available && !result.MonitoringConfigured {
 		result.MonitoringEnabled = false
 	}
 	return result, nil
@@ -278,11 +294,14 @@ func (s *Scheduler) queuePreview(
 		s.previewLoading = true
 		launch = true
 	}
+	version := s.previewVersion
 	s.previewMu.Unlock()
 	if launch {
-		if err := taskrunner.Go(s.taskRunner, func(parent context.Context) { s.refreshQueuePreview(parent, previewer) }); err != nil {
+		if err := taskrunner.Go(s.taskRunner, func(parent context.Context) { s.refreshQueuePreview(parent, previewer, version) }); err != nil {
 			s.previewMu.Lock()
-			s.previewLoading = false
+			if s.previewVersion == version {
+				s.previewLoading = false
+			}
 			s.previewMu.Unlock()
 			s.notify()
 		}
@@ -298,9 +317,30 @@ func (s *Scheduler) queuePreview(
 	return []QueueItem{*item}
 }
 
-func (s *Scheduler) refreshQueuePreview(parent context.Context, previewer QueuePreviewer) {
+func (s *Scheduler) invalidateQueuePreview() {
+	s.previewMu.Lock()
+	cancel := s.previewCancel
+	s.previewVersion++
+	s.previewItem = nil
+	s.previewedAt = time.Time{}
+	s.previewLoading = false
+	s.previewCancel = nil
+	s.previewMu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+}
+
+func (s *Scheduler) refreshQueuePreview(parent context.Context, previewer QueuePreviewer, version uint64) {
 	ctx, cancel := context.WithTimeout(parent, queuePreviewTimeout)
 	defer cancel()
+	s.previewMu.Lock()
+	if s.previewVersion != version {
+		s.previewMu.Unlock()
+		return
+	}
+	s.previewCancel = cancel
+	s.previewMu.Unlock()
 	item, err := previewer.Preview(ctx, s.now().UTC())
 	if err != nil {
 		item = QueueItem{
@@ -313,9 +353,14 @@ func (s *Scheduler) refreshQueuePreview(parent context.Context, previewer QueueP
 	}
 	item.ScheduledFor = nil
 	s.previewMu.Lock()
+	if s.previewVersion != version {
+		s.previewMu.Unlock()
+		return
+	}
 	s.previewItem = &item
 	s.previewedAt = s.now().UTC()
 	s.previewLoading = false
+	s.previewCancel = nil
 	s.previewMu.Unlock()
 	s.notify()
 }
@@ -347,6 +392,7 @@ func (s *Scheduler) UpdateConfig(ctx context.Context, config business.AutoInspec
 	now := s.now().UTC()
 	s.mu.Lock()
 	s.configVersion++
+	s.invalidateQueuePreview()
 	s.nextRunAt = scheduledAfter(now, stored)
 	cancel := s.currentCancel
 	if !stored.Enabled && cancel != nil {
@@ -354,7 +400,7 @@ func (s *Scheduler) UpdateConfig(ctx context.Context, config business.AutoInspec
 	}
 	s.mu.Unlock()
 	if !stored.Enabled && cancel != nil {
-		cancel()
+		cancel(context.Canceled)
 	}
 	select {
 	case s.reconfigure <- struct{}{}:
@@ -434,19 +480,19 @@ func (s *Scheduler) Start(ctx context.Context) error {
 		s.mu.Unlock()
 		return nil
 	}
-	loopContext, cancel := context.WithCancel(ctx)
+	loopContext, cancel := context.WithCancelCause(ctx)
 	done := make(chan struct{})
 	s.loopCancel = cancel
 	s.loopDone = done
 	s.mu.Unlock()
 	if _, err := s.repository.ReconcileInterruptedInspections(loopContext, s.now().UTC()); err != nil {
-		cancel()
+		cancel(context.Canceled)
 		s.finishLoop(done)
 		return err
 	}
 	config, err := s.repository.AutoInspectionConfig(loopContext)
 	if err != nil {
-		cancel()
+		cancel(context.Canceled)
 		s.finishLoop(done)
 		return err
 	}
@@ -472,15 +518,12 @@ func (s *Scheduler) StopContext(ctx context.Context) error {
 	cancel := s.loopCancel
 	cancelCurrent := s.currentCancel
 	done := s.loopDone
-	if s.running && cancelCurrent != nil {
-		s.cancelRequested = true
-	}
 	s.mu.Unlock()
 	if cancelCurrent != nil {
-		cancelCurrent()
+		cancelCurrent(taskcontext.ErrInterrupted)
 	}
 	if cancel != nil {
-		cancel()
+		cancel(taskcontext.ErrInterrupted)
 	}
 	if done == nil {
 		return nil
@@ -538,7 +581,8 @@ func (s *Scheduler) runDue(ctx context.Context, at time.Time, force bool, execut
 	runConfigVersion := s.configVersion
 	s.running = true
 	s.cancelRequested = false
-	s.currentCancel = cancelExecution
+	s.currentCancel = cancelExecutionCause
+	s.invalidateQueuePreview()
 	s.mu.Unlock()
 	s.notify()
 
@@ -647,6 +691,7 @@ func (s *Scheduler) runDue(ctx context.Context, at time.Time, force bool, execut
 	historyErr := s.recordHeartbeat(heartbeat)
 	releaseErr := s.releaseLease()
 	s.mu.Lock()
+	s.invalidateQueuePreview()
 	s.running = false
 	s.currentCancel = nil
 	s.cancelRequested = false

@@ -190,3 +190,50 @@ func TestPricingCacheExpiresAfter24Hours(t *testing.T) {
 		t.Fatal("invalid expiry boundary")
 	}
 }
+
+func TestPricingModelNamesStartsIndependentReadsTogether(t *testing.T) {
+	started := make(chan string, 2)
+	release := make(chan struct{})
+	client := &http.Client{Transport: pricingTransport(func(r *http.Request) (*http.Response, error) {
+		started <- r.URL.Path
+		select {
+		case <-release:
+		case <-r.Context().Done():
+			return nil, r.Context().Err()
+		}
+		body := "{\"success\":true,\"data\":[]}"
+		if r.URL.Path == "/api/option/" {
+			body = "{\"success\":true,\"data\":[{\"key\":\"ModelRatio\",\"value\":\"{\\\"model-a\\\":1}\"},{\"key\":\"CompletionRatio\",\"value\":\"{\\\"model-a\\\":2}\"}]}"
+		}
+		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(body))}, nil
+	})}
+	service := New(&pricingTestStore{target: configstore.TargetSettings{}}, nil, client, nil, nil)
+	platform := configstore.NewAPIPlatform{ID: "primary", BaseURL: "https://newapi.example", AdminKey: "secret", UserID: "1"}
+	done := make(chan struct{})
+	var names []string
+	var readErr error
+	go func() {
+		names, readErr = service.pricingModelNames(context.Background(), platform)
+		close(done)
+	}()
+	seen := map[string]bool{}
+	for len(seen) < 2 {
+		select {
+		case path := <-started:
+			seen[path] = true
+		case <-time.After(time.Second):
+			close(release)
+			<-done
+			t.Fatalf("independent pricing reads remained serialized: %v", seen)
+		}
+	}
+	close(release)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("pricing model read did not finish")
+	}
+	if readErr != nil || len(names) != 1 || names[0] != "model-a" {
+		t.Fatalf("names=%v err=%v", names, readErr)
+	}
+}

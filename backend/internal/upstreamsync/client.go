@@ -799,7 +799,7 @@ func (r *Reader) requestJSONWithSemantics(ctx context.Context, record configstor
 		statusErr := &StatusError{
 			StatusCode: response.StatusCode,
 			Path:       path,
-			Detail:     upstreamErrorDetail(body),
+			Detail:     upstreamErrorDetail(body, record),
 		}
 		if unknownCreateStatus {
 			return nil, response.StatusCode, &CommitUnknownError{Cause: statusErr}
@@ -829,7 +829,7 @@ func (r *Reader) requestJSONWithSemantics(ctx context.Context, record configstor
 	}
 	if object, ok := payload.(map[string]any); ok && !businessSuccess(object) {
 		return nil, response.StatusCode, &businessResponseError{
-			detail:         upstreamErrorDetail(body),
+			detail:         upstreamErrorDetail(body, record),
 			authentication: authenticated && isNewAPI(record.UpstreamType) && newAPIAuthenticationFailure(object),
 		}
 	}
@@ -845,18 +845,19 @@ func (r *Reader) requestJSONWithSemantics(ctx context.Context, record configstor
 	return payload, response.StatusCode, nil
 }
 
-func upstreamErrorDetail(body []byte) string {
+func upstreamErrorDetail(body []byte, record configstore.AuthRecord) string {
 	var payload map[string]any
 	if err := json.Unmarshal(body, &payload); err != nil {
 		return ""
 	}
+	credentials := upstreamCredentialReplacer(record)
 	values := make([]string, 0, 2)
 	for _, key := range []string{"message", "detail", "error", "reason"} {
 		value, ok := payload[key].(string)
 		if !ok {
 			continue
 		}
-		value = strings.TrimSpace(redact.Secrets(value))
+		value = strings.TrimSpace(redact.Secrets(credentials.Replace(value)))
 		if value == "" || slices.Contains(values, value) {
 			continue
 		}

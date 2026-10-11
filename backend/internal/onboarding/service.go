@@ -21,6 +21,7 @@ import (
 	"github.com/MIEnchating/sub2api-console/backend/internal/adminclient"
 	"github.com/MIEnchating/sub2api-console/backend/internal/business"
 	"github.com/MIEnchating/sub2api-console/backend/internal/configstore"
+	"github.com/MIEnchating/sub2api-console/backend/internal/modelcheck"
 	"github.com/MIEnchating/sub2api-console/backend/internal/mutationguard"
 	"github.com/MIEnchating/sub2api-console/backend/internal/naming"
 	"github.com/MIEnchating/sub2api-console/backend/internal/targetguard"
@@ -103,6 +104,7 @@ type Request struct {
 }
 
 type Service struct {
+	animations    *modelcheck.Service
 	repository    Repository
 	private       PrivateStore
 	keys          KeyClient
@@ -298,19 +300,27 @@ func (s *Service) execute(parent context.Context, task taskstore.Task, request R
 func (s *Service) executeBatch(parent context.Context, task taskstore.Task, items []batchItem) {
 	ctx, cancel := context.WithTimeout(parent, s.timeout*time.Duration(len(items)))
 	defer cancel()
-	task.Status, task.Progress, task.Message = "running", 5, fmt.Sprintf("正在添加 1/%d 个账号", len(items))
+	results := make([]map[string]any, 0, len(items))
+	succeeded := 0
+	failed := 0
+	snapshot := func() map[string]any {
+		return map[string]any{
+			"operation": "account.onboarding.batch", "total": len(items), "completed": len(results),
+			"succeeded": succeeded, "failed": failed, "items": results,
+		}
+	}
+	task.Status, task.Progress, task.Message = "running", 0, fmt.Sprintf("正在添加 1/%d 个账号", len(items))
+	task.Result = snapshot()
 	task.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
 	if !taskstore.SaveRunning(ctx, s.tasks, task) {
 		return
 	}
-	results := make([]map[string]any, 0, len(items))
-	succeeded := 0
-	failed := 0
 	for index, item := range items {
 		if ctx.Err() != nil {
 			break
 		}
-		task.Progress = 5 + index*90/len(items)
+		task.Progress = len(results) * 100 / len(items)
+		task.Result = snapshot()
 		task.Message = fmt.Sprintf("正在处理 %d/%d：%s，%s → %s", index+1, len(items), item.action, item.upstreamGroupName, item.localGroupName)
 		task.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
 		taskstore.PersistProgress(s.tasks, task)
@@ -333,9 +343,7 @@ func (s *Service) executeBatch(parent context.Context, task taskstore.Task, item
 	}
 	task.Progress = 100
 	task.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
-	task.Result = map[string]any{
-		"operation": "account.onboarding.batch", "total": len(items), "succeeded": succeeded, "failed": failed, "items": results,
-	}
+	task.Result = snapshot()
 	if failed > 0 {
 		task.Status = "failed"
 		task.Message = fmt.Sprintf("批量绑定变更完成：成功 %d 项，失败 %d 项", succeeded, failed)

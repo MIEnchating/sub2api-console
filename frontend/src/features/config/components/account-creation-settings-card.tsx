@@ -1,5 +1,6 @@
 import { useDictionaryOrder } from "@/hooks/use-dictionary-order";
 import { QueryErrorToast } from "@/components/query-error-toast";
+import { ContentRetry } from "@/components/content-retry";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronDown, RefreshCw, Save } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
@@ -89,11 +90,14 @@ export function AccountCreationSettingsCard(props: {
   );
   const settings = useQuery({
     queryKey: ["account-creation-settings"],
-    queryFn: api.accountCreationSettings,
+    queryFn: ({ signal }) => api.accountCreationSettings(signal),
     placeholderData: placeholder,
   });
-  const groups = useQuery({ queryKey: ["groups"], queryFn: api.groups });
-  const accounts = useQuery({ queryKey: ["accounts"], queryFn: api.accounts });
+  const groups = useQuery({ queryKey: ["groups"], queryFn: ({ signal }) => api.groups(signal) });
+  const accounts = useQuery({
+    queryKey: ["accounts"],
+    queryFn: ({ signal }) => api.accounts(signal),
+  });
   const initialView: SettingsView =
     props.initialScope && props.initialScope !== defaultScope ? "groups" : "default";
   const [view, setView] = useState<SettingsView>(initialView);
@@ -107,7 +111,7 @@ export function AccountCreationSettingsCard(props: {
   );
   const poolModeTask = useQuery({
     queryKey: ["account-pool-mode-sync", poolModeTaskID],
-    queryFn: () => api.task(poolModeTaskID!),
+    queryFn: ({ signal }) => api.task(poolModeTaskID!, signal),
     enabled: Boolean(poolModeTaskID),
     refetchInterval: taskPollInterval,
   });
@@ -139,7 +143,8 @@ export function AccountCreationSettingsCard(props: {
 
   const save = useMutation({
     mutationFn: (request: SaveRequest) => api.updateAccountCreationSettings(request.settings),
-    onSuccess: (value, request) => {
+    onSuccess: async (value, request) => {
+      await queryClient.cancelQueries({ queryKey: ["account-creation-settings"], exact: true });
       queryClient.setQueryData(["account-creation-settings"], value);
       queryClient.setQueryData<RuntimeConfig>(["config"], (current) => {
         if (!current) return current;
@@ -199,6 +204,15 @@ export function AccountCreationSettingsCard(props: {
     return <AccountCreationSettingsSkeleton />;
   }
 
+  if (!settings.data) {
+    return (
+      <>
+        <QueryErrorToast error={settings.error} fallback="账号设置读取失败" />
+        <ContentRetry pending={settings.isFetching} onRetry={() => void settings.refetch()} />
+      </>
+    );
+  }
+
   const saveDisabled = save.isPending || Boolean(settings.error);
   const configuredGroupCount = currentSettings.groups.length;
   let groupSettingsContent = (
@@ -251,7 +265,10 @@ export function AccountCreationSettingsCard(props: {
       <CardContent className="flex min-h-0 flex-1 flex-col group-data-[size=sm]/card:p-0">
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
           {settings.error ? (
-            <QueryErrorToast error={settings.error} fallback="账号设置读取失败" />
+            <>
+              <QueryErrorToast error={settings.error} fallback="账号设置读取失败" />
+              <ContentRetry pending={settings.isFetching} onRetry={() => void settings.refetch()} />
+            </>
           ) : null}
 
           {poolModeTaskID && poolModeTask.data && !taskStopsPolling(poolModeTask.data) ? (

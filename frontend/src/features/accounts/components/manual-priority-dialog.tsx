@@ -27,7 +27,21 @@ import {
 export type ManualPrioritySlot = {
   priority: number;
   owner: AccountStatus | null;
+  count: number;
 };
+
+function manualPrioritySlotLabel(slot: ManualPrioritySlot, currentPriority: number | null): string {
+  if (slot.priority === currentPriority) {
+    return `${slot.priority} · 当前账号使用（${slot.count + 1}/3）`;
+  }
+  if (slot.count >= 3 && slot.priority !== currentPriority) {
+    return `${slot.priority} · 已满（3/3）`;
+  }
+  if (slot.owner) {
+    return `${slot.priority} · ${slot.owner.name}（${slot.owner.id}）已使用，可重复设置（${slot.count}/3）`;
+  }
+  return `${slot.priority} · 可用`;
+}
 
 export type ManualPriorityValues = {
   priority: number;
@@ -63,20 +77,24 @@ export function manualPrioritySlots(
 ): ManualPrioritySlot[] {
   const current = accounts.find((account) => account.id === currentAccountId);
   const currentGroups = new Set(current?.groups ?? []);
-  const occupied = new Map(
-    accounts
-      .filter(
-        (account) =>
-          account.id !== currentAccountId &&
-          account.manual_priority != null &&
-          account.groups.some((group) => currentGroups.has(group)),
-      )
-      .map((account) => [account.manual_priority!, account]),
+  const peers = accounts.filter(
+    (account) =>
+      account.id !== currentAccountId &&
+      account.manual_priority != null &&
+      account.groups.some((group) => currentGroups.has(group)),
   );
-  return Array.from({ length: reservedMax }, (_, index) => ({
-    priority: index + 1,
-    owner: occupied.get(index + 1) ?? null,
-  }));
+  return Array.from({ length: reservedMax }, (_, index) => {
+    const priority = index + 1;
+    const users = peers.filter((account) => account.manual_priority === priority);
+    const count = Math.max(
+      0,
+      ...Array.from(
+        currentGroups,
+        (group) => users.filter((account) => account.groups.includes(group)).length,
+      ),
+    );
+    return { priority, owner: users[0] ?? null, count };
+  });
 }
 
 type ManualPriorityDialogProps = {
@@ -93,7 +111,7 @@ type ManualPriorityDialogProps = {
 export function AccountManualPriorityDialog(props: Omit<ManualPriorityDialogProps, "accounts">) {
   const accounts = useQuery({
     queryKey: ["accounts"],
-    queryFn: api.accounts,
+    queryFn: ({ signal }) => api.accounts(signal),
     structuralSharing: shareAccountHealthSnapshots,
     enabled: false,
     subscribed: props.open,
@@ -118,10 +136,6 @@ export function ManualPriorityDialog(props: ManualPriorityDialogProps) {
   const slots = useMemo(
     () => manualPrioritySlots(props.accounts, props.account.id, props.reservedMax),
     [props.account.id, props.accounts, props.reservedMax],
-  );
-  const occupied = useMemo(
-    () => new Map(slots.filter((slot) => slot.owner).map((slot) => [slot.priority, slot.owner!])),
-    [slots],
   );
   useEffect(() => {
     if (!props.open) return;
@@ -168,16 +182,13 @@ export function ManualPriorityDialog(props: ManualPriorityDialogProps) {
               </SelectTrigger>
               <SelectContent>
                 {slots.map((slot) => {
-                  const owner = slot.owner;
                   return (
                     <SelectItem
                       key={slot.priority}
                       value={String(slot.priority)}
-                      disabled={Boolean(owner)}
+                      disabled={slot.count >= 3 && slot.priority !== currentPriority}
                     >
-                      {owner
-                        ? `${slot.priority} · 已被 ${owner.name}（${owner.id}）占用`
-                        : `${slot.priority} · 可用`}
+                      {manualPrioritySlotLabel(slot, currentPriority)}
                     </SelectItem>
                   );
                 })}
@@ -252,7 +263,8 @@ export function ManualPriorityDialog(props: ManualPriorityDialogProps) {
           <p className="text-foreground/70 text-xs leading-5">
             设置时会把 Sub2API
             中的调度状态、优先级、负载因子和并发上限同步为以上值。开启延迟调序后仅优先级自动变化，其余参数保持手动控制，不自动熔断或主动探测。
-            控制位只在账号所属分组内占用；取消时会先恢复设置前的参数，再从下一轮调度开始重新参与自动分配。
+            同一分组的同一位置最多可设置 3
+            个账号；取消时会先恢复设置前的参数，再从下一轮调度开始重新参与自动分配。
           </p>
         </div>
         <DialogFooter className="sm:justify-between">
@@ -274,7 +286,9 @@ export function ManualPriorityDialog(props: ManualPriorityDialogProps) {
             disabled={
               props.pending ||
               selected === null ||
-              occupied.has(selected) ||
+              selected < 1 ||
+              selected > props.reservedMax ||
+              ((slots[selected - 1]?.count ?? 0) >= 3 && selected !== currentPriority) ||
               !loadFactorValid ||
               !concurrencyValid
             }

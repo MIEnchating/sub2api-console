@@ -1,6 +1,13 @@
 import { animationTestModel } from "../constants";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { ChevronLeft, ChevronRight, Play, RefreshCw, ShieldCheck } from "lucide-react";
+import {
+  ChevronLeft,
+  ChevronRight,
+  Clapperboard,
+  Play,
+  RefreshCw,
+  ShieldCheck,
+} from "lucide-react";
 import { useEffect, useState, type ReactElement } from "react";
 import { useForm } from "react-hook-form";
 import { ConfirmActionDialog } from "@/components/confirm-action-dialog";
@@ -16,6 +23,8 @@ import { customAnimationSchema, type CustomAnimationForm } from "../lib/animatio
 import { animationActivityLabel } from "../lib/animation-task-results";
 import { AnimationAccountResult } from "./animation-account-result";
 import { AnimationEndpointDetails } from "./animation-endpoint-details";
+import { AnimationPromptDialog } from "./animation-prompt-dialog";
+import { CustomAnimationParameters } from "./custom-animation-parameters";
 import { CustomAnimationFields } from "./custom-animation-fields";
 import { PrecheckAccountResult } from "./precheck-account-result";
 import type { PrecheckQuestionID } from "@/api";
@@ -91,7 +100,7 @@ export function CustomAnimationPanel(props: {
       className="flex h-full min-h-0 flex-col overflow-y-auto overscroll-contain"
     >
       <form
-        className="shrink-0 space-y-2 border-b p-3"
+        className="shrink-0 border-b"
         noValidate
         autoComplete="off"
         onSubmit={form.handleSubmit(() => {
@@ -99,35 +108,56 @@ export function CustomAnimationPanel(props: {
           setConfirmation(true);
         })}
       >
-        <CustomAnimationFields form={form} disabled={pending || confirmation} />
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="px-3 py-3 sm:px-4">
+          <CustomAnimationFields form={form} disabled={pending || confirmation} />
+        </div>
+        <div
+          role="group"
+          aria-label="自定义接口检测操作"
+          className="flex min-w-0 flex-wrap items-center gap-2 border-t bg-muted/20 px-3 py-2 sm:px-4"
+        >
+          <CustomAnimationParameters form={form} disabled={pending || confirmation} />
+          {mode === "animation" ? (
+            <AnimationPromptDialog disabled={pending || confirmation} />
+          ) : null}
           <PrecheckQuestionSelector
             value={questions}
             onChange={setQuestions}
             disabled={pending || confirmation}
           />
-          <Button
-            type="button"
-            variant="outline"
-            disabled={pending || questions.length === 0}
-            onClick={() =>
-              void form.handleSubmit(() => {
-                setMode("precheck");
-                setConfirmation(true);
-              })()
-            }
-          >
-            <ShieldCheck aria-hidden="true" />
-            前置检测
-          </Button>
-          <Button type="submit" disabled={pending} aria-busy={pending}>
-            <Play aria-hidden="true" />
-            开始检测
-          </Button>
           <Button type="button" variant="outline" disabled={pending} onClick={() => form.reset()}>
             <RefreshCw aria-hidden="true" />
             清空配置
           </Button>
+          <div className="ml-auto flex min-w-0 flex-wrap items-center justify-end gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              disabled={pending || questions.length === 0}
+              onClick={() =>
+                void form.handleSubmit(() => {
+                  setMode("precheck");
+                  setConfirmation(true);
+                })()
+              }
+            >
+              <ShieldCheck aria-hidden="true" />
+              前置检测
+            </Button>
+            <Button type="submit" disabled={pending} aria-busy={pending}>
+              <Play aria-hidden="true" />
+              开始检测
+            </Button>
+          </div>
+        </div>
+      </form>
+      <section
+        aria-label="自定义接口检测记录"
+        className="flex min-h-48 flex-1 flex-col gap-3 p-3 sm:p-4"
+      >
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
+          <h3 className="text-sm font-medium">检测记录</h3>
+          <span className="text-xs tabular-nums text-muted-foreground">共 {ids.length} 条</span>
           {pagination.totalPages > 1 ? (
             <nav aria-label="自定义检测记录分页" className="ml-auto flex items-center gap-1">
               <Tooltip>
@@ -170,8 +200,6 @@ export function CustomAnimationPanel(props: {
             </nav>
           ) : null}
         </div>
-      </form>
-      <section aria-label="自定义接口检测记录" className="flex min-h-48 flex-1 flex-col gap-2 p-3">
         {props.tasks.historyError ? (
           <ContentRetry onRetry={props.tasks.retryHistory} pending={props.tasks.retryingHistory} />
         ) : null}
@@ -180,68 +208,80 @@ export function CustomAnimationPanel(props: {
         !props.tasks.historyLoading &&
         !props.tasks.historyError &&
         ids.length === 0 ? (
-          <p className="text-sm text-muted-foreground">暂无自定义接口检测记录</p>
+          <div
+            role="group"
+            aria-label="暂无检测记录"
+            className="flex min-h-40 shrink-0 flex-col items-center justify-center gap-2 rounded-lg bg-muted/10 px-4 py-6 text-center"
+          >
+            <Clapperboard aria-hidden="true" className="mb-1 size-6 text-muted-foreground" />
+            <p className="text-sm font-medium">暂无自定义接口检测记录</p>
+            <p className="text-xs text-muted-foreground">
+              填写接口信息后开始检测，结果将在这里展示。
+            </p>
+          </div>
         ) : null}
-        <div className="grid min-h-0 flex-1 grid-rows-1 gap-3 md:grid-cols-3">
-          {props.tasks.historyLoading && ids.length === 0 ? <AnimationHistorySkeleton /> : null}
-          {pagination.visibleItems.map((id) => {
-            const activity = props.tasks.activities.get(id);
-            const result = props.tasks.results.get(id);
-            const precheckResult = props.tasks.precheckResults.get(id);
-            const isPrecheck = props.tasks.precheckStatuses.has(id);
-            const source = result ?? precheckResult ?? props.tasks.targets.get(id);
-            return (
-              <article
-                key={id}
-                aria-label={`自定义检测 ${source?.model ?? id}`}
-                className="flex min-h-0 min-w-0 flex-col gap-2 rounded-lg border p-2"
-              >
-                <dl className="grid shrink-0 grid-cols-[4rem_minmax(0,1fr)] gap-x-2 gap-y-1 text-xs">
-                  <AnimationEndpointDetails source={source ?? { account_id: id }} />
-                  {!result && source?.model ? (
+        {ids.length > 0 || props.tasks.historyLoading ? (
+          <div className="grid min-h-0 flex-1 grid-rows-1 gap-3 md:grid-cols-3">
+            {props.tasks.historyLoading && ids.length === 0 ? <AnimationHistorySkeleton /> : null}
+            {pagination.visibleItems.map((id) => {
+              const activity = props.tasks.activities.get(id);
+              const result = props.tasks.results.get(id);
+              const precheckResult = props.tasks.precheckResults.get(id);
+              const isPrecheck = props.tasks.precheckStatuses.has(id);
+              const source = result ?? precheckResult ?? props.tasks.targets.get(id);
+              return (
+                <article
+                  key={id}
+                  aria-label={`自定义检测 ${source?.model ?? id}`}
+                  className="flex min-h-0 min-w-0 flex-col gap-2 rounded-lg border p-2"
+                >
+                  <dl className="grid shrink-0 grid-cols-[4rem_minmax(0,1fr)] gap-x-2 gap-y-1 text-xs">
+                    <AnimationEndpointDetails source={source ?? { account_id: id }} />
+                    {!result && source?.model ? (
+                      <>
+                        <dt className="text-muted-foreground">检测模型</dt>
+                        <dd className="min-w-0 wrap-anywhere">{source.model}</dd>
+                      </>
+                    ) : null}
+                  </dl>
+                  {activity ? (
                     <>
-                      <dt className="text-muted-foreground">检测模型</dt>
-                      <dd className="min-w-0 wrap-anywhere">{source.model}</dd>
+                      <TaskStartupState
+                        message={
+                          activity.mode === "precheck"
+                            ? "正在执行前置检测"
+                            : animationActivityLabel(activity.status)
+                        }
+                      />
+                      {activity.taskID ? <TaskCancelButton taskId={activity.taskID} /> : null}
                     </>
                   ) : null}
-                </dl>
-                {activity ? (
-                  <>
-                    <TaskStartupState
-                      message={
-                        activity.mode === "precheck"
-                          ? "正在执行前置检测"
-                          : animationActivityLabel(activity.status)
-                      }
+                  {!activity && isPrecheck ? (
+                    <PrecheckAccountResult
+                      result={precheckResult}
+                      status={props.tasks.precheckStatuses.get(id)}
                     />
-                    {activity.taskID ? <TaskCancelButton taskId={activity.taskID} /> : null}
-                  </>
-                ) : null}
-                {!activity && isPrecheck ? (
-                  <PrecheckAccountResult
-                    result={precheckResult}
-                    status={props.tasks.precheckStatuses.get(id)}
-                  />
-                ) : null}
-                {!activity && result ? (
-                  <AnimationAccountResult
-                    result={result}
-                    retryDisabled={pending}
-                    onRetry={() => {
-                      form.setValue("model", result.model);
-                      setMode("animation");
-                      form.setFocus("api_key");
-                      void form.handleSubmit(() => setConfirmation(true))();
-                    }}
-                  />
-                ) : null}
-                {!activity && !result && !isPrecheck ? (
-                  <p className="text-sm text-muted-foreground">检测已结束，未返回动画</p>
-                ) : null}
-              </article>
-            );
-          })}
-        </div>
+                  ) : null}
+                  {!activity && result ? (
+                    <AnimationAccountResult
+                      result={result}
+                      retryDisabled={pending}
+                      onRetry={() => {
+                        form.setValue("model", result.model);
+                        setMode("animation");
+                        form.setFocus("api_key");
+                        void form.handleSubmit(() => setConfirmation(true))();
+                      }}
+                    />
+                  ) : null}
+                  {!activity && !result && !isPrecheck ? (
+                    <p className="text-sm text-muted-foreground">检测已结束，未返回动画</p>
+                  ) : null}
+                </article>
+              );
+            })}
+          </div>
+        ) : null}
       </section>
       <ConfirmActionDialog
         open={confirmation}

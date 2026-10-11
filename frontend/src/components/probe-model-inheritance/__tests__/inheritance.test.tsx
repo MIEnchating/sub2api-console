@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 import { api, type GroupStatus, type PolicySnapshot } from "@/api";
 import { ProbeModelInheritance } from "../../probe-model-inheritance";
@@ -123,4 +123,31 @@ it("后台刷新失败时保留已知继承配置", async () => {
   });
   expect(screen.getByRole("note")).toHaveTextContent("global-model");
   expect(screen.queryByRole("button", { name: "重新读取" })).not.toBeInTheDocument();
+});
+
+it("离开页面时取消尚未完成的策略和分组读取", async () => {
+  let policySignal: AbortSignal | undefined;
+  let groupsSignal: AbortSignal | undefined;
+  vi.spyOn(api, "policy").mockImplementation((signal) => {
+    policySignal = signal;
+    return new Promise(() => undefined);
+  });
+  vi.spyOn(api, "groups").mockImplementation((signal) => {
+    groupsSignal = signal;
+    return new Promise(() => undefined);
+  });
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  clients.push(client);
+  const view = render(
+    <QueryClientProvider client={client}>
+      <ProbeModelInheritance groupIds={["6"]} />
+    </QueryClientProvider>,
+  );
+  await waitFor(() => {
+    expect(policySignal).toBeDefined();
+    expect(groupsSignal).toBeDefined();
+  });
+  view.unmount();
+  expect(policySignal?.aborted).toBe(true);
+  expect(groupsSignal?.aborted).toBe(true);
 });

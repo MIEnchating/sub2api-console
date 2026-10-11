@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 
+import { dictionaryResponse } from "./fixtures/dictionaries";
 import { policy, pricing } from "./fixtures/settings";
 
 test.beforeEach(async ({ page, colorScheme }) => {
@@ -13,6 +14,10 @@ test.beforeEach(async ({ page, colorScheme }) => {
       "/api/auth/session": { authenticated: true, username: "布局测试" },
       "/api/policy": policy,
       "/api/pricing": pricing,
+      "/api/dictionaries": dictionaryResponse(
+        route.request().url(),
+        pricing.groups.map((group) => ({ value: group.id, name: group.name })),
+      ),
       "/api/config": { probes_enabled: true },
       "/api/accounts": [],
       "/api/groups": [],
@@ -120,6 +125,17 @@ test("超长分组名完整换行且互换组操作不超出页面", async ({ pa
         ...pricing,
         groups: [{ ...pricing.groups[0], name }, ...pricing.groups.slice(1)],
       },
+    }),
+  );
+  await page.route("**/api/dictionaries?**", (route) =>
+    route.fulfill({
+      json: dictionaryResponse(
+        route.request().url(),
+        pricing.groups.map((group, index) => ({
+          value: group.id,
+          name: index === 0 ? name : group.name,
+        })),
+      ),
     }),
   );
   await page.goto("/pricing-config");

@@ -8,6 +8,7 @@ import (
 )
 
 func TestLocalOnboardingGroupIncludesManagementPlatform(t *testing.T) {
+	t.Parallel()
 	store, err := Open(filepath.Join(t.TempDir(), "business.sqlite3"))
 	if err != nil {
 		t.Fatal(err)
@@ -31,6 +32,7 @@ func TestLocalOnboardingGroupIncludesManagementPlatform(t *testing.T) {
 }
 
 func TestPendingOnboardingUsesCanonicalLocalSelectionAndRejectsDuplicateIdentity(t *testing.T) {
+	t.Parallel()
 	store, err := Open(filepath.Join(t.TempDir(), "business.sqlite3"))
 	if err != nil {
 		t.Fatal(err)
@@ -74,6 +76,7 @@ func TestPendingOnboardingUsesCanonicalLocalSelectionAndRejectsDuplicateIdentity
 }
 
 func TestPendingOnboardingRejectsMissingFrozenIntent(t *testing.T) {
+	t.Parallel()
 	store, err := Open(filepath.Join(t.TempDir(), "business.sqlite3"))
 	if err != nil {
 		t.Fatal(err)
@@ -94,6 +97,7 @@ func TestPendingOnboardingRejectsMissingFrozenIntent(t *testing.T) {
 }
 
 func TestPendingOnboardingRejectsIncompleteIdentityBeforeSelectingAnyRow(t *testing.T) {
+	t.Parallel()
 	store, err := Open(filepath.Join(t.TempDir(), "business.sqlite3"))
 	if err != nil {
 		t.Fatal(err)
@@ -123,6 +127,7 @@ func TestPendingOnboardingRejectsIncompleteIdentityBeforeSelectingAnyRow(t *test
 }
 
 func TestUpstreamIdentityMergeUpdatesPendingIdentity(t *testing.T) {
+	t.Parallel()
 	store, err := Open(filepath.Join(t.TempDir(), "business.sqlite3"))
 	if err != nil {
 		t.Fatal(err)
@@ -160,6 +165,7 @@ func TestUpstreamIdentityMergeUpdatesPendingIdentity(t *testing.T) {
 }
 
 func TestUpstreamIdentityMergeFailsClosedOnConflictingPendingRows(t *testing.T) {
+	t.Parallel()
 	store, err := Open(filepath.Join(t.TempDir(), "business.sqlite3"))
 	if err != nil {
 		t.Fatal(err)
@@ -200,6 +206,7 @@ func TestUpstreamIdentityMergeFailsClosedOnConflictingPendingRows(t *testing.T) 
 }
 
 func TestCommitOnboardingProjectionAcceptsStableCreateWithoutReadback(t *testing.T) {
+	t.Parallel()
 	store, err := Open(filepath.Join(t.TempDir(), "business.sqlite3"))
 	if err != nil {
 		t.Fatal(err)

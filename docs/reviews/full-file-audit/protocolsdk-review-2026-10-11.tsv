@@ -1,0 +1,6 @@
+backend/internal/protocolsdk/README.md	ae2986bdc6d54ea43ba4a30e600c42a1bdc2ddc89cb058bdcd3228a5b65f1299	reviewed	全文阅读：Go 内嵌解释器与受控回调边界，TLS/未来 SDK 兼容性限制；不将文档描述当作全场景验证。 未确认本轮需修复缺陷；无源码/测试修改，未重复执行检查。
+backend/internal/protocolsdk/__tests__/runtime_test.go	297b201aabccc56cf132b22514fd26d9ee80c128750f87154a5498f71a13d46c	reviewed	全文阅读：本地 SDK fixture + 替代 HTTP 响应，设备/flow/challenge 绑定与错误拒绝；明确同步点后取消无限 JS，无真实端点请求。 未确认本轮需修复缺陷；无源码/测试修改，未重复执行检查。
+backend/internal/protocolsdk/__tests__/testdata/README.md	bd32a5ed7149f3dd1301df747acad0216fe56e35778fedd22e70dee4ca67c0a0	reviewed	全文阅读：固定公开 SDK 来源声明、仅测试用途、生产动态下载与未来兼容性限制；未联网独立认证来源。 未确认本轮需修复缺陷；无源码/测试修改，未重复执行检查。
+backend/internal/protocolsdk/__tests__/testdata/official-sdk-20260219f9f6.js	4f8ef8d5870894fd0101fc40ff45ea13c0f8e25c71c2ba28e5df5baf98babbb5	reviewed	全文分段阅读 30864 字节压缩第三方 fixture：UUID、挑战执行、Cookie 解析与 frame 消息/令牌路径；按第三方兼容输入审阅，不声称穷尽其混淆算法或未来挑战正确性。 未确认本轮需修复缺陷；无源码/测试修改，未重复执行检查。
+backend/internal/protocolsdk/environment.js	37940123a2a624eda03a3779b66f2214469f46219b294a81afd86d6b3560665d	reviewed	全文阅读：最小宿主 API、内存存储、frame 请求转发；不开放文件/进程/通用网络；域名限制由 Go 调用方执行，未声称完整浏览器兼容。 未确认本轮需修复缺陷；无源码/测试修改，未重复执行检查。
+backend/internal/protocolsdk/runtime.go	9bb96b46f58cbd4a2d71dd6cdc8ae4107717631041b5ad3be3465b10937363e3	reviewed	全文阅读及唯一生产调用方接线：新 VM 内存隔离、25 秒取消中断、定时器驱动、随机缓冲上限、受控请求、通用错误、返回设备/flow/challenge 及长度校验。 未确认本轮需修复缺陷；无源码/测试修改，未重复执行检查。

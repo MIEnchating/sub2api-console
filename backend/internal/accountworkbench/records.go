@@ -1,6 +1,7 @@
 package accountworkbench
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -37,6 +38,7 @@ type Run struct {
 	Items          []RunItem `json:"items"`
 }
 type privateRun struct {
+	RememberedSource *rememberedSource          `json:"remembered_source,omitempty"`
 	Scope            string                     `json:"scope"`
 	Public           Run                        `json:"public"`
 	Owner            string                     `json:"owner"`
@@ -61,9 +63,14 @@ func (s *Service) Runs(ctx context.Context, owner string) ([]Run, error) {
 	}
 	result := []Run{}
 	err := s.documents(ctx, "run:"+owner+":", func(record configstore.WorkbenchDocumentRecord) error {
-		value, err := decodeRun(record.Payload)
-		if err != nil {
-			return err
+		var value struct {
+			Owner  string `json:"owner"`
+			Public Run    `json:"public"`
+		}
+		decoder := json.NewDecoder(bytes.NewReader(record.Payload))
+		decoder.UseNumber()
+		if err := decoder.Decode(&value); err != nil {
+			return errors.New("处理记录无法读取，请重新输入账号资料")
 		}
 		if value.Owner != owner {
 			return ErrRun
@@ -113,7 +120,7 @@ func (s *Service) readRun(ctx context.Context, owner, id string) (privateRun, er
 }
 func decodeRun(raw json.RawMessage) (privateRun, error) {
 	var value privateRun
-	decoder := json.NewDecoder(strings.NewReader(string(raw)))
+	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.UseNumber()
 	if decoder.Decode(&value) != nil {
 		return value, errors.New("处理记录无法读取，请重新输入账号资料")

@@ -104,7 +104,7 @@ func (s *Service) EnqueuePoolModeSync(ctx context.Context, accountIDs []string, 
 func (s *Service) executePoolModeSync(ctx context.Context, task taskstore.Task, accountIDs []string, settings configstore.AccountCreationSettings, actor string) {
 	ctx, cancel := context.WithTimeout(ctx, s.timeout)
 	defer cancel()
-	task.Status, task.Progress, task.Message = "running", 2, "正在同步已有账号池模式"
+	task.Status, task.Progress, task.Message = "running", 0, "正在同步已有账号池模式"
 	task.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
 	if !taskstore.SaveRunning(ctx, s.tasks, task) {
 		return
@@ -135,7 +135,7 @@ func (s *Service) executePoolModeSync(ctx context.Context, task taskstore.Task, 
 	for outcome := range outcomes {
 		items[outcome.index] = outcome.item
 		completed++
-		task.Progress = 2 + completed*94/len(accountIDs)
+		task.Progress = completed * 100 / len(accountIDs)
 		task.Message = fmt.Sprintf("池模式同步进度：已处理 %d/%d 个账号", completed, len(accountIDs))
 		task.Result = poolModeTaskResult(accountIDs, completed, items)
 		task.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)

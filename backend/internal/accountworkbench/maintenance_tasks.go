@@ -136,7 +136,7 @@ func (s *Service) maintenanceAllowed(ctx context.Context, value *privateMaintena
 	if _, err := targetguard.Pin(targetguard.Expect(ctx, value.Target), s.private); err != nil {
 		return err
 	}
-	_, revision, err := s.private.WorkbenchDocument(ctx, "maintenance:"+targetKey(value.Target))
+	revision, err := s.private.WorkbenchDocumentRevision(ctx, "maintenance:"+targetKey(value.Target))
 	if err != nil {
 		return err
 	}

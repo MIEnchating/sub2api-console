@@ -16,6 +16,7 @@ import (
 )
 
 func TestUpstreamCapacityWriteRechecksSiblingCapacityAfterTargetWasCalculated(t *testing.T) {
+	t.Parallel()
 	for _, refreshProjection := range []bool{false, true} {
 		name := "external manual change"
 		if refreshProjection {
@@ -95,6 +96,7 @@ func TestUpstreamCapacityWriteRechecksSiblingCapacityAfterTargetWasCalculated(t 
 }
 
 func TestUpstreamCapacityWriteAppliesOnlyGrowthThatFitsCurrentCapacity(t *testing.T) {
+	t.Parallel()
 	for _, scenario := range []struct {
 		name        string
 		limit       *int64
@@ -132,6 +134,7 @@ func TestUpstreamCapacityWriteAppliesOnlyGrowthThatFitsCurrentCapacity(t *testin
 }
 
 func TestUpstreamCapacityRecoveryRechecksActualAccountConcurrency(t *testing.T) {
+	t.Parallel()
 	for _, other := range []int{6, 8} {
 		t.Run(fmt.Sprintf("sibling concurrency %d", other), func(t *testing.T) {
 			service, fixture := newUpstreamCapacityWriteFixture(t, writeCapacityPointer(10), 4, other, false)
@@ -149,6 +152,7 @@ func TestUpstreamCapacityRecoveryRechecksActualAccountConcurrency(t *testing.T) 
 }
 
 func TestUpstreamCapacityBatchCannotSpendTheSameHeadroomTwice(t *testing.T) {
+	t.Parallel()
 	service, fixture := newUpstreamCapacityWriteFixture(t, writeCapacityPointer(10), 4, 4, true)
 	desired := int64(6)
 	result, err := service.Apply(t.Context(), map[string]business.AccountRoutingTarget{
@@ -176,6 +180,7 @@ func TestUpstreamCapacityBatchCannotSpendTheSameHeadroomTwice(t *testing.T) {
 }
 
 func TestUpstreamCapacityBatchDoesNotSpendAnUnconfirmedReduction(t *testing.T) {
+	t.Parallel()
 	service, fixture := newUpstreamCapacityWriteFixture(t, writeCapacityPointer(10), 6, 4, true)
 	reduced, expanded := int64(4), int64(6)
 	_, err := service.Apply(t.Context(), map[string]business.AccountRoutingTarget{
@@ -193,6 +198,7 @@ func TestUpstreamCapacityBatchDoesNotSpendAnUnconfirmedReduction(t *testing.T) {
 }
 
 func TestUpstreamCapacitySeparateTasksShareOneUpstreamReservation(t *testing.T) {
+	t.Parallel()
 	service, fixture := newUpstreamCapacityWriteFixture(t, writeCapacityPointer(10), 4, 4, true)
 	start := make(chan struct{})
 	var wait sync.WaitGroup
@@ -216,6 +222,7 @@ func TestUpstreamCapacitySeparateTasksShareOneUpstreamReservation(t *testing.T) 
 }
 
 func TestUpstreamCapacityRecoveryStopsWhenSnapshotCannotConfirmSibling(t *testing.T) {
+	t.Parallel()
 	service, fixture := newUpstreamCapacityWriteFixture(t, writeCapacityPointer(10), 4, 4, false)
 	fixture.omitSibling = true
 	enabled := true
@@ -230,6 +237,7 @@ func TestUpstreamCapacityRecoveryStopsWhenSnapshotCannotConfirmSibling(t *testin
 }
 
 func TestUpstreamCapacityRecoveryDoesNotEnableAnAccountWhenConcurrencyWriteFails(t *testing.T) {
+	t.Parallel()
 	service, fixture := newUpstreamCapacityWriteFixture(t, writeCapacityPointer(10), 20, 4, false)
 	fixture.failParameters = true
 	enabled, concurrency := true, int64(6)
@@ -244,6 +252,7 @@ func TestUpstreamCapacityRecoveryDoesNotEnableAnAccountWhenConcurrencyWriteFails
 }
 
 func TestUpstreamCapacityConfigurationErrorPreventsPartialAutomaticWrites(t *testing.T) {
+	t.Parallel()
 	service, fixture := newUpstreamCapacityWriteFixture(t, writeCapacityPointer(10), 4, 4, true)
 	configurationError := "请同时启用并发与可调度状态自动写入后执行"
 	desired := int64(6)
@@ -264,6 +273,7 @@ func TestUpstreamCapacityConfigurationErrorPreventsPartialAutomaticWrites(t *tes
 }
 
 func TestUpstreamCapacityCountsSiblingAccountsWithoutAnyGroup(t *testing.T) {
+	t.Parallel()
 	service, fixture := newUpstreamCapacityWriteFixture(t, writeCapacityPointer(10), 4, 6, true)
 	fixture.states["42"]["groups"] = []any{}
 	if _, err := fixture.store.SyncManagementSnapshot(t.Context(), fixture.accounts(), []map[string]any{{"id": json.Number("7"), "name": "capacity-group"}}, "test"); err != nil {
@@ -281,6 +291,7 @@ func TestUpstreamCapacityCountsSiblingAccountsWithoutAnyGroup(t *testing.T) {
 }
 
 func TestUpstreamCapacityRecoveryUsesNewerConcurrencySeenInBatchSnapshot(t *testing.T) {
+	t.Parallel()
 	service, fixture := newUpstreamCapacityWriteFixture(t, writeCapacityPointer(10), 4, 4, false)
 	fixture.snapshotConcurrency = map[string]int{"41": 20}
 	enabled := true
@@ -309,6 +320,7 @@ func (store *changedCapacityMembershipStore) RoutingCapacityAccounts(ctx context
 }
 
 func TestUpstreamCapacityMembershipIsRecheckedAfterAcquiringLeases(t *testing.T) {
+	t.Parallel()
 	_, fixture := newUpstreamCapacityWriteFixture(t, writeCapacityPointer(10), 4, 4, true)
 	repository := &changedCapacityMembershipStore{Store: fixture.store, change: func() {
 		fixture.states["42"]["upstream_host"] = ""
@@ -331,6 +343,7 @@ func TestUpstreamCapacityMembershipIsRecheckedAfterAcquiringLeases(t *testing.T)
 }
 
 func TestUpstreamCapacityUsesLatestUserLimitAfterAcquiringLeases(t *testing.T) {
+	t.Parallel()
 	_, fixture := newUpstreamCapacityWriteFixture(t, writeCapacityPointer(10), 4, 4, true)
 	repository := &changedCapacityMembershipStore{Store: fixture.store, change: func() {
 		limit := int64(8)
@@ -352,6 +365,7 @@ func TestUpstreamCapacityUsesLatestUserLimitAfterAcquiringLeases(t *testing.T) {
 }
 
 func TestUpstreamCapacityStaleLimitBlocksGrowthAndRecoveryButAllowsReduction(t *testing.T) {
+	t.Parallel()
 	for _, scenario := range []struct {
 		name    string
 		active  bool

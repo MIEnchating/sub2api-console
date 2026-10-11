@@ -54,7 +54,9 @@ func (s *Service) ModelPriceCatalog(ctx context.Context, platformID string, forc
 	if !ok {
 		return ModelPriceCatalog{}, errors.New("本地价格缓存存储尚未就绪")
 	}
-	s.pricingMu.Lock()
+	if err := s.pricingMu.Lock(ctx); err != nil {
+		return ModelPriceCatalog{}, err
+	}
 	defer s.pricingMu.Unlock()
 	key := catalogCacheKey(*platform, target)
 	cached, err := store.ModelPricingCache(ctx, key)
@@ -223,9 +225,30 @@ func (s *Service) ModelPriceCatalog(ctx context.Context, platformID string, forc
 }
 
 func (s *Service) pricingModelNames(ctx context.Context, platform configstore.NewAPIPlatform) ([]string, error) {
-	options, err := s.readOptions(ctx, platform)
-	if err != nil {
-		return nil, err
+	var options map[string]string
+	var optionsErr error
+	var enabledModelNames []string
+	var enabledErr error
+	var reads sync.WaitGroup
+	reads.Go(func() {
+		payload, err := s.request(ctx, platform, http.MethodGet, "/api/option/", nil)
+		if err != nil {
+			optionsErr = err
+			return
+		}
+		options, optionsErr = optionValues(payload)
+	})
+	reads.Go(func() {
+		payload, err := s.request(ctx, platform, http.MethodGet, "/api/channel/models_enabled", nil)
+		if err != nil {
+			enabledErr = err
+			return
+		}
+		enabledModelNames = decodeModelNames(payload)
+	})
+	reads.Wait()
+	if optionsErr != nil {
+		return nil, optionsErr
 	}
 	configured, err := decodeConfiguredModels(options)
 	if err != nil {
@@ -235,11 +258,8 @@ func (s *Service) pricingModelNames(ctx context.Context, platform configstore.Ne
 	for _, price := range configured {
 		names = append(names, price.Model)
 	}
-	payload, err := s.request(ctx, platform, http.MethodGet, "/api/channel/models_enabled", nil)
-	if err == nil {
-		names = append(names, decodeModelNames(payload)...)
-	}
-	return normalizeModels(names), err
+	names = append(names, enabledModelNames...)
+	return normalizeModels(names), enabledErr
 }
 
 func loadDefaultPricing(ctx context.Context, store pricingCacheStore, client *adminclient.Client, catalogKey, model string, force bool) (adminclient.DefaultModelPricing, time.Time, error) {

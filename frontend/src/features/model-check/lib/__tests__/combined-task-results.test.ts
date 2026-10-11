@@ -57,3 +57,21 @@ it("组合检测尚未返回结果时显示前置检测阶段", () => {
   const state = collectAnimationTasks([task([], "running")], new Set());
   expect(state.activities.get("41")?.mode).toBe("precheck");
 });
+
+it("组合任务中动画仍生成时保留前置结论并忽略无效的阶段更新", () => {
+  const running = task([precheck, { ...animation, phase: "generating" }], "running");
+  running.result.animations = [
+    ...(running.result.animations as AnimationResult[]),
+    { ...animation, phase: "queued", duration_ms: -1 },
+  ];
+  const state = collectAnimationTasks([running], new Set());
+  expect(state.precheckResults.get("41")?.precheck?.verdict).toBe("passed");
+  expect(state.results.has("41")).toBe(false);
+  expect(state.activities.get("41")).toEqual({
+    status: "generating",
+    taskID: "both",
+    batchSize: 1,
+    completed: 0,
+  });
+  expect(state.busyIDs.has("41")).toBe(true);
+});

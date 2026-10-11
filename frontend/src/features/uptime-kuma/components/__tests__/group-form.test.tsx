@@ -71,7 +71,7 @@ it("分组保存中禁用输入和提交并在弹窗底部显示任务进度", (
       initialType="group"
       monitors={[]}
       pending
-      task={{ message: "正在创建分组", progress: 50 }}
+      task={{ id: "group-create", message: "正在创建分组", progress: 50 }}
       onClose={vi.fn()}
       onSubmit={vi.fn()}
     />,

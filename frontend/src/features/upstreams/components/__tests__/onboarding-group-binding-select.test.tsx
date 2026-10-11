@@ -1,4 +1,5 @@
-import { renderToStaticMarkup } from "@/test/dictionary";
+import type { ReactElement } from "react";
+import { renderToStaticMarkup as renderMarkup } from "@/test/dictionary";
 
 import { describe, expect, it } from "vitest";
 
@@ -6,6 +7,14 @@ import {
   OnboardingGroupBindingOption,
   OnboardingGroupBindingSelect,
 } from "../onboarding-group-binding-select";
+
+function renderToStaticMarkup(
+  element: ReactElement<{ groups?: Array<{ id: string; name: string }> }>,
+): string {
+  return renderMarkup(element, {
+    group: (element.props.groups ?? []).map((group) => ({ value: group.id, name: group.name })),
+  });
+}
 
 describe("OnboardingGroupBindingSelect", () => {
   it("puts the local-group binding control directly in an upstream-group row", () => {
@@ -24,6 +33,8 @@ describe("OnboardingGroupBindingSelect", () => {
     expect(markup).toContain('aria-label="kiro-power 本地分组"');
     expect(markup).toContain("选择本地分组");
     expect(markup).toContain("min-w-44");
+    expect(markup).toContain("min-h-8");
+    expect(markup).toContain("py-1");
     expect(markup).toContain('data-slot="combobox-trigger"');
   });
 

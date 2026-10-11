@@ -15,6 +15,7 @@ import {
   GitCompareArrows,
   KeyRound,
   Layers3,
+  ListChecks,
   Link2,
   ListTodo,
   Network,
@@ -29,10 +30,15 @@ import {
   UserPlus,
 } from "lucide-react";
 
-import { navItems, navSections, viewForPath } from "../App";
+import App, { navItems, navSections, viewForPath } from "../app-shell";
+import { Route as RootRoute } from "../app-routes/__root";
 import { router } from "../router";
 
 describe("侧边菜单", () => {
+  it("根路由使用独立外壳，按需加载业务页面", () => {
+    expect(RootRoute.options.component).toBe(App);
+  });
+
   it("按导航意图预加载按需路由", () => {
     expect(router.options.defaultPreload).toBe("intent");
     expect(router.options.defaultPreloadStaleTime).toBe(0);
@@ -56,6 +62,7 @@ describe("侧边菜单", () => {
       "告警通知",
       "分组绑定",
       "渠道管理",
+      "账号模型",
       "模型价格",
       "价格比对",
       "监控管理",
@@ -88,6 +95,7 @@ describe("侧边菜单", () => {
       Siren,
       Link2,
       RadioTower,
+      ListChecks,
       BadgeDollarSign,
       GitCompareArrows,
       Activity,
@@ -126,7 +134,13 @@ describe("侧边菜单", () => {
       },
       {
         label: "New API",
-        itemIDs: ["newapi-groups", "newapi-channels", "newapi-prices", "newapi-differences"],
+        itemIDs: [
+          "newapi-groups",
+          "newapi-channels",
+          "newapi-account-automation",
+          "newapi-prices",
+          "newapi-differences",
+        ],
       },
       {
         label: "Uptime Kuma",
@@ -144,6 +158,7 @@ describe("侧边菜单", () => {
     expect(viewForPath("/newapi")).toBe("config");
     expect(viewForPath("/newapi/groups")).toBe("newapi-groups");
     expect(viewForPath("/newapi/channels")).toBe("newapi-channels");
+    expect(viewForPath("/newapi/account-model-automation")).toBe("newapi-account-automation");
     expect(viewForPath("/newapi/prices")).toBe("newapi-prices");
     expect(viewForPath("/newapi/differences")).toBe("newapi-differences");
   });

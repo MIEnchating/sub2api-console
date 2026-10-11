@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"time"
 
 	_ "modernc.org/sqlite"
 )
@@ -22,6 +23,9 @@ func OpenDatabase(path string) (*Database, error) {
 	}
 	writer.SetMaxOpenConns(1)
 	writer.SetMaxIdleConns(1)
+	// An inactive store should not retain the writer's page/statement caches.
+	// database/sql only closes idle connections; in-flight transactions survive.
+	writer.SetConnMaxIdleTime(time.Minute)
 	if err := writer.PingContext(context.Background()); err != nil {
 		return nil, errors.Join(err, writer.Close())
 	}
@@ -30,7 +34,13 @@ func OpenDatabase(path string) (*Database, error) {
 		return nil, errors.Join(err, writer.Close())
 	}
 	reader.SetMaxOpenConns(8)
-	reader.SetMaxIdleConns(8)
+	// Keep the full read concurrency available, but retain only half of the
+	// reader connections after a burst so their SQLite page and statement caches
+	// do not remain resident while the store is idle.
+	reader.SetMaxIdleConns(4)
+	// Release per-connection SQLite caches after bursts, while keeping active
+	// snapshots and the full read concurrency available. Busy readers are reused.
+	reader.SetConnMaxIdleTime(time.Minute)
 	db := &Database{DB: writer, reader: reader}
 	if err := reader.PingContext(context.Background()); err != nil {
 		return nil, errors.Join(err, db.Close())

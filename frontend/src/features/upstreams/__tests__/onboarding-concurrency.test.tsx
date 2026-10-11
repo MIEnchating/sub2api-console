@@ -34,7 +34,9 @@ it("新增账号默认留空并发并由后端预览分配，确认前展示实�
   fireEvent.click(screen.getByRole("button", { name: "预览添加账号" }));
   const dialog = await screen.findByRole("dialog", { name: "确认账号绑定变更" });
   expect(preview.mock.calls[0]?.[0][0]?.concurrency).toBeUndefined();
+  expect(preview.mock.calls[0]?.[0][0]?.schedulable).toBe(false);
   expect(within(dialog).getByText("7", { exact: true })).toBeVisible();
+  expect(within(dialog).getByText("开启", { exact: true })).toBeVisible();
 });
 
 it("上游额度已满时预览展示停用等待状态并允许确认添加", async () => {
@@ -57,6 +59,7 @@ it("上游额度已满时预览展示停用等待状态并允许确认添加", a
   fireEvent.click(screen.getByRole("button", { name: "预览添加账号" }));
   const dialog = await screen.findByRole("dialog", { name: "确认账号绑定变更" });
   expect(within(dialog).getByText("等待并发额度")).toBeVisible();
+  expect(within(dialog).getByText("停用等待", { exact: true })).toBeVisible();
   expect(within(dialog).getByText(/保持停用/)).toBeVisible();
   expect(within(dialog).getByRole("button", { name: "确认提交 1 项变更" })).toBeEnabled();
   fireEvent.click(within(dialog).getByRole("button", { name: "确认提交 1 项变更" }));
@@ -162,6 +165,7 @@ it.each([
       upstream_type: upstreamType,
       concurrency: 10,
       waiting_for_capacity: undefined,
+      schedulable: true,
     });
     await waitFor(() => {
       if (directGroup) expect(submit).toHaveBeenCalledWith(expectedRequest);

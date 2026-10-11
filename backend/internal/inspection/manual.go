@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"maps"
 	"time"
 
 	"github.com/MIEnchating/sub2api-console/backend/internal/business"
@@ -58,7 +59,7 @@ func (s *ManualService) execute(parent context.Context, task taskstore.Task, req
 		return
 	}
 	originalProgress := task.Progress
-	task = manualTaskNotStarted(task, request, err, time.Now().UTC())
+	task = manualTaskNotStarted(task, err, time.Now().UTC())
 	if taskstore.Interrupted(ctx) {
 		task.Progress = originalProgress
 	}
@@ -66,22 +67,36 @@ func (s *ManualService) execute(parent context.Context, task taskstore.Task, req
 	taskstore.PersistFinal(s.tasks, task)
 }
 
-func manualTaskNotStarted(task taskstore.Task, request RunRequest, err error, now time.Time) taskstore.Task {
+func manualTaskNotStarted(task taskstore.Task, err error, now time.Time) taskstore.Task {
 	status, message := "failed", "已有巡检正在执行，本次手动巡检未启动"
-	result := map[string]any{"error": message, "remote_write": false}
+	result := maps.Clone(task.Result)
+	if result == nil {
+		result = map[string]any{}
+	}
+	result["error"], result["remote_write"] = message, false
 	if err != nil {
 		message = err.Error()
 		result["error"] = message
 	}
 	if errors.Is(err, context.Canceled) {
 		status, message = "cancelled", "巡检已取消"
-		result = map[string]any{"cancelled": true, "remote_write": false}
+		delete(result, "error")
+		result["cancelled"] = true
 	}
 	task.Status, task.Progress, task.Message = status, 100, message
 	task.UpdatedAt, task.Result = now.Format(time.RFC3339Nano), result
 	return task
 }
 
-func (e *manualExecutor) Execute(ctx context.Context, _ business.AutoInspectionConfig) (ExecutionResult, error) {
-	return e.runner.RunTask(ctx, e.task, e.request), nil
+func (e *manualExecutor) Execute(ctx context.Context, config business.AutoInspectionConfig) (ExecutionResult, error) {
+	request := e.request
+	if request.Automatic && !config.Enabled {
+		return e.runner.failQueuedTask(ctx, e.task, errors.New("自动巡检已关闭，不再恢复旧任务")), nil
+	}
+	// The scheduler reads configuration after the worker leaves the queue.
+	// Preserve manual request semantics while replacing any recovery snapshot.
+	if request.Automatic || request.AutoConfig != nil {
+		request.AutoConfig = &config
+	}
+	return e.runner.RunTask(ctx, e.task, request), nil
 }

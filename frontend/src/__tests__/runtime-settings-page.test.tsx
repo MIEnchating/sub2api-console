@@ -1,9 +1,9 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   ConfigPage,
@@ -316,50 +316,42 @@ describe("系统设置页面职责", () => {
     expect(outcome).toEqual({ task: null, syncFailed: true, syncError });
   });
 
-  it("keeps log cleanup controls disabled until its configuration is read successfully", async () => {
-    const queryClient = new QueryClient({
-      defaultOptions: { queries: { enabled: false, retry: false } },
-    });
-    queryClient.setQueryData<RuntimeConfig>(["config"], {
-      database_available: true,
-      data_database_available: true,
-      mode: "完全模式",
-      config_keys: [],
-      secret_values_hidden: true,
-      probes_enabled: true,
-      account_default_concurrency: 10,
-      account_default_priority: 1,
-      admin_base_url: "https://sub2api.example.test",
-      request_timeout_seconds: 60,
-      initialized: true,
-      target_configured: true,
-      console_username: "admin",
-      configuration_errors: [],
-    });
-    await queryClient.prefetchQuery({
-      queryKey: ["log-cleanup"],
-      queryFn: async () => {
-        throw new Error("读取失败");
-      },
-      retry: false,
-    });
-
-    const markup = renderToStaticMarkup(
+  it("清理配置读取失败时禁用修改和清理，重试成功后恢复入口", async () => {
+    const user = userEvent.setup();
+    const queryClient = configuredQueryClient();
+    queryClient.removeQueries({ queryKey: ["log-cleanup"] });
+    let failed = true;
+    vi.stubGlobal("fetch", async () =>
+      failed
+        ? Response.json({ detail: "读取失败" }, { status: 503 })
+        : Response.json({ enabled: false, retention_days: 30 }),
+    );
+    const view = render(
       <QueryClientProvider client={queryClient}>
         <ConfigPage activeTab="interface" />
       </QueryClientProvider>,
     );
-
-    expect(markup).toContain("读取成功后才能修改设置或清理日志");
-    expect(markup).toContain('aria-label="刷新日志清理配置"');
-    expect(markup).toMatch(
-      /<span(?=[^>]*role="switch")(?=[^>]*aria-label="定时清理")(?=[^>]*aria-disabled="true")[^>]*>/,
-    );
-    expect(markup).toMatch(/<input(?=[^>]*aria-label="日志保留天数")(?=[^>]*disabled)[^>]*>/);
-    expect(markup).toMatch(
-      /<button(?=[^>]*data-testid="log-cleanup-clear")(?=[^>]*disabled)[^>]*>/,
-    );
-    expect(markup).toMatch(/<button(?=[^>]*data-testid="log-cleanup-save")(?=[^>]*disabled)[^>]*>/);
+    try {
+      const retry = await screen.findByRole("button", { name: "刷新日志清理配置" });
+      expect(screen.getByRole("switch", { name: "定时清理" })).toHaveAttribute(
+        "aria-disabled",
+        "true",
+      );
+      expect(screen.getByRole("spinbutton", { name: "日志保留天数" })).toBeDisabled();
+      expect(screen.getByRole("button", { name: "立即按期限清理" })).toBeDisabled();
+      expect(screen.getByRole("button", { name: "保存日志设置" })).toBeDisabled();
+      failed = false;
+      await user.click(retry);
+      await waitFor(() =>
+        expect(screen.getByRole("button", { name: "保存日志设置" })).toBeEnabled(),
+      );
+      expect(screen.getByRole("button", { name: "立即按期限清理" })).toBeEnabled();
+      expect(screen.getByRole("spinbutton", { name: "日志保留天数" })).toBeEnabled();
+    } finally {
+      view.unmount();
+      queryClient.clear();
+      vi.unstubAllGlobals();
+    }
   });
 
   it("maps public notification identifiers while keeping the secret input empty", () => {

@@ -10,6 +10,7 @@ import (
 )
 
 func TestEmptyScoringHistoryPreservesFreshHealthEvidence(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		name, result, state string
 		score               float64

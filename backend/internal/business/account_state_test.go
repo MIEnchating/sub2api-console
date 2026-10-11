@@ -6,6 +6,7 @@ import (
 )
 
 func TestNormalizeAccountStateUsesCanonicalStates(t *testing.T) {
+	t.Parallel()
 	tests := map[string]string{
 		"active":          AccountStateHealthy,
 		"pass":            AccountStateHealthy,
@@ -28,6 +29,7 @@ func TestNormalizeAccountStateUsesCanonicalStates(t *testing.T) {
 }
 
 func TestGroupAvailabilityUsesManualSchedulingInsteadOfHistoricalScore(t *testing.T) {
+	t.Parallel()
 	for _, scenario := range []struct {
 		name        string
 		state       string
@@ -52,6 +54,7 @@ func TestGroupAvailabilityUsesManualSchedulingInsteadOfHistoricalScore(t *testin
 }
 
 func TestGroupRuntimeStatusMatchesGuardianAvailabilityStates(t *testing.T) {
+	t.Parallel()
 	disabled := GroupStatus{AccountCount: 2, SchedulingClosed: 2, DisabledAccounts: 2, ParticipationStatus: "participating"}
 	if got := groupRuntimeStatus(disabled, false, 1); got != "all_fused" {
 		t.Fatalf("disabled group status=%q", got)
@@ -87,6 +90,7 @@ func TestGroupRuntimeStatusMatchesGuardianAvailabilityStates(t *testing.T) {
 }
 
 func TestAvailableGroupAccountsDoesNotCountBlockedSurvivor(t *testing.T) {
+	t.Parallel()
 	now := time.Date(2026, 8, 27, 12, 0, 0, 0, time.UTC)
 	schedulable := true
 	account := accountProjection{
@@ -103,6 +107,7 @@ func TestAvailableGroupAccountsDoesNotCountBlockedSurvivor(t *testing.T) {
 }
 
 func TestGroupAccountMetadataScopeMatchesRoutingScope(t *testing.T) {
+	t.Parallel()
 	upstreamType := "newapi"
 	account := accountProjection{
 		AccountStatus: AccountStatus{ID: "41", UpstreamType: &upstreamType},
@@ -121,6 +126,7 @@ func TestGroupAccountMetadataScopeMatchesRoutingScope(t *testing.T) {
 }
 
 func TestAccountUpstreamBlockUsesSub2APIRuntimeFields(t *testing.T) {
+	t.Parallel()
 	now := time.Date(2026, 8, 27, 12, 0, 0, 0, time.UTC)
 	schedulable := true
 	if got := AccountUpstreamBlock(map[string]any{"status": "active", "rate_limit_reset_at": now.Add(time.Hour).Format(time.RFC3339Nano)}, &schedulable, now); got != AccountBlockRateLimited {
@@ -132,6 +138,7 @@ func TestAccountUpstreamBlockUsesSub2APIRuntimeFields(t *testing.T) {
 }
 
 func TestAccountUpstreamBlockReasonExplainsWhyTrafficIsStopped(t *testing.T) {
+	t.Parallel()
 	now := time.Date(2026, 8, 27, 12, 0, 0, 0, time.UTC)
 	schedulable := true
 	metadata := map[string]any{
@@ -146,6 +153,7 @@ func TestAccountUpstreamBlockReasonExplainsWhyTrafficIsStopped(t *testing.T) {
 }
 
 func TestAccountUpstreamBlockReasonPrefersSchedulingSwitchLikeSub2API(t *testing.T) {
+	t.Parallel()
 	now := time.Date(2026, 8, 27, 12, 0, 0, 0, time.UTC)
 	schedulable := false
 	tests := []struct {
@@ -185,6 +193,7 @@ func TestAccountUpstreamBlockReasonPrefersSchedulingSwitchLikeSub2API(t *testing
 }
 
 func TestAccountUpstreamBlockReasonDoesNotInventReasonForSchedulingSwitch(t *testing.T) {
+	t.Parallel()
 	now := time.Date(2026, 8, 27, 12, 0, 0, 0, time.UTC)
 	schedulable := false
 	block, reason := AccountUpstreamBlockDetails(map[string]any{"status": "active"}, &schedulable, now)

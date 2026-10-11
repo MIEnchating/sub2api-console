@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { DictionaryEntry } from "@/api";
-import { orderByDictionary } from "../dictionary-order";
+import { orderByDictionary, sortRecordsByDictionary } from "../dictionary-order";
 
 describe("消费字典排序", () => {
-  it("字典逆序时保留选项的稳定 ID、大小写和附加属性，未登记值置后", () => {
+  it("字典逆序时保留选项的稳定 ID、大小写和附加属性，不补入未登记值", () => {
     const items = [
       { id: "A", label: "相同名称", count: 1 },
       { id: "B", label: "相同名称", count: 2 },
@@ -13,15 +13,11 @@ describe("消费字典排序", () => {
       { value: "B", enabled: true },
       { value: "A", enabled: true },
     ] as DictionaryEntry[];
-    expect(orderByDictionary(items, entries, (item) => item.id)).toEqual([
-      items[1],
-      items[0],
-      items[2],
-    ]);
+    expect(orderByDictionary(items, entries, (item) => item.id)).toEqual([items[1], items[0]]);
     expect(items[0].id).toBe("A");
   });
-  it("字典未就绪时保留现有选项", () => {
-    expect(orderByDictionary(["C", "A"], undefined, (value) => value)).toEqual(["C", "A"]);
+  it("字典未就绪时不展示本地选项", () => {
+    expect(orderByDictionary(["C", "A"], undefined, (value) => value)).toEqual([]);
   });
 });
 
@@ -31,15 +27,25 @@ it("仅有名称的展示项遇到同名字典条目时使用首次出现顺序�
     { value: "1", name: "A", enabled: true },
     { value: "3", name: "B", enabled: true },
   ] as DictionaryEntry[];
-  expect(orderByDictionary(["A", "B", "b"], entries, (value) => value, "name")).toEqual([
-    "B",
-    "A",
-    "b",
-  ]);
+  expect(orderByDictionary(["A", "B", "b"], entries, (value) => value, "name")).toEqual(["B", "A"]);
 });
 
-it("字典没有可用条目时保留空列表和原始选项", () => {
+it("字典没有可用条目时返回空选项", () => {
   const entries = [{ value: "B", enabled: false }] as DictionaryEntry[];
   expect(orderByDictionary([], entries, String)).toEqual([]);
-  expect(orderByDictionary(["A", "B"], entries, String)).toEqual(["A", "B"]);
+  expect(orderByDictionary(["A", "B"], entries, String)).toEqual([]);
+});
+
+it("真实业务记录在字典缺失或停用时仍可维护，已登记记录遵循字典顺序", () => {
+  const records = [{ id: "A" }, { id: "B" }, { id: "C" }];
+  const entries = [
+    { value: "B", enabled: false },
+    { value: "A", enabled: true },
+  ] as DictionaryEntry[];
+  expect(sortRecordsByDictionary(records, entries, (record) => record.id)).toEqual([
+    records[1],
+    records[0],
+    records[2],
+  ]);
+  expect(sortRecordsByDictionary(records, undefined, (record) => record.id)).toEqual(records);
 });

@@ -21,10 +21,21 @@ export function useNavigationPreferences<T extends string>(
   );
   const initialized = useRef(false);
   const writing = useRef(false);
-  const query = useQuery({ queryKey, queryFn: api.navigationPreferences, enabled, retry: false });
+  const query = useQuery({
+    queryKey,
+    queryFn: ({ signal }) => api.navigationPreferences(signal),
+    enabled,
+    retry: false,
+    networkMode: "always",
+  });
   const save = useMutation({
     mutationFn: api.saveNavigationPreferences,
-    onSuccess: (data) => {
+    networkMode: "always",
+    retry: false,
+    onMutate: () => client.cancelQueries({ queryKey, exact: true }),
+    onSuccess: async (data) => {
+      // A refresh started during the write must not replace the confirmed result.
+      await client.cancelQueries({ queryKey, exact: true });
       client.setQueryData(queryKey, data);
       writeHiddenNavigationItemIDs(
         browserPreferenceStorage,
@@ -65,10 +76,10 @@ export function useNavigationPreferences<T extends string>(
   return {
     hiddenNavigationItemIDs,
     navigationPending,
-    navigationLoading: query.isPending,
+    navigationLoading: query.isPending || (query.isError && query.isFetching),
     navigationReadFailed: query.isError,
     retryNavigation: () => {
-      void query.refetch();
+      void query.refetch({ cancelRefetch: false });
     },
     setNavigationItemVisibility: (id: T, visible: boolean) => {
       if (locked.has(id)) return;

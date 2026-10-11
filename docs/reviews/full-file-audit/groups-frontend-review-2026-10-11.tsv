@@ -1,0 +1,7 @@
+frontend/src/features/groups/__tests__/batch-actions.test.tsx	9422638cec0012946397a4e43318fcde25bfd80fc940018c3af37502e36a6970	reviewed	差异阅读：批量策略切换为稳定 ID 一次提交，失败提示核对远端状态并保留全部目标重试；提交期间禁重复操作和关闭。 未确认新增缺陷；本轮无源码/测试修改，未重复执行检查。
+frontend/src/features/groups/__tests__/editor-participation.test.tsx	a064cb5a7c6f711b1458632b91e04ff04405e548dc880b7f032e9e73ce5c01fe	reviewed	差异阅读：测试使用统一字典 fixture，保留参与状态编辑行为。 未确认新增缺陷；本轮无源码/测试修改，未重复执行检查。
+frontend/src/features/groups/components/__tests__/dictionary-render.tsx	720c47c79a115fc5209adf2ce8a903eea633a7cdeeebe7748092c460f3033f5d	reviewed	差异阅读：统一字典 fixture 替代空字典回退，保护实际渲染顺序。 未确认新增缺陷；本轮无源码/测试修改，未重复执行检查。
+frontend/src/features/groups/components/__tests__/strategy-selection.test.tsx	b0a11376992e6f7e9e5638a6ad91045ed3c6c1230f358ec397670229b63e0ffd	reviewed	差异阅读：字典 fixture 下验证策略排序和当前值保留。 未确认新增缺陷；本轮无源码/测试修改，未重复执行检查。
+frontend/src/features/groups/components/group-allocation-dialog.tsx	4d4db946b2a226f0622f50614a9998e242ea1065db99e2cec2b6935b5e5e01aa	reviewed	差异及组件上下文：账号分配表按页渲染并记忆化最大权重，分页变化重置滚动，窄屏布局和焦点入口统一，状态颜色映射集中。 未确认新增缺陷；本轮无源码/测试修改，未重复执行检查。
+frontend/src/features/groups/components/group-batch-dialog.tsx	80b8026e03ef2e9ffc14e83c7174616500d5fa4e69979e600cf39985c591d937	reviewed	差异阅读：批量失败统一显示全量重试，提交中使用无伪造进度的忙碌状态。 未确认新增缺陷；本轮无源码/测试修改，未重复执行检查。
+frontend/src/features/groups/hooks/use-group-batch-actions.ts	a92c53f6438e0f381fd7c7fcc27a453b6d4cf124f54ebce45bc985bdfed6ff90	reviewed	差异阅读：使用后端批量接口、稳定 ID、无重试和提交门闩；失败保留目标并提示核对，成功后失效列表缓存。 未确认新增缺陷；本轮无源码/测试修改，未重复执行检查。

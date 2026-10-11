@@ -1,6 +1,7 @@
 package accountworkbench
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -27,7 +28,7 @@ func AccountPayload(item InputItem, template *Template) (map[string]any, error) 
 		return nil, err
 	}
 	body := map[string]any{}
-	decoder := json.NewDecoder(strings.NewReader(string(raw)))
+	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.UseNumber()
 	if err = decoder.Decode(&body); err != nil {
 		return nil, err
@@ -68,7 +69,7 @@ func rawConfigMap(input map[string]json.RawMessage) map[string]any {
 	result := make(map[string]any, len(input))
 	for key, raw := range input {
 		var value any
-		decoder := json.NewDecoder(strings.NewReader(string(raw)))
+		decoder := json.NewDecoder(bytes.NewReader(raw))
 		decoder.UseNumber()
 		if decoder.Decode(&value) == nil {
 			result[key] = value

@@ -1,3 +1,4 @@
+import { seedDictionaries } from "@/test/dictionary-fixtures";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -272,6 +273,13 @@ describe("PricingPage", () => {
 
   it("keeps the account adjustment preview with price management", () => {
     const queryClient = new QueryClient({ defaultOptions: { queries: { enabled: false } } });
+    seedDictionaries(queryClient, {
+      group: snapshot.groups.map((group) => ({ value: group.id, name: group.name })),
+      platform: [
+        { value: "openai", name: "OpenAI" },
+        { value: "composite", name: "composite" },
+      ],
+    });
     queryClient.setQueryData(["pricing"], snapshot);
     const markup = renderToStaticMarkup(
       <QueryClientProvider client={queryClient}>
@@ -357,6 +365,13 @@ describe("PricingPage", () => {
 
   it("renders automatic pricing controls only on the dedicated configuration page", () => {
     const queryClient = new QueryClient({ defaultOptions: { queries: { enabled: false } } });
+    seedDictionaries(queryClient, {
+      group: snapshot.groups.map((group) => ({ value: group.id, name: group.name })),
+      platform: [
+        { value: "openai", name: "OpenAI" },
+        { value: "composite", name: "composite" },
+      ],
+    });
     queryClient.setQueryData(["pricing"], snapshot);
     const markup = renderToStaticMarkup(
       <QueryClientProvider client={queryClient}>
@@ -412,6 +427,13 @@ describe("PricingPage", () => {
 
   it("数字价格参数清空后保持空白并等待保存校验", () => {
     const queryClient = new QueryClient({ defaultOptions: { queries: { enabled: false } } });
+    seedDictionaries(queryClient, {
+      group: snapshot.groups.map((group) => ({ value: group.id, name: group.name })),
+      platform: [
+        { value: "openai", name: "OpenAI" },
+        { value: "composite", name: "composite" },
+      ],
+    });
     queryClient.setQueryData(["pricing"], {
       ...snapshot,
       config: {
@@ -434,6 +456,13 @@ describe("PricingPage", () => {
 
   it("uses a compact actionable empty state when no exchange set exists", () => {
     const queryClient = new QueryClient({ defaultOptions: { queries: { enabled: false } } });
+    seedDictionaries(queryClient, {
+      group: snapshot.groups.map((group) => ({ value: group.id, name: group.name })),
+      platform: [
+        { value: "openai", name: "OpenAI" },
+        { value: "composite", name: "composite" },
+      ],
+    });
     queryClient.setQueryData(["pricing"], {
       ...snapshot,
       config: { ...snapshot.config, exchange_group_sets: [] },
@@ -452,6 +481,13 @@ describe("PricingPage", () => {
 
   it("shows a selected platform once instead of repeating it above the group options", () => {
     const queryClient = new QueryClient({ defaultOptions: { queries: { enabled: false } } });
+    seedDictionaries(queryClient, {
+      group: snapshot.groups.map((group) => ({ value: group.id, name: group.name })),
+      platform: [
+        { value: "openai", name: "OpenAI" },
+        { value: "composite", name: "composite" },
+      ],
+    });
     queryClient.setQueryData(["pricing"], {
       ...snapshot,
       groups: snapshot.groups.map((group) => ({
@@ -468,7 +504,7 @@ describe("PricingPage", () => {
     );
 
     expect(markup).toContain('data-platform-section="openai"');
-    expect(markup.match(/>openai<\/span>/g)).toHaveLength(1);
+    expect(markup.match(/>OpenAI<\/span>/g)).toHaveLength(1);
   });
 
   it("renders account changes inside the preview dialog table", () => {
@@ -711,6 +747,7 @@ it("价格变更记录首次读取显示轻量反馈，完成后展示空记录�
   loadingClient = new QueryClient({
     defaultOptions: { queries: { retry: false, staleTime: Infinity } },
   });
+  seedDictionaries(loadingClient);
   loadingClient.setQueryData(["pricing"], snapshot);
   loadingClient.setQueryData(["pricing-backups"], []);
   render(
@@ -732,6 +769,13 @@ it("价格变更记录首次读取显示轻量反馈，完成后展示空记录�
 
 it("价格目录按分组字典排列且保留分组售价", () => {
   const client = new QueryClient({ defaultOptions: { queries: { enabled: false } } });
+  seedDictionaries(client, {
+    group: snapshot.groups.map((group) => ({ value: group.id, name: group.name })),
+    platform: [
+      { value: "openai", name: "OpenAI" },
+      { value: "composite", name: "composite" },
+    ],
+  });
   client.setQueryData(["pricing"], snapshot);
   client.setQueryData(["dictionaries", "group"], {
     items: [

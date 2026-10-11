@@ -1,6 +1,7 @@
 package modelcheck
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -26,6 +27,7 @@ type directCredential struct {
 }
 
 type directBundleSender struct {
+	stream     bool
 	client     *http.Client
 	credential directCredential
 	requestID  string
@@ -50,7 +52,7 @@ func (sender directBundleSender) SendWithReasoning(ctx context.Context, _ string
 
 func (sender directBundleSender) sendAnthropic(ctx context.Context, model, prompt, effort string) (string, string, error) {
 	body := map[string]any{
-		"model": model, "max_tokens": 4096, "stream": false,
+		"model": model, "max_tokens": 4096, "stream": sender.stream,
 		"messages": []map[string]any{{"role": "user", "content": prompt}},
 	}
 	if effort != "" {
@@ -76,7 +78,7 @@ func (sender directBundleSender) sendAnthropic(ctx context.Context, model, promp
 func (sender directBundleSender) sendOpenAI(ctx context.Context, model, prompt, effort string) (string, string, error) {
 	headers := map[string]string{"Authorization": "Bearer " + sender.credential.Secret}
 	responsesBody := map[string]any{
-		"model": model, "input": prompt, "max_output_tokens": 4096, "stream": false,
+		"model": model, "input": prompt, "max_output_tokens": 4096, "stream": sender.stream,
 	}
 	if effort != "" {
 		responsesBody["reasoning"] = map[string]string{"effort": effort}
@@ -97,10 +99,13 @@ func (sender directBundleSender) sendOpenAI(ctx context.Context, model, prompt, 
 	}
 	chatBody := map[string]any{
 		"model": model, "messages": []map[string]any{{"role": "user", "content": prompt}},
-		"max_tokens": 4096, "stream": false,
+		"max_tokens": 4096, "stream": sender.stream,
 	}
 	if effort != "" {
 		chatBody["reasoning_effort"] = effort
+	}
+	if sender.stream {
+		chatBody["stream_options"] = map[string]bool{"include_usage": true}
 	}
 	payload, status, raw, err = sender.request(ctx, "/v1/chat/completions", chatBody, headers)
 	if err != nil {
@@ -125,25 +130,28 @@ func (sender directBundleSender) request(ctx context.Context, path string, paylo
 	if err != nil {
 		return nil, 0, nil, errors.New("模型检测请求编码失败")
 	}
-	result, status, raw, err := sender.sendRequest(ctx, endpoint, encoded, headers)
+	result, status, raw, err := sender.sendRequest(ctx, endpoint, path, encoded, headers)
 	if err != nil {
 		return nil, status, raw, err
 	}
 	if shouldRetryOnFallbackHost(status, raw) && sender.credential.FallbackBaseURL != "" {
 		fallbackEndpoint, fallbackErr := directEndpoint(sender.credential.FallbackBaseURL, path)
 		if fallbackErr == nil && fallbackEndpoint != endpoint {
-			return sender.sendRequest(ctx, fallbackEndpoint, encoded, headers)
+			return sender.sendRequest(ctx, fallbackEndpoint, path, encoded, headers)
 		}
 	}
 	return result, status, raw, nil
 }
 
-func (sender directBundleSender) sendRequest(ctx context.Context, endpoint string, encoded []byte, headers map[string]string) (map[string]any, int, []byte, error) {
+func (sender directBundleSender) sendRequest(ctx context.Context, endpoint, path string, encoded []byte, headers map[string]string) (map[string]any, int, []byte, error) {
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(encoded))
 	if err != nil {
 		return nil, 0, nil, errors.New("模型检测请求创建失败")
 	}
 	request.Header.Set("Accept", "application/json")
+	if sender.stream {
+		request.Header.Set("Accept", "text/event-stream, application/json")
+	}
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("User-Agent", "Sub2API-Console/1.0")
 	if sender.requestID != "" {
@@ -157,7 +165,17 @@ func (sender directBundleSender) sendRequest(ctx context.Context, endpoint strin
 		return nil, 0, nil, safeTransportError(err)
 	}
 	defer response.Body.Close()
-	raw, err := io.ReadAll(io.LimitReader(response.Body, maximumDirectResponseBytes+1))
+	reader := bufio.NewReader(response.Body)
+	if sender.stream && response.StatusCode >= 200 && response.StatusCode < 300 {
+		jsonResponse, err := generationResponseIsJSON(reader)
+		if err != nil {
+			return nil, response.StatusCode, nil, safeTransportError(err)
+		}
+		if !jsonResponse {
+			return sender.readStream(reader, path, response.StatusCode)
+		}
+	}
+	raw, err := io.ReadAll(io.LimitReader(reader, maximumDirectResponseBytes+1))
 	if err != nil {
 		return nil, response.StatusCode, nil, safeTransportError(err)
 	}

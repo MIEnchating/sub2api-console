@@ -28,6 +28,7 @@ func (store *policyChangingLeaseStore) AcquireMutationLease(ctx context.Context,
 }
 
 func TestRegularWriteSkipsWithoutFailureWhenPolicyChangesWhileAcquiringLease(t *testing.T) {
+	t.Parallel()
 	for _, scenario := range []struct {
 		name  string
 		patch map[string]any

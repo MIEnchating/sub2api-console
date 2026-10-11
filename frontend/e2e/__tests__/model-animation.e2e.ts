@@ -2,6 +2,7 @@ import { expect, test } from "@playwright/test";
 import type { Task } from "../../src/api";
 import { account } from "../../src/features/accounts/__tests__/fixtures";
 import { pageFixtures } from "./fixtures/page-shell";
+import { dictionaryItems } from "../../src/test/dictionary-fixtures";
 
 const animationAccount = {
   ...account,
@@ -117,7 +118,7 @@ test("独立动画检测页在窄屏可滚动选择、直接开始并展示隔�
   expect((await settings.boundingBox())!.height).toBe(settingsHeight);
   expect((await region.boundingBox())!.y - (await settings.boundingBox())!.y).toBe(regionOffset);
   currentTask = task;
-  const image = accountCard.getByRole("img", { name: /生成的鹈鹕骑自行车动画/ });
+  const image = accountCard.getByRole("img", { name: /生成的动画/ });
   await image.scrollIntoViewIfNeeded();
   await expect(image).toBeInViewport();
   expect((await settings.boundingBox())!.height).toBe(settingsHeight);
@@ -140,7 +141,7 @@ test("独立动画检测页在窄屏可滚动选择、直接开始并展示隔�
   const preview = page.getByRole("dialog", { name: "动画预览", exact: true });
   await expect(preview).toBeVisible();
   await expect(preview).toBeInViewport({ ratio: 1 });
-  const enlarged = preview.getByRole("img", { name: /生成的鹈鹕骑自行车动画/ });
+  const enlarged = preview.getByRole("img", { name: /生成的动画/ });
   await expect(enlarged).toHaveAttribute("src", originalSource);
   expect((await enlarged.boundingBox())!.height).toBeGreaterThan(originalHeight);
   await expect(preview.getByRole("button", { name: "关闭", exact: true })).toBeInViewport({
@@ -196,7 +197,9 @@ test("大量账号时仅渲染当前页，跨页编辑和搜索后保留检测�
   };
   const submitted: { targets: unknown[] }[] = [];
   await page.route("**/api/**", async (route) => {
-    const path = new URL(route.request().url()).pathname;
+    const url = new URL(route.request().url());
+    const path =
+      url.pathname === "/api/dictionaries" ? `${url.pathname}${url.search}` : url.pathname;
     if (path === "/api/model-checks/animations" && route.request().method() === "POST") {
       submitted.push(route.request().postDataJSON());
       await route.fulfill({ json: historyTask });
@@ -206,6 +209,15 @@ test("大量账号时仅渲染当前页，跨页编辑和搜索后保留检测�
       ...pageFixtures,
       "/api/setup/status": { initialized: true, configuration_errors: [] },
       "/api/auth/session": { authenticated: true, username: "分页测试" },
+      "/api/dictionaries?kind=group": {
+        items: dictionaryItems("group", [
+          { value: "primary", name: "主组" },
+          { value: "backup", name: "备用组" },
+        ]),
+      },
+      "/api/dictionaries?kind=platform": {
+        items: dictionaryItems("platform", [{ value: "openai", name: "OpenAI" }]),
+      },
       "/api/accounts": accounts,
       "/api/model-checks/capabilities": { claude_standards: [], sol_models: [] },
       "/api/model-checks/account-statuses": [],
@@ -325,7 +337,7 @@ test("大量账号时仅渲染当前页，跨页编辑和搜索后保留检测�
   await expect(dialog.getByRole("button", { name: "开始检测（2 个账号）" })).toBeEnabled();
   for (const [label, option] of [
     ["分组", "主组"],
-    ["平台", "openai"],
+    ["平台", "OpenAI"],
     ["优先状态", "手动控制"],
   ]) {
     await dialog.getByRole("button", { name: label + "筛选" }).click();

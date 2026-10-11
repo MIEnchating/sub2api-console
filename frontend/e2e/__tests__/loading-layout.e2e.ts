@@ -26,7 +26,7 @@ const scenarios = [
   },
   {
     path: "/newapi/groups",
-    endpoint: "/api/newapi/platforms/layout/refresh",
+    endpoint: "/api/newapi/platforms/layout/groups",
     label: "正在加载分组绑定",
     kind: "table",
   },

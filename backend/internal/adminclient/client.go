@@ -21,6 +21,10 @@ import (
 
 const maximumResponseBytes = 4 << 20
 
+// Full account rows can include nested groups and runtime state. Limit the
+// work and response data in each directory request.
+const catalogPageSize = 50
+
 type Error struct{ Message string }
 
 func (e *Error) Error() string { return e.Message }
@@ -1014,54 +1018,14 @@ func (c *Client) DeleteAccountWithVerification(ctx context.Context, accountID st
 
 func (c *Client) fetchPaged(ctx context.Context, path, label string) ([]map[string]any, error) {
 	result := []map[string]any{}
-	seen := map[string]struct{}{}
-	var declaredTotal *int
-	for page := 1; page <= 10000; page++ {
-		payload, err := c.request(ctx, http.MethodGet, path, nil, map[string]string{"page": strconv.Itoa(page), "page_size": "1000"})
-		if err != nil {
-			return nil, err
-		}
-		pageItems, metadata, err := items(payload, label)
-		if err != nil {
-			return nil, err
-		}
-		for _, item := range pageItems {
-			id := strings.TrimSpace(fmt.Sprint(item["id"]))
-			if !stableID(id) {
-				return nil, &Error{label + "项目缺少稳定 ID"}
-			}
-			if _, ok := seen[id]; ok {
-				return nil, &Error{label + "返回重复 ID"}
-			}
-			seen[id] = struct{}{}
-			result = append(result, item)
-		}
-		total, present, err := pageTotal(metadata, label)
-		if err != nil {
-			return nil, err
-		}
-		if present {
-			if declaredTotal != nil && *declaredTotal != total {
-				return nil, &Error{fmt.Sprintf("%s 分页总数在读取期间发生变化", label)}
-			}
-			declaredTotal = &total
-		}
-		if declaredTotal != nil {
-			if len(result) == *declaredTotal {
-				return result, nil
-			}
-			if len(result) > *declaredTotal {
-				return nil, &Error{fmt.Sprintf("%s 分页返回项目数超过声明总数", label)}
-			}
-		}
-		if len(pageItems) == 0 {
-			if declaredTotal != nil {
-				return nil, &Error{fmt.Sprintf("%s 分页未完整：已读取 %d/%d 项", label, len(result), *declaredTotal)}
-			}
-			return result, nil
-		}
+	err := c.visitPaged(ctx, path, label, func(item map[string]any) error {
+		result = append(result, item)
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
-	return nil, &Error{label + "分页超过安全上限"}
+	return result, nil
 }
 
 func (c *Client) fetchEvidence(ctx context.Context, path, label string, params map[string]string, limit int, idField string, pageSize int) ([]map[string]any, error) {
@@ -1174,7 +1138,7 @@ func (c *Client) requestWithSemantics(ctx context.Context, method, path string, 
 			}
 			last = err
 		} else {
-			payload, responseErr, retry := decodeResponse(response)
+			payload, responseErr, retry := decodeResponse(response, c.adminKey)
 			if responseErr == nil {
 				return payload, nil
 			}
@@ -1204,7 +1168,7 @@ func (c *Client) requestWithSemantics(ctx context.Context, method, path string, 
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
 	}
-	return nil, &Error{"管理 API 请求失败：" + path + "：" + last.Error()}
+	return nil, fmt.Errorf("管理 API 请求失败：%s：%w", path, last)
 }
 
 func (c *Client) headers(request *http.Request) {
@@ -1214,7 +1178,7 @@ func (c *Client) headers(request *http.Request) {
 	request.Header.Set("User-Agent", "Sub2API-Console/1.0")
 }
 
-func decodeResponse(response *http.Response) (map[string]any, error, bool) {
+func decodeResponse(response *http.Response, adminKey string) (map[string]any, error, bool) {
 	defer response.Body.Close()
 	raw, err := io.ReadAll(io.LimitReader(response.Body, maximumResponseBytes+1))
 	if err != nil {
@@ -1224,7 +1188,7 @@ func decodeResponse(response *http.Response) (map[string]any, error, bool) {
 		return nil, &responseOutcomeUnknown{cause: &Error{"管理 API 响应超过 4 MiB 安全上限"}}, false
 	}
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-		detail := errorDetail(raw)
+		detail := errorDetail(raw, adminKey)
 		if (response.StatusCode == 404 || response.StatusCode == 503) && containsMonitoringDisabled(detail) {
 			return nil, &MonitoringDisabled{}, false
 		}
@@ -1246,7 +1210,7 @@ func decodeResponse(response *http.Response) (map[string]any, error, bool) {
 		return nil, &responseOutcomeUnknown{cause: &Error{"管理 API 返回格式不可读"}}, false
 	}
 	if !businessSuccess(payload) {
-		return nil, &Error{"管理 API 返回业务失败：" + payloadError(payload)}, false
+		return nil, &Error{"管理 API 返回业务失败：" + payloadError(payload, adminKey)}, false
 	}
 	return payload, nil, false
 }
@@ -1340,35 +1304,49 @@ func businessSuccess(payload map[string]any) bool {
 	return status != "error" && status != "failed" && status != "failure"
 }
 
-func errorDetail(raw []byte) string {
-	var payload map[string]any
-	if json.Unmarshal(raw, &payload) == nil {
+func errorDetail(raw []byte, adminKey string) string {
+	var decoded any
+	if json.Unmarshal(raw, &decoded) == nil {
+		payload, _ := decoded.(map[string]any)
 		for _, key := range []string{"message", "error", "detail"} {
 			if value, present := payload[key]; present {
 				if value == nil {
 					return "空值"
 				}
-				return truncate(redact.Secrets(fmt.Sprint(value)), 300)
+				return safeResponseDetail(fmt.Sprint(value), adminKey)
 			}
 		}
+		// Nonstandard JSON errors still need decoding before exact replacement:
+		// the raw body may contain an escaped version of the management key.
+		return safeResponseDetail(fmt.Sprint(decoded), adminKey)
 	}
 	text := strings.ReplaceAll(strings.TrimSpace(string(raw)), "\n", " ")
 	if text == "" {
 		return "未提供错误详情"
 	}
-	return truncate(redact.Secrets(text), 300)
+	return safeResponseDetail(text, adminKey)
 }
-func payloadError(payload map[string]any) string {
+func payloadError(payload map[string]any, adminKey string) string {
 	for _, key := range []string{"message", "error"} {
 		if value, present := payload[key]; present {
 			if value == nil {
 				return "空值"
 			}
-			return truncate(redact.Secrets(fmt.Sprint(value)), 300)
+			return safeResponseDetail(fmt.Sprint(value), adminKey)
 		}
 	}
 	return "未提供错误详情"
 }
+
+// Replace the actual key after JSON decoding and before generic redaction or
+// truncation, so escaped values and keys crossing the detail limit stay private.
+func safeResponseDetail(value, adminKey string) string {
+	if adminKey != "" {
+		value = strings.ReplaceAll(value, adminKey, "[已隐藏]")
+	}
+	return truncate(redact.Secrets(value), 300)
+}
+
 func containsMonitoringDisabled(value string) bool {
 	value = strings.ToLower(value)
 	for _, marker := range []string{"ops_disabled", "monitoring is disabled", "ops service not available", "未开启"} {

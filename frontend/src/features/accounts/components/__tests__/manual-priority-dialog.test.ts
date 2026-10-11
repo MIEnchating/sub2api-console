@@ -4,7 +4,7 @@ import type { AccountStatus } from "@/api";
 import { manualPriorityInitialValues, manualPrioritySlots } from "../manual-priority-dialog";
 
 describe("手动控制选择", () => {
-  it("只禁用共同分组账号占用的位置并保留当前账号自己的选择", () => {
+  it("展示共同分组账号使用的位置并保留当前账号自己的选择", () => {
     const accounts = [
       {
         id: "41",
@@ -23,12 +23,24 @@ describe("手动控制选择", () => {
 
     const slots = manualPrioritySlots(accounts, "41", 4);
 
-    expect(slots.map((slot) => [slot.priority, slot.owner?.id ?? null])).toEqual([
-      [1, null],
-      [2, null],
-      [3, "42"],
-      [4, null],
+    expect(slots.map((slot) => [slot.priority, slot.owner?.id ?? null, slot.count])).toEqual([
+      [1, null, 0],
+      [2, null, 0],
+      [3, "42", 1],
+      [4, null, 0],
     ]);
+  });
+
+  it("多分组账号按最拥挤的共同分组计算位置容量", () => {
+    const accounts = [
+      { id: "41", groups: ["codex", "shared"], manual_priority: null },
+      { id: "42", groups: ["codex", "shared"], manual_priority: 3 },
+      { id: "43", groups: ["shared"], manual_priority: 3 },
+      { id: "44", groups: ["shared"], manual_priority: 3 },
+      { id: "45", groups: ["other"], manual_priority: 3 },
+    ] as AccountStatus[];
+
+    expect(manualPrioritySlots(accounts, "41", 10)[2]?.count).toBe(3);
   });
 
   it("首次设置默认负载因子和并发上限都是 100，调整时回显现值", () => {

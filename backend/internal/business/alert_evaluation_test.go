@@ -8,6 +8,7 @@ import (
 )
 
 func TestAlertRuleDisableSuppressesIncidentWithoutFalseRecovery(t *testing.T) {
+	t.Parallel()
 	store := openPolicyStore(t)
 	ctx := context.Background()
 	if _, err := store.db.ExecContext(ctx, `INSERT INTO upstreams(host,base_url,upstream_type,auth_status,metadata_json,updated_at)
@@ -52,6 +53,7 @@ func TestAlertRuleDisableSuppressesIncidentWithoutFalseRecovery(t *testing.T) {
 }
 
 func TestRoutingRuleDisableSuppressesIncidentWithoutFalseRecovery(t *testing.T) {
+	t.Parallel()
 	store := openPolicyStore(t)
 	ctx := context.Background()
 	if _, err := store.db.ExecContext(ctx, `INSERT INTO accounts(id,name,metadata_json,updated_at) VALUES('41','primary','{}','now')`); err != nil {
@@ -92,6 +94,7 @@ func TestRoutingRuleDisableSuppressesIncidentWithoutFalseRecovery(t *testing.T) 
 }
 
 func TestRoutingDegradedAlertsCanBeFilteredByCauseType(t *testing.T) {
+	t.Parallel()
 	store := openPolicyStore(t)
 	ctx := context.Background()
 	if _, err := store.db.ExecContext(ctx, `INSERT INTO routing_decisions(account_id,group_name,schedulable,role,routing_state,reason,updated_at,payload_json) VALUES
@@ -131,6 +134,7 @@ func TestRoutingDegradedAlertsCanBeFilteredByCauseType(t *testing.T) {
 }
 
 func TestAlertMasterSwitchSuppressesFiringIncidents(t *testing.T) {
+	t.Parallel()
 	store := openPolicyStore(t)
 	ctx := context.Background()
 	if _, err := store.db.ExecContext(ctx, `INSERT INTO upstreams(host,base_url,upstream_type,auth_status,metadata_json,updated_at)
@@ -157,6 +161,7 @@ func TestAlertMasterSwitchSuppressesFiringIncidents(t *testing.T) {
 }
 
 func TestDisablingAlertsClosesPendingRecoveryNotification(t *testing.T) {
+	t.Parallel()
 	store := openPolicyStore(t)
 	ctx := context.Background()
 	if _, err := store.db.ExecContext(ctx, `INSERT INTO upstreams(host,base_url,upstream_type,auth_status,metadata_json,updated_at)
@@ -190,6 +195,7 @@ func TestDisablingAlertsClosesPendingRecoveryNotification(t *testing.T) {
 }
 
 func TestBalanceThresholdChangeDoesNotCreateFalseRecovery(t *testing.T) {
+	t.Parallel()
 	store := openPolicyStore(t)
 	ctx := context.Background()
 	if _, err := store.db.ExecContext(ctx, `INSERT INTO upstreams(host,base_url,upstream_type,auth_status,balance,metadata_json,updated_at)
@@ -220,6 +226,7 @@ func TestBalanceThresholdChangeDoesNotCreateFalseRecovery(t *testing.T) {
 }
 
 func TestAlertEvaluationStatusDistinguishesExpectedSkipAndNotificationFailure(t *testing.T) {
+	t.Parallel()
 	store := openPolicyStore(t)
 	ctx := context.Background()
 	evidence := AlertEvidenceResult{Findings: 1}
@@ -256,6 +263,7 @@ func TestAlertEvaluationStatusDistinguishesExpectedSkipAndNotificationFailure(t 
 }
 
 func TestProbeAlertsKeepAccountGroupsIndependent(t *testing.T) {
+	t.Parallel()
 	store := openPolicyStore(t)
 	ctx := context.Background()
 	policy := DefaultAlertPolicy()
@@ -291,6 +299,7 @@ func TestProbeAlertsKeepAccountGroupsIndependent(t *testing.T) {
 }
 
 func TestProbeAlertCauseShowsActualRetryCount(t *testing.T) {
+	t.Parallel()
 	store := openPolicyStore(t)
 	ctx := context.Background()
 	policy := DefaultAlertPolicy()
@@ -319,6 +328,7 @@ func TestProbeAlertCauseShowsActualRetryCount(t *testing.T) {
 }
 
 func TestProbeAlertWaitsForConsecutiveRecoveryEvidence(t *testing.T) {
+	t.Parallel()
 	store := openPolicyStore(t)
 	ctx := context.Background()
 	now := time.Now().UTC()
@@ -366,6 +376,7 @@ func TestProbeAlertWaitsForConsecutiveRecoveryEvidence(t *testing.T) {
 }
 
 func TestProbeAlertsIgnoreUnevaluatedSamples(t *testing.T) {
+	t.Parallel()
 	store := openPolicyStore(t)
 	ctx := context.Background()
 	now := time.Now().UTC()
@@ -398,6 +409,7 @@ func TestProbeAlertsIgnoreUnevaluatedSamples(t *testing.T) {
 }
 
 func TestProbeAlertsTreatEveryAcceptedSuccessSpellingAsSuccess(t *testing.T) {
+	t.Parallel()
 	for _, result := range []string{"pass", "healthy", "ok"} {
 		t.Run(result, func(t *testing.T) {
 			store := openPolicyStore(t)
@@ -420,6 +432,7 @@ func TestProbeAlertsTreatEveryAcceptedSuccessSpellingAsSuccess(t *testing.T) {
 }
 
 func TestExpiredProbeEvidenceClosesWithoutFalseRecovery(t *testing.T) {
+	t.Parallel()
 	store := openPolicyStore(t)
 	ctx := context.Background()
 	policy := DefaultAlertPolicy()
@@ -457,6 +470,7 @@ func TestExpiredProbeEvidenceClosesWithoutFalseRecovery(t *testing.T) {
 }
 
 func TestRemovingProbeGroupFromScopeClosesWithoutFalseRecovery(t *testing.T) {
+	t.Parallel()
 	store := openPolicyStore(t)
 	ctx := context.Background()
 	initialPolicy := DefaultAlertPolicy()
@@ -495,6 +509,7 @@ func TestRemovingProbeGroupFromScopeClosesWithoutFalseRecovery(t *testing.T) {
 }
 
 func TestRemovedProbeEvidenceClosesWithoutFalseRecovery(t *testing.T) {
+	t.Parallel()
 	store := openPolicyStore(t)
 	ctx := context.Background()
 	policy := DefaultAlertPolicy()
@@ -530,6 +545,7 @@ func TestRemovedProbeEvidenceClosesWithoutFalseRecovery(t *testing.T) {
 }
 
 func TestProbeEvidenceMaxAgeIncludesGroupProbeInterval(t *testing.T) {
+	t.Parallel()
 	store := openPolicyStore(t)
 	ctx := context.Background()
 	if _, err := store.db.ExecContext(ctx, `INSERT INTO local_groups(name,remote_id,strategy,strategy_source,updated_at)
@@ -555,6 +571,7 @@ func TestProbeEvidenceMaxAgeIncludesGroupProbeInterval(t *testing.T) {
 }
 
 func TestRateSyncAlertKeepsTheRedactedFailureReason(t *testing.T) {
+	t.Parallel()
 	store := openPolicyStore(t)
 	ctx := context.Background()
 	if _, err := store.db.ExecContext(ctx, `INSERT INTO upstreams(host,base_url,upstream_type,auth_status,metadata_json,updated_at)
@@ -574,6 +591,7 @@ func TestRateSyncAlertKeepsTheRedactedFailureReason(t *testing.T) {
 }
 
 func TestConfigurationAlertChecksInvalidBalanceWhenBalanceRuleIsDisabled(t *testing.T) {
+	t.Parallel()
 	store := openPolicyStore(t)
 	ctx := context.Background()
 	if _, err := store.db.ExecContext(ctx, `INSERT INTO upstreams(host,base_url,upstream_type,auth_status,mapped_balance,metadata_json,updated_at)
@@ -599,6 +617,7 @@ func TestConfigurationAlertChecksInvalidBalanceWhenBalanceRuleIsDisabled(t *test
 }
 
 func TestRoutingAlertsTrackDecisionTransitionsAndApplyRecovery(t *testing.T) {
+	t.Parallel()
 	store := openPolicyStore(t)
 	ctx := context.Background()
 	if _, err := store.db.ExecContext(ctx, `INSERT INTO accounts(id,name,schedulable,routing_state,metadata_json,updated_at)
@@ -666,6 +685,7 @@ func TestRoutingAlertsTrackDecisionTransitionsAndApplyRecovery(t *testing.T) {
 }
 
 func TestBindingInvalidAlertNamesCauseAndRecoversWithStableIncident(t *testing.T) {
+	t.Parallel()
 	store := openPolicyStore(t)
 	ctx := context.Background()
 	if _, err := store.db.ExecContext(ctx, `INSERT INTO accounts(id,name,schedulable,routing_state,metadata_json,updated_at)
@@ -699,6 +719,7 @@ func TestBindingInvalidAlertNamesCauseAndRecoversWithStableIncident(t *testing.T
 }
 
 func TestModeSwitchClosesStaleRoutingAlertWithoutFalseRecovery(t *testing.T) {
+	t.Parallel()
 	store := openPolicyStore(t)
 	ctx := context.Background()
 	if _, err := store.db.ExecContext(ctx, `INSERT INTO accounts(id,name,metadata_json,updated_at) VALUES('41','primary','{}','now')`); err != nil {
@@ -732,6 +753,7 @@ func TestModeSwitchClosesStaleRoutingAlertWithoutFalseRecovery(t *testing.T) {
 }
 
 func TestModeSwitchClosesStaleRoutingAlertsWhenSomeNewDecisionsExist(t *testing.T) {
+	t.Parallel()
 	store := openPolicyStore(t)
 	ctx := context.Background()
 	if _, err := store.db.ExecContext(ctx, `INSERT INTO accounts(id,name,metadata_json,updated_at) VALUES
@@ -771,6 +793,7 @@ func TestModeSwitchClosesStaleRoutingAlertsWhenSomeNewDecisionsExist(t *testing.
 }
 
 func TestApplyFailureUsesNewestPositiveSourceIDAtSameTimestamp(t *testing.T) {
+	t.Parallel()
 	store := openPolicyStore(t)
 	ctx := context.Background()
 	if _, err := store.db.ExecContext(ctx, `INSERT INTO operation_audit(source_id,operation_id,operation_type,state,phase,actor,source,error,

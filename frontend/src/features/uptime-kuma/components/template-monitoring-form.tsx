@@ -1,6 +1,6 @@
 import { TemplateAddressField } from "./template-address-field";
 import { Controller, type UseFormReturn } from "react-hook-form";
-import { FormField } from "@/App";
+import { FormField } from "@/components/form-field";
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
@@ -24,8 +24,8 @@ export function TemplateMonitoringForm(props: {
   const form = props.form;
   const monitorTypes = useDictionaryOrder(
     "kuma_monitor_type",
-    Object.entries(monitorTypeLabels),
-    (item) => item[0],
+    Object.entries(monitorTypeLabels).map(([value, label]) => ({ value, label })),
+    (item) => item.value,
   );
   const type = form.watch("monitoring.type");
   const http = ["http", "keyword"].includes(type);
@@ -46,13 +46,17 @@ export function TemplateMonitoringForm(props: {
                   field.onChange(value);
                   if (!["http", "keyword"].includes(value)) form.setValue("request_profile", "");
                 }}
-                itemToStringLabel={(value) => monitorTypeLabels[value] ?? value}
+                itemToStringLabel={(value) =>
+                  monitorTypes.find((option) => option.value === value)?.label ??
+                  monitorTypeLabels[value] ??
+                  value
+                }
               >
                 <SelectTrigger aria-label="监控类型">
                   <SelectValue />
                 </SelectTrigger>
-                <SelectContent>
-                  {monitorTypes.map(([value, label]) => (
+                <SelectContent dictionaryKind="kuma_monitor_type">
+                  {monitorTypes.map(({ value, label }) => (
                     <SelectItem key={value} value={value}>
                       {label}
                     </SelectItem>

@@ -221,6 +221,9 @@ func (s *Store) ApplyUpstreamSync(ctx context.Context, value UpstreamSyncWrite) 
 		}
 	}
 	if balance != nil {
+		if err := applyUpstreamSpending(ctx, tx, host, metadata, balance, *recharge, now); err != nil {
+			return UpstreamSyncWriteResult{}, err
+		}
 		applyUpstreamConcurrencyObservation(metadata, balance, now)
 		result.ConcurrencyLimit, result.ConcurrencyStatus = readUpstreamConcurrencyMetadata(metadata)
 		result.RawBalance = balance.RawBalance

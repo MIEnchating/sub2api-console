@@ -4,7 +4,7 @@ import { OnboardingConfirmDialog } from "../onboarding-confirm-dialog";
 
 afterEach(cleanup);
 
-it("仅更新已有绑定时显示目标分组并保持原并发和优先级", () => {
+it("仅更新已有绑定时显示目标分组并保持原并发、优先级和调度状态", () => {
   render(
     <OnboardingConfirmDialog
       open
@@ -30,7 +30,11 @@ it("仅更新已有绑定时显示目标分组并保持原并发和优先级", (
   const account = screen.getByRole("region", { name: "codex-special → codex" });
   expect(within(account).getByText("OpenAI")).toBeVisible();
   expect(within(account).getByText("0.15")).toBeVisible();
-  expect(within(account).getAllByText("保持原值")).toHaveLength(2);
+  expect(
+    within(account)
+      .getAllByRole("definition")
+      .map((field) => field.textContent),
+  ).toEqual(["OpenAI", "0.15", "保持原值", "保持原值", "保持原值"]);
   expect(within(account).getByText("待更新")).toBeVisible();
   expect(within(account).queryByRole("textbox")).not.toBeInTheDocument();
   expect(screen.getByRole("button", { name: "确认提交 1 项变更" })).toBeEnabled();

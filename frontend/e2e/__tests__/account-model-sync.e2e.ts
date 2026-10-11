@@ -1,3 +1,4 @@
+import { dictionaryResponse } from "./fixtures/dictionaries";
 import { expect, test } from "@playwright/test";
 import { account } from "../../src/features/accounts/__tests__/fixtures";
 import { pageFixtures } from "./fixtures/page-shell";
@@ -22,13 +23,14 @@ test("首排模型提示不被滚动区裁切，手动输入及右键排除保�
     else if (path === "/api/auth/session") body = { authenticated: true, username: "测试" };
     else if (path === "/api/accounts")
       body = [{ ...account, id: "41", name: "测试账号", groups: ["测试组"], platform: "openai" }];
-    else if (path.includes("dictionaries")) body = { items: [] };
+    else if (path.includes("dictionaries"))
+      body = dictionaryResponse(route.request().url(), [{ value: "1", name: "测试组" }]);
     else if (path.endsWith("/models/discover") || path.endsWith("/tasks/discovery"))
       body = discovery;
-    else if (path === "/api/config/model-sync") {
-      if (route.request().method() === "PUT") {
-        blockedPatterns = (route.request().postDataJSON() as { blocked_patterns: string[] })
-          .blocked_patterns;
+    else if (path === "/api/config/model-sync/blocked-models") {
+      if (route.request().method() === "POST") {
+        const request = route.request().postDataJSON() as { model: string };
+        blockedPatterns = [...blockedPatterns, request.model];
       }
       body = { blocked_patterns: blockedPatterns };
     } else if (path.endsWith("/models/preview"))
@@ -84,6 +86,13 @@ test("首排模型提示不被滚动区裁切，手动输入及右键排除保�
   ).toBe(true);
   await page.screenshot({ path: testInfo.outputPath("first-row-tooltip.png") });
   await card.click({ button: "right" });
+  const contextMenu = page.getByRole("menu");
+  await expect(contextMenu).toBeVisible();
+  const menuBox = await contextMenu.boundingBox();
+  const viewport = page.viewportSize();
+  expect(menuBox).not.toBeNull();
+  expect(viewport).not.toBeNull();
+  expect(menuBox!.height).toBeLessThanOrEqual(viewport!.height);
   await page.getByRole("menuitem", { name: "排除此模型（全局屏蔽）" }).click();
   await expect(page.getByRole("checkbox", { name: "同步模型 model-00", exact: true })).toHaveCount(
     0,

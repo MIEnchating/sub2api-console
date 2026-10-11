@@ -21,7 +21,7 @@ it("成功结果以图片隔离展示 SVG，并提供模型、耗时和完成时
   const view = render(
     <AnimationAccountResult result={result} retryDisabled={false} onRetry={vi.fn()} />,
   );
-  const image = screen.getByRole("img", { name: "测试账号生成的鹈鹕骑自行车动画" });
+  const image = screen.getByRole("img", { name: "测试账号生成的动画" });
   expect(image).toHaveAttribute(
     "src",
     `data:image/svg+xml;charset=utf-8,${encodeURIComponent(result.svg!)}`,

@@ -10,6 +10,7 @@ import (
 )
 
 func TestManualPriorityReadModelDoesNotReuseAutomaticState(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{runtimepolicy.Full, runtimepolicy.Monitoring} {
 		for _, previous := range []string{"cost_blocked", "fused", "degraded"} {
 			t.Run(mode+"/"+previous, func(t *testing.T) {
@@ -37,6 +38,7 @@ func TestManualPriorityReadModelDoesNotReuseAutomaticState(t *testing.T) {
 }
 
 func TestManualPriorityReadModelPreservesPauseAndPlatformDisable(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{runtimepolicy.Full, runtimepolicy.Monitoring} {
 		for _, state := range []string{"paused", "disabled"} {
 			t.Run(mode+"/"+state, func(t *testing.T) {
@@ -68,6 +70,7 @@ func TestManualPriorityReadModelPreservesPauseAndPlatformDisable(t *testing.T) {
 }
 
 func TestManualPriorityReadModelIgnoresStaleDecisionUntilOwnershipIsReleased(t *testing.T) {
+	t.Parallel()
 	store := openReadModelFixture(t)
 	ctx := context.Background()
 	if _, err := store.AssignManualPriority(ctx, "41", 1, "100", 100, false, "operator"); err != nil {
@@ -104,7 +107,8 @@ func TestManualPriorityReadModelIgnoresStaleDecisionUntilOwnershipIsReleased(t *
 	}
 }
 
-func TestManualPriorityAssignmentIsIsolatedByGroupAndVisibleOnAccount(t *testing.T) {
+func TestManualPriorityAssignmentAllowsSharedPriorityAndIsVisibleOnAccount(t *testing.T) {
+	t.Parallel()
 	store := openPolicyStore(t)
 	ctx := context.Background()
 	for _, values := range [][]any{{"41", "alpha"}, {"42", "beta"}, {"43", "gamma"}} {
@@ -128,8 +132,8 @@ func TestManualPriorityAssignmentIsIsolatedByGroupAndVisibleOnAccount(t *testing
 	if _, err := store.AssignManualPriority(ctx, "42", 3, "80", 120, false, "operator"); err != nil {
 		t.Fatalf("different group rejected shared slot: %v", err)
 	}
-	if _, err := store.AssignManualPriority(ctx, "43", 3, "100", 100, false, "operator"); err == nil || !strings.Contains(err.Error(), "分组 codex") || !strings.Contains(err.Error(), "已被账号 41 占用") {
-		t.Fatalf("occupied slot was accepted: %v", err)
+	if _, err := store.AssignManualPriority(ctx, "43", 3, "100", 100, false, "operator"); err != nil {
+		t.Fatalf("same group rejected shared priority: %v", err)
 	}
 	account, err := store.Account(ctx, "41")
 	if err != nil || account.ManualPriority == nil || *account.ManualPriority != 3 || !account.ManualSyncBalanceMultiplier {
@@ -144,7 +148,37 @@ func TestManualPriorityAssignmentIsIsolatedByGroupAndVisibleOnAccount(t *testing
 	}
 }
 
+func TestManualPriorityAssignmentLimitsEachGroupSlotToThreeAccounts(t *testing.T) {
+	t.Parallel()
+	store := openPolicyStore(t)
+	ctx := context.Background()
+	for _, id := range []string{"41", "42", "43", "44", "45"} {
+		if _, err := store.db.ExecContext(ctx, `INSERT INTO accounts(id,name,metadata_json,updated_at) VALUES(?,?, '{}','now')`, id, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := store.db.ExecContext(ctx, `INSERT INTO account_groups(account_id,group_name) VALUES
+		('41','codex'),('42','codex'),('43','codex'),('44','codex'),('45','claude')`); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"41", "42", "43"} {
+		if _, err := store.AssignManualPriority(ctx, id, 3, "100", 100, false, "operator"); err != nil {
+			t.Fatalf("third account should fit slot: id=%s err=%v", id, err)
+		}
+	}
+	if _, err := store.AssignManualPriority(ctx, "41", 3, "80", 100, false, "operator"); err != nil {
+		t.Fatalf("existing account should update its slot: %v", err)
+	}
+	if _, err := store.AssignManualPriority(ctx, "44", 3, "100", 100, false, "operator"); err == nil || !strings.Contains(err.Error(), "最多 3 个账号") {
+		t.Fatalf("fourth account should be rejected: %v", err)
+	}
+	if _, err := store.AssignManualPriority(ctx, "45", 3, "100", 100, false, "operator"); err != nil {
+		t.Fatalf("another group should reuse slot: %v", err)
+	}
+}
+
 func TestHostBalanceSyncRequiresAtLeastOneEligibleBoundAccount(t *testing.T) {
+	t.Parallel()
 	store := openReadModelFixture(t)
 	ctx := context.Background()
 	if _, err := store.AssignManualPriority(ctx, "41", 3, "100", 100, false, "operator"); err != nil {
@@ -164,6 +198,7 @@ func TestHostBalanceSyncRequiresAtLeastOneEligibleBoundAccount(t *testing.T) {
 }
 
 func TestRevertManualPriorityReservationMarksRoutingRecalculationPending(t *testing.T) {
+	t.Parallel()
 	store := openPolicyStore(t)
 	ctx := context.Background()
 	if _, err := store.db.ExecContext(ctx, `INSERT INTO accounts(
@@ -193,6 +228,7 @@ func TestRevertManualPriorityReservationMarksRoutingRecalculationPending(t *test
 }
 
 func TestManualPriorityPolicyCannotShrinkBelowOccupiedSlot(t *testing.T) {
+	t.Parallel()
 	store := openPolicyStore(t)
 	ctx := context.Background()
 	if _, err := store.db.ExecContext(ctx, `INSERT INTO accounts(id,name,metadata_json,updated_at)
@@ -221,6 +257,7 @@ func TestManualPriorityPolicyCannotShrinkBelowOccupiedSlot(t *testing.T) {
 }
 
 func TestManualPriorityReleaseRestoresPreviousSchedulingState(t *testing.T) {
+	t.Parallel()
 	store := openPolicyStore(t)
 	ctx := context.Background()
 	if _, err := store.db.ExecContext(ctx, `INSERT INTO accounts(

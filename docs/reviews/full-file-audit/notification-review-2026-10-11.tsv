@@ -1,0 +1,3 @@
+backend/internal/notification/__tests__/cost_traffic_test.go	ec9532653fd38e222efb883ce005fd70176dae7a9772e2a62a8d9319adfeeca1	reviewed	全文阅读：无利润/亏损按实际请求分组显示，恢复不复用旧请求证据，细分标签在告警/恢复均生效。 本轮未确认新增缺陷，无业务/测试修改，未重复执行检查。
+backend/internal/notification/__tests__/manual_fuse_test.go	2ac6d84b7e38347fca04b50f1f978b0f816e394b6cf9017631e577241c1cbc83	reviewed	全文阅读：新人工熔断代码与旧兼容代码均不得宣称连续失败。 本轮未确认新增缺陷，无业务/测试修改，未重复执行检查。
+backend/internal/notification/service.go	08d557ca35a517a475568e6823298db763d231ab59986fc8b057c7b591ace18d	reviewed	差异及分组/投递上下文：新增成本分类和恢复文案、按 incident 前缀取实际分组、人工熔断文案；复用原批次分组/转义/持久投递结果路径。 基线 789aa481ceddc6d9d0a61c6a62df1e7731c0d90c / 5c8bf9060ac94a2963c347586678d8302ee25c7a215ea4d692b88f152552d32e，原记录 backend-domains.tsv。 本轮未确认新增缺陷，无业务/测试修改，未重复执行检查。

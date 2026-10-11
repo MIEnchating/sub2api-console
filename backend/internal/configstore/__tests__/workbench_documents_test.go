@@ -46,6 +46,26 @@ func TestWorkbenchDocumentConcurrentCreateKeepsExactlyOneWinner(t *testing.T) {
 	}
 }
 
+func TestWorkbenchDocumentPublicReadsOnlyPublicValueAndRevision(t *testing.T) {
+	store, err := configstore.Open(filepath.Join(t.TempDir(), "private.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	ctx := t.Context()
+	if raw, revision, err := store.WorkbenchDocumentPublic(ctx, "maintenance:missing"); err != nil || len(raw) != 0 || revision != 0 {
+		t.Fatalf("missing document = %s, %d, %v", raw, revision, err)
+	}
+	revision, err := store.SaveWorkbenchDocument(ctx, "maintenance:site", 0, json.RawMessage(`{"public":{"enabled":true,"results":[]},"attempts":{"41":{"credentials":{"access_token":"private-secret"}}}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, gotRevision, err := store.WorkbenchDocumentPublic(ctx, "maintenance:site")
+	if err != nil || gotRevision != revision || string(raw) != `{"enabled":true,"results":[]}` {
+		t.Fatalf("public projection = %s, %d, %v", raw, gotRevision, err)
+	}
+}
+
 func TestWorkbenchDocumentStaleUpdateCannotOverwriteCurrentContent(t *testing.T) {
 	store, err := configstore.Open(filepath.Join(t.TempDir(), "private.db"))
 	if err != nil {

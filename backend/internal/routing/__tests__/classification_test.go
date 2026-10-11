@@ -7,6 +7,7 @@ import (
 )
 
 func TestAccessDenialWithoutCredentialEvidenceIsNotFatal(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		name   string
 		status int
@@ -43,6 +44,7 @@ func TestAccessDenialWithoutCredentialEvidenceIsNotFatal(t *testing.T) {
 }
 
 func TestExplicitCredentialEvidenceStillTriggersFatalClassification(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		name   string
 		status int
@@ -69,6 +71,7 @@ func TestExplicitCredentialEvidenceStillTriggersFatalClassification(t *testing.T
 }
 
 func TestWrappedForbiddenWithDefaultPolicyLowersHealthWithoutFatalVeto(t *testing.T) {
+	t.Parallel()
 	status := 502
 	health, err := routing.HealthScore([]routing.Sample{
 		{Result: "失败", Source: "traffic", StatusCode: &status, FailureReason: "Upstream access forbidden, please contact administrator"},

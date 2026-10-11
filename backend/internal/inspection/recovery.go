@@ -9,7 +9,6 @@ import (
 
 	"github.com/MIEnchating/sub2api-console/backend/internal/targetguard"
 	"github.com/MIEnchating/sub2api-console/backend/internal/taskrecovery"
-	"github.com/MIEnchating/sub2api-console/backend/internal/taskrunner"
 	"github.com/MIEnchating/sub2api-console/backend/internal/taskstore"
 )
 
@@ -78,7 +77,7 @@ func (s *ManualService) ResumeTask(ctx context.Context, task taskstore.Task) err
 	if busy {
 		return taskrecovery.ErrBusy
 	}
-	return taskrunner.GoTask(s.taskRunner, task.ID, func(parent context.Context) {
+	return taskrecovery.Enqueue(s.taskRunner, s.tasks, task, nil, func(parent context.Context, task taskstore.Task) {
 		if input.Target != "" {
 			target, _ := targetguard.Expected(workerContext, s.runner.targets)
 			parent = targetguard.Expect(parent, target)
@@ -132,6 +131,6 @@ func (s *Scheduler) CancelTask(taskID string) bool {
 	cancel := s.currentCancel
 	s.cancelRequested = true
 	s.mu.Unlock()
-	cancel()
+	cancel(context.Canceled)
 	return true
 }

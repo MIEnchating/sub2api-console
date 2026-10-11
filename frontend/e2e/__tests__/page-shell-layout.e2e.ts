@@ -158,6 +158,11 @@ test("平台配置编辑时字段和底部操作可达，取消后保留原配�
 });
 
 test("分组绑定在横向滚动后可选择分组并编辑倍率，保存入口保持可达", async ({ page }) => {
+  await page.route("**/api/dictionaries?*", (route) =>
+    route.fulfill({
+      json: { items: [{ value: "6", name: "标准", enabled: true }] },
+    }),
+  );
   await page.goto("/newapi/groups");
   await page.getByRole("combobox", { name: "默认 的 Sub2API 分组", exact: true }).click();
   await page.getByRole("option", { name: "标准 · 1", exact: true }).click();

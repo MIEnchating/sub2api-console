@@ -36,6 +36,7 @@ func manualOrderFixture(t *testing.T) (map[string]any, []business.RoutingAccount
 	return policy, accounts, rows, now
 }
 func TestManualOrderRanksFreshSameModelLatencyWithoutOtherFields(t *testing.T) {
+	t.Parallel()
 	policy, accounts, rows, now := manualOrderFixture(t)
 	changes, err := routing.PlanManualPriorityOrder(policy, accounts, rows, now)
 	if err != nil {
@@ -49,6 +50,7 @@ func TestManualOrderRanksFreshSameModelLatencyWithoutOtherFields(t *testing.T) {
 	}
 }
 func TestManualOrderKeepsPositionsWhenEvidenceOrAuthorizationIsMissing(t *testing.T) {
+	t.Parallel()
 	for _, scenario := range []string{"disabled", "missing samples", "stale", "different models", "paused", "single account", "failure", "empty reply", "traffic disabled"} {
 		t.Run(scenario, func(t *testing.T) {
 			policy, accounts, rows, now := manualOrderFixture(t)
@@ -87,6 +89,7 @@ func TestManualOrderKeepsPositionsWhenEvidenceOrAuthorizationIsMissing(t *testin
 	}
 }
 func TestManualOrderAvoidsCollisionsAcrossMultipleGroups(t *testing.T) {
+	t.Parallel()
 	policy, accounts, rows, now := manualOrderFixture(t)
 	copy := accounts[1]
 	copy.GroupName = "secondary"
@@ -100,6 +103,7 @@ func TestManualOrderAvoidsCollisionsAcrossMultipleGroups(t *testing.T) {
 }
 
 func TestManualOrderPreservesFrozenEffectiveSlotAfterPreviousRound(t *testing.T) {
+	t.Parallel()
 	policy, accounts, rows, now := manualOrderFixture(t)
 	first, second := int64(3), int64(1)
 	accounts[0].Priority, accounts[1].Priority = &first, &second
@@ -111,6 +115,7 @@ func TestManualOrderPreservesFrozenEffectiveSlotAfterPreviousRound(t *testing.T)
 }
 
 func TestManualOrderPreservesEffectiveOrderForEqualLatency(t *testing.T) {
+	t.Parallel()
 	policy, accounts, rows, now := manualOrderFixture(t)
 	first, second := int64(3), int64(1)
 	accounts[0].Priority, accounts[1].Priority = &first, &second
@@ -126,6 +131,7 @@ func TestManualOrderPreservesEffectiveOrderForEqualLatency(t *testing.T) {
 }
 
 func TestManualOrderIgnoresDistinctReservationsWhenEffectiveSlotsOverlap(t *testing.T) {
+	t.Parallel()
 	policy, accounts, rows, now := manualOrderFixture(t)
 	// A partial remote write can leave two accounts sharing an effective slot.
 	// Their distinct manual reservations remain independent and must not fail
@@ -141,11 +147,13 @@ func TestManualOrderIgnoresDistinctReservationsWhenEffectiveSlotsOverlap(t *test
 	}
 }
 
-func TestManualOrderRejectsDuplicateReservationsInSharedGroup(t *testing.T) {
+func TestManualOrderAllowsDuplicateReservationsInSharedGroup(t *testing.T) {
+	t.Parallel()
 	policy, accounts, rows, now := manualOrderFixture(t)
 	accounts[1].ManualPriority = ptrInt64(1)
-	if _, err := routing.PlanManualPriorityOrder(policy, accounts, rows, now); err == nil {
-		t.Fatal("duplicate manual reservations in a shared group must fail")
+	changes, err := routing.PlanManualPriorityOrder(policy, accounts, rows, now)
+	if err != nil || len(changes) != 2 || changes[0].Priority != 3 || changes[1].Priority != 1 {
+		t.Fatalf("shared reservations must allow latency ordering: changes=%+v err=%v", changes, err)
 	}
 }
 

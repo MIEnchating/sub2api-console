@@ -1,8 +1,9 @@
-import { useDictionaryOrder } from "@/hooks/use-dictionary-order";
+import { useDictionaryOrder, useDictionaryLabel } from "@/hooks/use-dictionary-order";
 import { useState, type ReactElement } from "react";
 import { ChevronDown, Trash2 } from "lucide-react";
 
 import type { PricingGroup } from "@/api";
+import { DictionaryReadState } from "@/components/dictionary-read-state";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -27,6 +28,7 @@ export function ExchangeGroupSetEditor(props: {
   const [expanded, setExpanded] = useState(props.setIndex === 0);
   const setNumber = props.setIndex + 1;
   const contentID = `exchange-set-content-${setNumber}`;
+  const platformLabel = useDictionaryLabel("platform", (value) => value);
   const orderedGroups = useDictionaryOrder("group", props.groups, (group) => group.id);
   const selectedPlatforms = new Set(
     props.groups
@@ -61,7 +63,7 @@ export function ExchangeGroupSetEditor(props: {
 
   return (
     <section
-      className="min-w-0 overflow-hidden rounded-xl border bg-card shadow-sm"
+      className="min-w-0 overflow-hidden rounded-lg border bg-card shadow-sm"
       data-testid={`exchange-set-${setNumber}`}
       aria-labelledby={`exchange-set-title-${setNumber}`}
     >
@@ -125,7 +127,9 @@ export function ExchangeGroupSetEditor(props: {
         </div>
         <div className="flex min-w-0 flex-wrap items-center gap-2" data-slot="exchange-set-summary">
           <Badge variant={complete ? "outline" : "warning"}>{statusLabel}</Badge>
-          {selectedPlatform ? <Badge variant="secondary">{selectedPlatform}</Badge> : null}
+          {selectedPlatform ? (
+            <Badge variant="secondary">{platformLabel(selectedPlatform)}</Badge>
+          ) : null}
           <span className="text-muted-foreground text-xs tabular-nums">
             {visibleGroups.filter((group) => group.available).length} 个可用
           </span>
@@ -139,60 +143,65 @@ export function ExchangeGroupSetEditor(props: {
         aria-label={`互换组 ${setNumber} 可选分组`}
         hidden={!expanded}
       >
-        {visibleGroups.length === 0 ? (
-          <div className="grid min-h-28 place-content-center gap-1 rounded-md border border-dashed px-4 py-5 text-center">
-            <p className="text-sm font-medium">暂无可选分组</p>
-            <p className="text-muted-foreground text-xs leading-5">
-              请先在分组管理中配置可用的业务分组，然后刷新价格数据。
-            </p>
-          </div>
-        ) : null}
-        {orderedSections.map(([platform, groups]) => (
-          <div key={platform} data-platform-section={platform} className="space-y-2.5">
-            {sections.size > 1 || !selectedPlatform ? (
-              <div className="flex min-w-0 items-center gap-2 px-0.5">
-                <span className="text-foreground/70 min-w-0 text-xs font-semibold [overflow-wrap:anywhere]">
-                  {platform}
-                </span>
-                <span className="bg-border h-px min-w-4 flex-1" aria-hidden="true" />
-                <span className="text-muted-foreground shrink-0 text-xs tabular-nums">
-                  {groups.filter((group) => group.available).length} 个可用
-                </span>
+        <DictionaryReadState kind="group">
+          <DictionaryReadState kind="platform">
+            {orderedSections.length === 0 ? (
+              <div className="grid min-h-28 place-content-center gap-1 rounded-md border border-dashed px-4 py-5 text-center">
+                <p className="text-sm font-medium">暂无可选分组</p>
+                <p className="text-muted-foreground text-xs leading-5">
+                  请先在分组管理中配置可用的业务分组，然后刷新价格数据。
+                </p>
               </div>
             ) : null}
-            <div className="space-y-2">
-              <div
-                className="grid auto-rows-fr items-start gap-3 sm:grid-cols-2 xl:grid-cols-3"
-                data-slot="exchange-group-grid"
-              >
-                {groups.map((group) => {
-                  const assignedSet = props.exchangeSetByGroup.get(group.id);
-                  const selected = assignedSet === props.setIndex;
-                  let assignedSetName: string | undefined;
-                  if (assignedSet !== undefined && !selected) {
-                    assignedSetName =
-                      props.exchangeSetNames[assignedSet] || `互换组 ${assignedSet + 1}`;
-                  }
-                  return (
-                    <ExchangeGroupOption
-                      key={group.id}
-                      group={group}
-                      setIndex={props.setIndex}
-                      selected={selected}
-                      assignedSetName={assignedSetName}
-                      wrongPlatform={Boolean(
-                        selectedPlatform && (group.platform || "未标注平台") !== selectedPlatform,
-                      )}
-                      minimum={props.groupMinimums?.[group.id]}
-                      onToggle={props.onToggle}
-                      onMinimumChange={props.onMinimumChange}
-                    />
-                  );
-                })}
+            {orderedSections.map(([platform, groups]) => (
+              <div key={platform} data-platform-section={platform} className="space-y-2.5">
+                {sections.size > 1 || !selectedPlatform ? (
+                  <div className="flex min-w-0 items-center gap-2 px-0.5">
+                    <span className="text-foreground/70 min-w-0 text-xs font-semibold [overflow-wrap:anywhere]">
+                      {platformLabel(platform)}
+                    </span>
+                    <span className="bg-border h-px min-w-4 flex-1" aria-hidden="true" />
+                    <span className="text-muted-foreground shrink-0 text-xs tabular-nums">
+                      {groups.filter((group) => group.available).length} 个可用
+                    </span>
+                  </div>
+                ) : null}
+                <div className="space-y-2">
+                  <div
+                    className="grid auto-rows-fr items-start gap-3 sm:grid-cols-2 xl:grid-cols-3"
+                    data-slot="exchange-group-grid"
+                  >
+                    {groups.map((group) => {
+                      const assignedSet = props.exchangeSetByGroup.get(group.id);
+                      const selected = assignedSet === props.setIndex;
+                      let assignedSetName: string | undefined;
+                      if (assignedSet !== undefined && !selected) {
+                        assignedSetName =
+                          props.exchangeSetNames[assignedSet] || `互换组 ${assignedSet + 1}`;
+                      }
+                      return (
+                        <ExchangeGroupOption
+                          key={group.id}
+                          group={group}
+                          setIndex={props.setIndex}
+                          selected={selected}
+                          assignedSetName={assignedSetName}
+                          wrongPlatform={Boolean(
+                            selectedPlatform &&
+                            (group.platform || "未标注平台") !== selectedPlatform,
+                          )}
+                          minimum={props.groupMinimums?.[group.id]}
+                          onToggle={props.onToggle}
+                          onMinimumChange={props.onMinimumChange}
+                        />
+                      );
+                    })}
+                  </div>
+                </div>
               </div>
-            </div>
-          </div>
-        ))}
+            ))}
+          </DictionaryReadState>
+        </DictionaryReadState>
       </div>
     </section>
   );

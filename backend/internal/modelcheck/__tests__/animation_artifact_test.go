@@ -16,6 +16,7 @@ const htmlAnimationWithFilter = `<!DOCTYPE html><html><head><style>svg{width:100
 const requestedAnimationPrompt = `请生成可直接运行的单文件HTML，使用内联SVG绘制鹈鹕骑自行车的二维循环动画。画面以鹈鹕和自行车为主体，展示清晰的身体结构、踩踏动作和车轮转动，配合协调的背景、配色与层次。动画应流畅自然、衔接连续，并适配不同屏幕尺寸。可使用内联JavaScript脚本实现动画，但不得发送网络请求、加载外部脚本或引用外部资源，只输出完整HTML，不要代码围栏或解释文字。`
 
 func TestAnimationUsesSelectedModelLowEffortAndHTMLPrompt(t *testing.T) {
+	customPrompt := "生成蓝色鲸鱼动画，只输出完整 HTML。"
 	f := setup(t, 1, "openai", func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
 			Model     string
@@ -25,12 +26,17 @@ func TestAnimationUsesSelectedModelLowEffortAndHTMLPrompt(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			t.Error(err)
 		}
-		if body.Model != "test-model" || body.Reasoning.Effort != "low" || body.Input != requestedAnimationPrompt {
+		if body.Model != "test-model" || body.Reasoning.Effort != "low" || body.Input != customPrompt {
 			t.Errorf("unexpected model, effort or prompt: %+v", body)
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"model": "gpt-6-astra", "output_text": htmlAnimation, "usage": map[string]int{"input_tokens": 100, "output_tokens": 200, "total_tokens": 300}})
 	})
-	if _, err := f.service.EnqueueAnimation(context.Background(), request("1")); err != nil {
+	input := request("1")
+	input.Prompt = "旧客户端提示词"
+	if _, err := f.service.SaveAnimationPrompt(context.Background(), modelcheck.AnimationPromptSettings{Prompt: customPrompt}, "test"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.service.EnqueueAnimation(context.Background(), input); err != nil {
 		t.Fatal(err)
 	}
 	task := finished(t, f)
@@ -38,7 +44,7 @@ func TestAnimationUsesSelectedModelLowEffortAndHTMLPrompt(t *testing.T) {
 	raw, _ := json.Marshal(row)
 	var result map[string]any
 	_ = json.Unmarshal(raw, &result)
-	if task.Status != "succeeded" || result["html"] == nil || result["source"] != htmlAnimation || result["prompt"] != requestedAnimationPrompt || result["reasoning_effort"] != "low" || result["model"] != "test-model" {
+	if task.Status != "succeeded" || result["html"] == nil || result["source"] != htmlAnimation || result["prompt"] != customPrompt || result["reasoning_effort"] != "low" || result["model"] != "test-model" {
 		t.Fatalf("missing HTML metadata: %s", raw)
 	}
 	usage, _ := result["usage"].(map[string]any)

@@ -195,3 +195,41 @@ test("日志为空时说明留在可见视口内，无需横向滚动表格", as
     await page.locator('[data-slot="table-container"]').evaluate((element) => element.scrollLeft),
   ).toBe(0);
 });
+
+test("大结果首次用键盘展开才显示明细，收起重开保留分页", async ({ page }) => {
+  const entry = logEntry(0);
+  entry.details = {
+    result: {
+      account_targets: Object.fromEntries(
+        Array.from({ length: 12 }, (_, index) => [
+          String(index + 1),
+          { account_name: `键盘目标 ${index + 1}` },
+        ]),
+      ),
+    },
+  };
+  await page.route("**/api/logs?**", (route) =>
+    route.fulfill({
+      json: { items: [entry], total: 1, page: 1, page_size: 20, counts: { task: 1 } },
+    }),
+  );
+  await page.goto("/logs");
+  await page.getByRole("button", { name: /查看.*详情/ }).click();
+  const dialog = page.getByRole("dialog", { name: longTitle });
+  const summary = dialog.locator("summary").filter({ hasText: "调度目标" });
+  await expect(summary).toContainText("12 项");
+  await expect(dialog.getByText("键盘目标 1", { exact: true })).toHaveCount(0);
+  await summary.focus();
+  await summary.press("Enter");
+  await expect(summary).toBeFocused();
+  await expect(dialog.getByText("键盘目标 1", { exact: true })).toBeVisible();
+  await dialog.getByRole("button", { name: "转到下一页" }).click();
+  const lastRecord = dialog.getByText("键盘目标 12", { exact: true });
+  await expect(lastRecord).toBeVisible();
+  await summary.focus();
+  await summary.press("Space");
+  await expect(lastRecord).not.toBeVisible();
+  await summary.press("Enter");
+  await expect(lastRecord).toBeVisible();
+  await expect(dialog.getByText("键盘目标 1", { exact: true })).toHaveCount(0);
+});

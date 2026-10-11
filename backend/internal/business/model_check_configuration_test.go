@@ -7,6 +7,7 @@ import (
 )
 
 func TestModelCheckConfigurationPersistsJSONAndWritesRedactedAudit(t *testing.T) {
+	t.Parallel()
 	store := openPolicyStore(t)
 	ctx := context.Background()
 	raw := []byte(`{"active":{"id":"profile-1"},"secret_marker":"must-not-enter-audit"}`)

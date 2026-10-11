@@ -25,6 +25,7 @@ func snapshotRevision(t *testing.T, snapshot PolicySnapshot) string {
 }
 
 func TestPolicyRevisionRejectsStaleSaveWithoutOverwritingManualProtection(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	store := openPolicyStore(t)
 	initial, err := store.PolicySnapshot(ctx)
@@ -59,6 +60,7 @@ func TestPolicyRevisionRejectsStaleSaveWithoutOverwritingManualProtection(t *tes
 }
 
 func TestPolicyRevisionAcceptsCurrentRevisionAndChangesAfterSave(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	store := openPolicyStore(t)
 	initial, err := store.PolicySnapshot(ctx)

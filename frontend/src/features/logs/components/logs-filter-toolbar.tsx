@@ -82,6 +82,7 @@ function EventGroupFilter(props: {
   return (
     <FilterMenu
       label="事件分组"
+      dictionaryKind="group"
       options={groups.map((group) => group.name)}
       value={props.value === "all" ? null : props.value}
       onValueChange={(value) => props.onChange(value ?? "all")}

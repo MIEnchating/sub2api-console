@@ -24,16 +24,12 @@ func selectScoringHistory(rows, current []business.RoutingSample, now time.Time,
 
 // scoreRoutingHealth separates historical scores from current safety evidence.
 // Only fresh evidence can establish fatal status and failure/recovery streaks.
-func scoreRoutingHealth(current, history []business.RoutingSample, policy map[string]any) (Health, error) {
-	config, err := parseScoringConfig(policy)
-	if err != nil {
-		return Health{}, err
-	}
+func scoreRoutingHealth(current, history []business.RoutingSample, config scoringConfig) Health {
 	currentConfig := config
 	currentConfig.longWindow = max(config.longWindow, len(current))
 	health := scoreRoutingRows(current, currentConfig)
 	if health.SampleCount == 0 {
-		return health, nil
+		return health
 	}
 	historical := scoreRoutingRows(history, config)
 	if historical.SampleCount == 0 {
@@ -47,7 +43,7 @@ func scoreRoutingHealth(current, history []business.RoutingSample, policy map[st
 		// A shorter history window must never dilute a fresh credential failure.
 		health.HealthScore = currentScore
 	}
-	return health, nil
+	return health
 }
 
 func scoreRoutingRows(rows []business.RoutingSample, config scoringConfig) Health {

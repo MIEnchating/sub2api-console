@@ -17,7 +17,7 @@ func (s *Server) cleanupUpstreamBinding(c *gin.Context) {
 		return
 	}
 	var input business.UpstreamBindingCleanup
-	if err := c.ShouldBindJSON(&input); err != nil {
+	if err := bindRequestJSON(c, &input); err != nil {
 		writeError(c, http.StatusUnprocessableEntity, business.ErrBindingCleanupInvalid.Error())
 		return
 	}

@@ -1,10 +1,11 @@
+import { availableParallelism } from "node:os";
 import { defineConfig } from "@playwright/test";
 
 export default defineConfig({
   testDir: "./e2e",
   testMatch: "**/*.e2e.ts",
   fullyParallel: true,
-  workers: 2,
+  workers: process.env.CI ? 2 : Math.max(1, Math.min(6, availableParallelism() - 2)),
   reporter: process.env.CI ? [["list"], ["github"]] : "list",
   use: {
     baseURL: "http://127.0.0.1:3013",

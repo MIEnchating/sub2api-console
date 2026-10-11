@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 import { KumaResourcesPage } from "../resources-page";
 import { kumaConfigKey, kumaResourcesKey } from "../../constants";
@@ -54,14 +54,15 @@ it("点击编辑立即打开弹窗，轻量加载提示仅在弹窗内，读取�
 
 it("读取中取消编辑，迟到的详情不会重新打开弹窗", async () => {
   let resolve!: (response: Response) => void;
+  let signal: AbortSignal | null | undefined;
   vi.stubGlobal(
     "fetch",
-    vi.fn(
-      () =>
-        new Promise<Response>((done) => {
-          resolve = done;
-        }),
-    ),
+    vi.fn((_input: RequestInfo | URL, init?: RequestInit) => {
+      signal = init?.signal;
+      return new Promise<Response>((done) => {
+        resolve = done;
+      });
+    }),
   );
   renderPage();
   fireEvent.click(screen.getByRole("button", { name: "编辑" }));
@@ -70,6 +71,14 @@ it("读取中取消编辑，迟到的详情不会重新打开弹窗", async () =
     resolve(Response.json(statusPage));
   });
   expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  expect(signal?.aborted).toBe(true);
+  await waitFor(() =>
+    expect(
+      client
+        .getQueryCache()
+        .find({ queryKey: ["uptime-kuma", "resource-editor", "status-pages", statusPage.id] }),
+    ).toBeUndefined(),
+  );
 });
 
 it("详情读取失败保留弹窗并禁用保存，重新读取成功后显示表单", async () => {

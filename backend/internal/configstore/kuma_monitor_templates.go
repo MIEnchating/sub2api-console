@@ -34,6 +34,14 @@ func (s *Store) SaveKumaMonitorTemplate(ctx context.Context, baseURL string, ite
 	return err
 }
 
+// KumaMonitorTemplate reads one binding using the instance/monitor primary key.
+// Missing bindings remain distinct from an empty binding and from read failures.
+func (s *Store) KumaMonitorTemplate(ctx context.Context, baseURL string, monitorID int64) (KumaMonitorTemplate, error) {
+	var item KumaMonitorTemplate
+	err := s.db.QueryRowContext(ctx, `SELECT monitor_id,template_id,template_revision,template_name,template_model,body_encoding FROM uptime_kuma_monitor_templates WHERE base_url=? AND monitor_id=?`, baseURL, monitorID).Scan(&item.MonitorID, &item.TemplateID, &item.Revision, &item.Name, &item.Model, &item.BodyEncoding)
+	return item, err
+}
+
 func (s *Store) DeleteKumaMonitorTemplate(ctx context.Context, baseURL string, monitorID int64) error {
 	_, err := s.db.ExecContext(ctx, `DELETE FROM uptime_kuma_monitor_templates WHERE base_url=? AND monitor_id=?`, baseURL, monitorID)
 	return err

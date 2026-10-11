@@ -2,6 +2,7 @@ package taskstore_test
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"testing"
@@ -58,6 +59,44 @@ func TestHistoryQueryPaginatesPastLatestHundredAndReturnsExactTotal(t *testing.T
 	}
 	if len(first.Items) != 100 || first.Items[99].ID == page.Items[0].ID {
 		t.Fatal("page boundaries repeated records")
+	}
+}
+
+func TestHistoryQueryReturnsExactTotalForEmptyOffsetPage(t *testing.T) {
+	store := historyQueryFixture(t)
+	page, err := store.QueryBySkill(context.Background(), "account-workbench", taskstore.HistoryQuery{Offset: 1000, Limit: 50})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if page.Total != 124 || len(page.Items) != 0 {
+		t.Fatalf("empty page mismatch: %+v", page)
+	}
+}
+
+func TestHistoryQueryEqualTimesKeepStablePageOrderAndFullResults(t *testing.T) {
+	store, err := taskstore.Open(filepath.Join(t.TempDir(), "history.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	for _, id := range []string{"third", "first", "second"} {
+		task := taskstore.Task{ID: id, Skill: "account-workbench", Operation: "import", Status: "succeeded", Progress: 100, Message: "完成", CreatedAt: "2026-10-01T00:00:00Z", UpdatedAt: "2026-10-01T00:00:00Z", Result: map[string]any{"email": "alice@example.com", "identity": id, "amount": json.Number("9007199254740993")}}
+		if err := store.Save(t.Context(), task); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for offset, expected := range []string{"first", "second", "third"} {
+		page, err := store.QueryBySkill(t.Context(), "account-workbench", taskstore.HistoryQuery{Emails: []string{"alice@example.com"}, Offset: offset, Limit: 1})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if page.Total != 3 || len(page.Items) != 1 {
+			t.Fatalf("offset %d: total=%d items=%d", offset, page.Total, len(page.Items))
+		}
+		item := page.Items[0]
+		if item.ID != expected || item.Result["identity"] != expected || item.Result["amount"] != json.Number("9007199254740993") {
+			t.Fatalf("offset %d: wrong task result: %+v", offset, item)
+		}
 	}
 }
 

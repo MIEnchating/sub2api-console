@@ -1,7 +1,7 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Controller, useForm } from "react-hook-form";
-import { useMemo, type ReactElement } from "react";
+import { useEffect, useMemo, type ReactElement } from "react";
 
 import { api, type AccountGroupsPreview, type AccountStatus, type Task } from "@/api";
 import { ContentLoading } from "@/components/content-loading";
@@ -17,7 +17,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { useDictionaryOrder } from "@/hooks/use-dictionary-order";
+import { useDictionaryOrder, useDictionary } from "@/hooks/use-dictionary-order";
 import { notifyOperationError } from "@/lib/operation-feedback";
 import { accountGroupsSchema, type AccountGroupsForm } from "../lib/account-groups-schema";
 
@@ -30,7 +30,7 @@ type Props = {
 export function AccountGroupsDialog(props: Props): ReactElement {
   const preview = useQuery({
     queryKey: ["account-groups", props.account.id],
-    queryFn: () => api.accountGroups(props.account.id),
+    queryFn: ({ signal }) => api.accountGroups(props.account.id, signal),
     retry: false,
     staleTime: 0,
     refetchOnWindowFocus: false,
@@ -50,9 +50,12 @@ export function AccountGroupsDialog(props: Props): ReactElement {
         )}
         {preview.data && (
           <AccountGroupsSelection
-            key={`${props.account.id}:${preview.data.target_version}:${preview.data.current_group_ids.join(",")}`}
+            key={`${props.account.id}:${preview.data.target_version}`}
             {...props}
             preview={preview.data}
+            refreshing={preview.isFetching}
+            unavailable={preview.isError}
+            onRetry={() => void preview.refetch()}
           />
         )}
       </DialogContent>
@@ -60,8 +63,20 @@ export function AccountGroupsDialog(props: Props): ReactElement {
   );
 }
 
-function AccountGroupsSelection(props: Props & { preview: AccountGroupsPreview }): ReactElement {
+function AccountGroupsSelection(
+  props: Props & {
+    preview: AccountGroupsPreview;
+    refreshing: boolean;
+    unavailable: boolean;
+    onRetry: () => void;
+  },
+): ReactElement {
+  const dictionary = useDictionary("group");
   const groups = useDictionaryOrder("group", props.preview.groups, (group) => group.id);
+  const groupNameByID = useMemo(
+    () => new Map(props.preview.groups.map((group) => [group.id, group.name])),
+    [props.preview.groups],
+  );
   const options = useMemo(
     () => groups.map((group) => ({ value: group.id, label: `${group.name}（#${group.id}）` })),
     [groups],
@@ -71,6 +86,15 @@ function AccountGroupsSelection(props: Props & { preview: AccountGroupsPreview }
     defaultValues: { groupIds: props.preview.current_group_ids },
   });
   const selected = form.watch("groupIds");
+  const hasDraft = Boolean(form.formState.dirtyFields.groupIds);
+  useEffect(() => {
+    form.reset({ groupIds: props.preview.current_group_ids }, { keepDirtyValues: hasDraft });
+  }, [form, hasDraft, props.preview.current_group_ids]);
+  const availableIds = useMemo(() => new Set(groups.map((group) => group.id)), [groups]);
+  const unavailableSelection = !!dictionary.data && selected.some((id) => !availableIds.has(id));
+  const selectionError = unavailableSelection
+    ? "部分目标分组已不可用，请移除后重新选择"
+    : form.formState.errors.groupIds?.message;
   const manual = props.account.manual_priority != null;
   const locked = props.account.groups_locked === true;
   const unchanged =
@@ -90,17 +114,28 @@ function AccountGroupsSelection(props: Props & { preview: AccountGroupsPreview }
     onError: (error) => notifyOperationError(error, "切换分组失败"),
   });
   const groupNames = (ids: string[]): string =>
-    ids
-      .map((id) => props.preview.groups.find((group) => group.id === id)?.name ?? `分组 #${id}`)
-      .join("、") || "未分组";
+    ids.map((id) => groupNameByID.get(id) ?? `分组 #${id}`).join("、") || "未分组";
+  const submitDisabled =
+    !dictionary.data ||
+    locked ||
+    manual ||
+    mutation.isPending ||
+    props.refreshing ||
+    props.unavailable ||
+    unchanged ||
+    unavailableSelection ||
+    selected.length === 0 ||
+    options.length === 0;
   return (
     <form
       className="grid min-h-0 grid-rows-[minmax(0,1fr)_auto] gap-4"
       onSubmit={form.handleSubmit((values) => {
-        if (!locked && !manual && !unchanged && !mutation.isPending) mutation.mutate(values);
+        if (!submitDisabled) mutation.mutate(values);
       })}
     >
       <DialogBody className="space-y-4">
+        {props.refreshing && <ContentLoading compact label="正在更新账号分组…" />}
+        {props.unavailable && <ContentRetry onRetry={props.onRetry} pending={props.refreshing} />}
         <p className="break-words text-sm">
           当前分组：{groupNames(props.preview.current_group_ids)}
         </p>
@@ -111,22 +146,23 @@ function AccountGroupsSelection(props: Props & { preview: AccountGroupsPreview }
           <Controller
             name="groupIds"
             control={form.control}
-            render={({ field, fieldState }) => (
+            render={({ field }) => (
               <MultiSelect
+                dictionaryKind="group"
                 id="account-target-groups"
                 ariaLabel="目标分组"
                 options={options}
                 selected={field.value}
                 onChange={field.onChange}
                 disabled={locked || manual || mutation.isPending || options.length === 0}
-                ariaInvalid={fieldState.invalid}
-                ariaDescribedBy={fieldState.error ? "account-target-groups-error" : undefined}
+                ariaInvalid={Boolean(selectionError)}
+                ariaDescribedBy={selectionError ? "account-target-groups-error" : undefined}
               />
             )}
           />
-          {form.formState.errors.groupIds && (
+          {selectionError && (
             <p id="account-target-groups-error" role="alert" className="text-destructive text-sm">
-              {form.formState.errors.groupIds.message}
+              {selectionError}
             </p>
           )}
           {options.length === 0 && (
@@ -148,17 +184,7 @@ function AccountGroupsSelection(props: Props & { preview: AccountGroupsPreview }
         <Button type="button" variant="outline" onClick={() => props.onOpenChange(false)}>
           取消
         </Button>
-        <Button
-          type="submit"
-          disabled={
-            locked ||
-            manual ||
-            mutation.isPending ||
-            unchanged ||
-            selected.length === 0 ||
-            options.length === 0
-          }
-        >
+        <Button type="submit" disabled={submitDisabled}>
           {mutation.isPending ? "正在提交…" : "确认切换"}
         </Button>
       </DialogFooter>

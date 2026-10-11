@@ -1,3 +1,4 @@
+import { seedDictionaries } from "@/test/dictionary-fixtures";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -32,6 +33,12 @@ afterEach(() => {
 
 function renderSettings(initial: AccountCreationSettings = settings): QueryClient {
   const client = new QueryClient({ defaultOptions: { queries: { enabled: false } } });
+  seedDictionaries(client, {
+    group: [
+      { value: "6", name: "分组 6" },
+      { value: "7", name: "分组 7" },
+    ],
+  });
   clients.push(client);
   client.setQueryData(["account-creation-settings"], initial);
   client.setQueryData(["groups"], []);

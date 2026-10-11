@@ -6,6 +6,7 @@ import (
 )
 
 func TestSelectedSharedAllocationReservesUnselectedAndNewAccounts(t *testing.T) {
+	t.Parallel()
 	r := allocationFixture(t, upstreamCapacityAccount("41", 1, 10), upstreamCapacityAccount("42", 4, 10), upstreamCapacityAccount("43", 1, 10))
 	r.policy["upstream_concurrency"] = map[string]any{"enabled": true, "account_mode": "selected", "account_ids": []any{"41"}}
 	result, err := routing.NewService(r).Calculate(t.Context(), routing.Scope{}, true)
@@ -23,6 +24,7 @@ func TestSelectedSharedAllocationReservesUnselectedAndNewAccounts(t *testing.T) 
 }
 
 func TestSelectedSharedAllocationWithEmptySelectionDoesNotAllocate(t *testing.T) {
+	t.Parallel()
 	r := allocationFixture(t, upstreamCapacityAccount("41", 1, 10))
 	r.policy["upstream_concurrency"] = map[string]any{"enabled": true, "account_mode": "selected", "account_ids": []any{}}
 	result, err := routing.NewService(r).Calculate(t.Context(), routing.Scope{}, true)
@@ -35,6 +37,7 @@ func TestSelectedSharedAllocationWithEmptySelectionDoesNotAllocate(t *testing.T)
 }
 
 func TestSelectedSharedAllocationRestoresOrdinarySchedulingForUnselectedWaitingAccount(t *testing.T) {
+	t.Parallel()
 	first, waiting := upstreamCapacityAccount("41", 1, 10), upstreamCapacityAccount("42", 4, 10)
 	stopped := false
 	waiting.Schedulable = &stopped
@@ -58,6 +61,7 @@ func TestSelectedSharedAllocationRestoresOrdinarySchedulingForUnselectedWaitingA
 }
 
 func TestSelectedSharedAllocationStaleReductionPreservesUnselectedCapacity(t *testing.T) {
+	t.Parallel()
 	r := allocationFixture(t, upstreamCapacityAccount("41", 8, 10), upstreamCapacityAccount("42", 4, 10))
 	for i := range r.accounts {
 		r.accounts[i].UpstreamConcurrencyStatus = "stale"
@@ -76,6 +80,7 @@ func TestSelectedSharedAllocationStaleReductionPreservesUnselectedCapacity(t *te
 }
 
 func TestSelectedSharedAllocationKeepsConfiguredScalingForOtherAccounts(t *testing.T) {
+	t.Parallel()
 	r := allocationFixture(t, upstreamCapacityAccount("41", 1, 10), upstreamCapacityAccount("42", 1, 10))
 	r.policy["upstream_concurrency"] = map[string]any{"enabled": true, "account_mode": "selected", "account_ids": []any{"41"}}
 	scaling := r.policy["scaling"].(map[string]any)
@@ -93,6 +98,7 @@ func TestSelectedSharedAllocationKeepsConfiguredScalingForOtherAccounts(t *testi
 }
 
 func TestUpstreamSharedAllocationIncludesNewAccountsOnlyOnSelectedStableID(t *testing.T) {
+	t.Parallel()
 	first, added, other := upstreamCapacityAccount("41", 1, 10), upstreamCapacityAccount("42", 1, 10), upstreamCapacityAccount("43", 1, 10)
 	first.UpstreamID, added.UpstreamID, other.UpstreamID = "Upstream-A", "Upstream-A", "upstream-a"
 	r := allocationFixture(t, first, added, other)
@@ -113,6 +119,7 @@ func TestUpstreamSharedAllocationIncludesNewAccountsOnlyOnSelectedStableID(t *te
 }
 
 func TestUpstreamSharedAllocationEmptySelectionDoesNotAllocate(t *testing.T) {
+	t.Parallel()
 	r := allocationFixture(t, upstreamCapacityAccount("41", 1, 10))
 	r.policy["upstream_concurrency"] = map[string]any{"enabled": true, "account_mode": "upstreams", "upstream_ids": []any{}}
 	result, err := routing.NewService(r).Calculate(t.Context(), routing.Scope{}, true)
@@ -127,6 +134,7 @@ func TestUpstreamSharedAllocationEmptySelectionDoesNotAllocate(t *testing.T) {
 }
 
 func TestSharedAllocationAccountOverrideIncludesAccountOutsideSelectedUpstreams(t *testing.T) {
+	t.Parallel()
 	r := allocationFixture(t, upstreamCapacityAccount("147", 1, 10), upstreamCapacityAccount("148", 4, 10))
 	r.policy["upstream_concurrency"] = map[string]any{"enabled": true, "account_mode": "upstreams", "upstream_ids": []any{"other"}, "account_overrides": map[string]any{"147": true}}
 	result, err := routing.NewService(r).Calculate(t.Context(), routing.Scope{}, true)
@@ -140,6 +148,7 @@ func TestSharedAllocationAccountOverrideIncludesAccountOutsideSelectedUpstreams(
 }
 
 func TestSharedAllocationAccountOverrideWinsOverUpstreamAndGlobalScope(t *testing.T) {
+	t.Parallel()
 	r := allocationFixture(t, upstreamCapacityAccount("41", 1, 10), upstreamCapacityAccount("42", 1, 10))
 	r.policy["upstream_concurrency"] = map[string]any{"enabled": true, "account_mode": "selected", "account_ids": []any{}, "upstream_overrides": map[string]any{"upstream-1": true}, "account_overrides": map[string]any{"41": false}}
 	result, err := routing.NewService(r).Calculate(t.Context(), routing.Scope{}, true)
@@ -155,6 +164,7 @@ func TestSharedAllocationAccountOverrideWinsOverUpstreamAndGlobalScope(t *testin
 }
 
 func TestSharedAllocationOverridesRespectMasterOffAndWriterRechecks(t *testing.T) {
+	t.Parallel()
 	for _, master := range []bool{false, true} {
 		r := allocationFixture(t, upstreamCapacityAccount("41", 1, 10))
 		r.policy["upstream_concurrency"] = map[string]any{"enabled": master, "account_mode": "all", "upstream_overrides": map[string]any{"upstream-1": false}, "account_overrides": map[string]any{"41": true}}
@@ -178,6 +188,7 @@ func TestSharedAllocationOverridesRespectMasterOffAndWriterRechecks(t *testing.T
 }
 
 func TestSharedAllocationRejectsMalformedOverridesBeforeCalculating(t *testing.T) {
+	t.Parallel()
 	r := allocationFixture(t, upstreamCapacityAccount("41", 1, 10))
 	r.policy["upstream_concurrency"] = map[string]any{"enabled": true, "account_overrides": map[string]any{"41": "true"}}
 	if _, err := routing.NewService(r).Calculate(t.Context(), routing.Scope{}, true); err == nil {

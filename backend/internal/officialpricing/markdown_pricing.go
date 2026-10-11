@@ -83,30 +83,52 @@ func dollarRate(cell string, perMillion bool) (string, error) {
 	return number(strings.TrimPrefix(cell, "$"), divisor)
 }
 
-// Limit model-detail requests independently of provider-level parallelism.
-func enrichModelPrices(ctx context.Context, prices []Price, enrich func(Price) ([]Price, error)) ([]Price, error) {
+// Bound workers as well as requests. A failed detail invalidates the provider
+// catalog, so cancel active reads and stop scheduling the remaining models.
+func enrichModelPrices(ctx context.Context, prices []Price, enrich func(context.Context, Price) ([]Price, error)) ([]Price, error) {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	results := make([][]Price, len(prices))
-	errorsByModel := make([]error, len(prices))
-	semaphore := make(chan struct{}, 4)
+	jobs := make(chan int)
+	var firstError error
+	var failed sync.Once
 	var wg sync.WaitGroup
-	for i, price := range prices {
+	for range min(4, len(prices)) {
 		wg.Go(func() {
-			select {
-			case semaphore <- struct{}{}:
-			case <-ctx.Done():
-				errorsByModel[i] = ctx.Err()
-				return
+			for i := range jobs {
+				if ctx.Err() != nil {
+					return
+				}
+				result, err := enrich(ctx, prices[i])
+				if err != nil {
+					failed.Do(func() {
+						firstError = fmt.Errorf("%s：%w", prices[i].Model, err)
+						cancel()
+					})
+					return
+				}
+				results[i] = result
 			}
-			defer func() { <-semaphore }()
-			results[i], errorsByModel[i] = enrich(price)
 		})
 	}
-	wg.Wait()
-	var out []Price
-	for i, result := range results {
-		if errorsByModel[i] != nil {
-			return nil, fmt.Errorf("%s：%w", prices[i].Model, errorsByModel[i])
+schedule:
+	for i := range prices {
+		select {
+		case jobs <- i:
+		case <-ctx.Done():
+			break schedule
 		}
+	}
+	close(jobs)
+	wg.Wait()
+	if firstError != nil {
+		return nil, firstError
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	var out []Price
+	for _, result := range results {
 		out = append(out, result...)
 	}
 	return out, nil

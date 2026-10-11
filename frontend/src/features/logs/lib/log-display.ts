@@ -10,6 +10,7 @@ const kindLabels: Record<UnifiedLogKind, string> = {
 };
 
 const titleLabels: Record<string, string> = {
+  "log-cleanup": "日志清理",
   "latency-watcher": "延迟监控",
   "routing-decision-change": "路由决策变更",
   "upstream-runtime-snapshot": "上游运行快照",

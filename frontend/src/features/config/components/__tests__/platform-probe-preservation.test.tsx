@@ -1,3 +1,4 @@
+import { seedDictionaries } from "@/test/dictionary-fixtures";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
@@ -11,6 +12,7 @@ afterEach(() => {
 
 it("平台字典含原型属性名时不把未知平台注册成内置模型字段", () => {
   client = new QueryClient({ defaultOptions: { queries: { enabled: false } } });
+  seedDictionaries(client);
   client.setQueryData(["dictionaries", "platform"], {
     items: [{ value: "constructor", name: "未知平台", enabled: true }],
   });
@@ -21,13 +23,14 @@ it("平台字典含原型属性名时不把未知平台注册成内置模型字�
   );
 
   expect(screen.queryByRole("textbox", { name: "未知平台 默认探活模型" })).not.toBeInTheDocument();
-  expect(screen.getByRole("textbox", { name: "OpenAI 默认探活模型" })).toBeEnabled();
+  expect(screen.queryByRole("textbox", { name: "OpenAI 默认探活模型" })).not.toBeInTheDocument();
 });
 
 it.each(["new-model", ""])(
   "将 OpenAI 默认模型改成 %s 时保留未在表单列出的平台配置",
   async (model) => {
     client = new QueryClient({ defaultOptions: { queries: { enabled: false } } });
+    seedDictionaries(client);
     const onSubmit = vi.fn();
     render(
       <QueryClientProvider client={client}>

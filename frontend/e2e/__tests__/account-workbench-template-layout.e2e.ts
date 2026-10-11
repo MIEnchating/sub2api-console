@@ -115,6 +115,48 @@ test("低高度窗口中预览只滚动内容，标题和保存取消按钮始�
   await expect(dialog).toHaveCount(0);
 });
 
+test("大型映射在卡片和预览中分页，窄屏不溢出且翻页保持键盘焦点", async ({ page }) => {
+  const largeTemplate = {
+    ...preview,
+    config: {
+      ...preview.config,
+      credential_extras: {
+        model_mapping: Object.fromEntries(
+          Array.from({ length: 41 }, (_, index) => [`source-${index + 1}`, `target-${index + 1}`]),
+        ),
+      },
+    },
+  };
+  await page.route("**/api/account-workbench/templates", (route) =>
+    route.fulfill({ json: { revision: 1, preferred_id: preview.id, items: [largeTemplate] } }),
+  );
+  await page.route("**/api/account-workbench/template-source/41", (route) =>
+    route.fulfill({ json: largeTemplate }),
+  );
+  await page.getByRole("button", { name: "刷新", exact: true }).click();
+  const card = page.getByRole("article", { name: preview.name });
+  await card.getByRole("button", { name: "展开 41 条映射（分页）" }).click();
+  await expect(card.getByRole("table").getByRole("row")).toHaveCount(21);
+  const next = card.getByRole("button", { name: "转到下一页" });
+  await next.focus();
+  await page.keyboard.press("Enter");
+  await expect(next).toBeFocused();
+  await expect(card.getByRole("cell", { name: "source-21", exact: true })).toBeVisible();
+  expect(await card.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+  await card.getByRole("button", { name: "收起映射" }).click();
+  await expect(card.getByRole("navigation")).toHaveCount(0);
+  await page.getByRole("button", { name: "重新同步" }).click();
+  const dialog = page.getByRole("dialog", { name: "重新同步模板" });
+  await expect(dialog.getByRole("table").getByRole("row")).toHaveCount(21);
+  await dialog.getByRole("button", { name: "转到下一页" }).click();
+  await dialog.getByRole("button", { name: "转到下一页" }).click();
+  await expect(dialog.getByRole("cell", { name: "source-41", exact: true })).toBeVisible();
+  await expect(dialog.getByRole("button", { name: "转到下一页" })).toBeDisabled();
+  expect(await dialog.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+  await expect(dialog.getByRole("button", { name: "保存模板" })).toBeInViewport();
+  await dialog.getByRole("button", { name: "取消" }).click();
+});
+
 test("超长模型名、来源账号与分组名称换行显示且不撑宽卡片和弹窗", async ({ page }) => {
   const longName = "long-model-name-".repeat(20);
   const longTemplate = {

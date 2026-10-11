@@ -565,9 +565,8 @@ func (f fakeLogMaintenance) Update(_ context.Context, enabled bool, days int) (c
 	f.status.Enabled, f.status.RetentionDays = enabled, days
 	return f.status, nil
 }
-func (f fakeLogMaintenance) ClearExpired(_ context.Context, days int) (consolelogs.CleanupResult, error) {
-	f.result.RetentionDays = days
-	return f.result, nil
+func (f fakeLogMaintenance) Enqueue(_ context.Context, days int) (taskstore.Task, error) {
+	return taskstore.Task{ID: "cleanup-1", Status: "queued", Result: map[string]any{"retention_days": days}}, nil
 }
 
 type fakeTaskRepository struct {
@@ -692,7 +691,7 @@ func (service fakeAccountModelSync) ModelSyncSettings(context.Context) (business
 	return service.settings, service.err
 }
 
-func (service fakeAccountModelSync) ConfigureModelSyncSettings(_ context.Context, patterns []string, _ string) (business.AccountModelSyncSettings, error) {
+func (service fakeAccountModelSync) ConfigureModelSyncSettings(_ context.Context, patterns []string, _ []string, _ string) (business.AccountModelSyncSettings, error) {
 	if service.settingsCalls != nil {
 		*service.settingsCalls = append(*service.settingsCalls, append([]string{}, patterns...))
 	}
@@ -2412,7 +2411,8 @@ func TestAccountModelSyncRoutesPreservePreviewAndApplyContracts(t *testing.T) {
 		t.Fatalf("model sync settings=%d %s", settings.Code, settings.Body.String())
 	}
 	updatedSettings := authenticatedRequest(t, router, http.MethodPut, "/api/config/model-sync", map[string]any{
-		"blocked_patterns": []string{"claude-*", "gemini-*"},
+		"blocked_patterns":  []string{"claude-*", "gemini-*"},
+		"expected_patterns": []string{"*-image-*"},
 	})
 	if updatedSettings.Code != http.StatusOK || !reflect.DeepEqual(settingsCalls, [][]string{{"claude-*", "gemini-*"}}) {
 		t.Fatalf("updated model sync settings=%d %s calls=%#v", updatedSettings.Code, updatedSettings.Body.String(), settingsCalls)
@@ -3365,7 +3365,7 @@ func TestInspectionHistoryAndLogMaintenanceContracts(t *testing.T) {
 		t.Fatalf("cleanup without retention must be rejected: %d %s", missingRetention.Code, missingRetention.Body.String())
 	}
 	clearedLogs := authenticatedRequest(t, router, http.MethodDelete, "/api/logs?retention_days=45", nil)
-	if clearedLogs.Code != http.StatusOK || !strings.Contains(clearedLogs.Body.String(), `"total":10`) || !strings.Contains(clearedLogs.Body.String(), `"retention_days":45`) {
+	if clearedLogs.Code != http.StatusAccepted || !strings.Contains(clearedLogs.Body.String(), `"id":"cleanup-1"`) || !strings.Contains(clearedLogs.Body.String(), `"retention_days":45`) {
 		t.Fatalf("unexpected log cleanup: %d %s", clearedLogs.Code, clearedLogs.Body.String())
 	}
 	clearedHeartbeats := authenticatedRequest(t, router, http.MethodDelete, "/api/inspection/automation/history", nil)

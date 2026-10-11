@@ -98,10 +98,14 @@ func TestRecoverableTaskSurvivesGracefulStopAndRepeatedDatabaseReopen(t *testing
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(pending) != 1 || pending[0].ID != task.ID || pending[0].Progress != 40 {
+		if len(pending) != 1 || pending[0].ID != task.ID {
 			t.Fatalf("not resumable: %#v", pending)
 		}
-		raw, err := json.Marshal(pending[0])
+		recoveryTask, err := store.RecoveryTask(ctx, pending[0].ID)
+		if err != nil || recoveryTask.Progress != 40 {
+			t.Fatalf("lost recovery progress: %#v, %v", recoveryTask, err)
+		}
+		raw, err := json.Marshal(recoveryTask)
 		if err != nil {
 			t.Fatal(err)
 		}

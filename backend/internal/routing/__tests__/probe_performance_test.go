@@ -14,6 +14,7 @@ import (
 const discoveryPromptFingerprint = "v1:8f434346648f6b96df89dda901c5176b10a6d83961dd3c1ac88b59b2dc327aa4"
 
 func TestComparableProbeSeriesDiscoversFastIdleCandidateWithoutChangingTrafficPercentiles(t *testing.T) {
+	t.Parallel()
 	store, db := discoveryStore(t)
 	now := time.Now().UTC().Add(-time.Second)
 	insertDiscoveryProbes(t, db, "41", "4000", now, 5, nil)
@@ -32,6 +33,7 @@ func TestComparableProbeSeriesDiscoversFastIdleCandidateWithoutChangingTrafficPe
 }
 
 func TestUnreliableOrIncomparableProbeEvidenceCannotDisplaceIncumbent(t *testing.T) {
+	t.Parallel()
 	for _, scenario := range []struct {
 		name   string
 		mutate func(int, map[string]any)
@@ -82,6 +84,7 @@ func TestUnreliableOrIncomparableProbeEvidenceCannotDisplaceIncumbent(t *testing
 }
 
 func TestSufficientComparableRealTrafficTakesPrecedenceOverProbeSpeed(t *testing.T) {
+	t.Parallel()
 	store, db := discoveryStore(t)
 	now := time.Now().UTC().Add(-time.Second)
 	insertDiscoveryProbes(t, db, "41", "4000", now.Add(-time.Minute), 5, nil)
@@ -112,6 +115,7 @@ func TestSufficientComparableRealTrafficTakesPrecedenceOverProbeSpeed(t *testing
 }
 
 func TestBusyIncumbentRetainsReferenceProbesForIdleCandidateComparison(t *testing.T) {
+	t.Parallel()
 	store, db := discoveryStore(t)
 	now := time.Now().UTC().Add(-time.Second)
 	insertDiscoveryProbes(t, db, "41", "4000", now.Add(-time.Minute), 5, nil)
@@ -134,6 +138,7 @@ func TestBusyIncumbentRetainsReferenceProbesForIdleCandidateComparison(t *testin
 }
 
 func TestProbeConfidenceThresholdCanExceedScoringWindow(t *testing.T) {
+	t.Parallel()
 	store, db := discoveryStore(t)
 	_, err := store.UpdatePolicy(t.Context(), map[string]any{"advanced_policy": map[string]any{"weights": map[string]any{"performance_min_samples": 65}}}, "test")
 	if err != nil {
@@ -152,6 +157,7 @@ func TestProbeConfidenceThresholdCanExceedScoringWindow(t *testing.T) {
 }
 
 func TestOneFreshProbeCannotReuseAnInterruptedHistoricalPerformanceSeries(t *testing.T) {
+	t.Parallel()
 	store, db := discoveryStore(t)
 	now := time.Now().UTC().Add(-time.Second)
 	insertDiscoveryProbes(t, db, "41", "4000", now, 5, nil)
@@ -172,6 +178,7 @@ func TestOneFreshProbeCannotReuseAnInterruptedHistoricalPerformanceSeries(t *tes
 }
 
 func TestMultipleProbeModelsEachReceiveTheirOwnConfidenceWindow(t *testing.T) {
+	t.Parallel()
 	for _, scenario := range []struct{ models, minimum int }{{20, 5}, {2, 65}} {
 		t.Run(fmt.Sprintf("%d_models_%d_samples", scenario.models, scenario.minimum), func(t *testing.T) {
 			store, db := discoveryStore(t)

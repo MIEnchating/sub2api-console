@@ -1,3 +1,4 @@
+import { seedDictionaries } from "@/test/dictionary-fixtures";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -44,6 +45,7 @@ function renderConfiguredUpstream(): { writes: UpstreamConfigurationUpdate[] } {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false, staleTime: Infinity } },
   });
+  seedDictionaries(client);
   client.setQueryData(["upstream-configuration", configuration.host], configuration);
   client.setQueryData(["auth-recovery-config"], { vault_entries: [] });
   render(

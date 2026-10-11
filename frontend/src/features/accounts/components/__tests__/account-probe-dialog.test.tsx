@@ -147,10 +147,11 @@ describe("账号探活弹窗", () => {
     ]);
   });
 
-  it("提供常规和流式请求模式并准确标注流式选项", () => {
+  it("提供常规、流式请求和动画测试模式", () => {
     expect(onboardingProbeModeOptions).toEqual([
       { value: "default", label: "常规请求" },
       { value: "stream", label: "流式请求" },
+      { value: "animation", label: "动画测试" },
     ]);
   });
 

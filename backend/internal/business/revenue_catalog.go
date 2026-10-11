@@ -20,6 +20,7 @@ type RevenueAccount struct {
 }
 
 type RevenueBinding struct {
+	UpstreamID      string
 	AuthHost        string
 	UpstreamHost    string
 	UpstreamType    string
@@ -29,6 +30,9 @@ type RevenueBinding struct {
 }
 
 func (s *Store) RevenueCatalog(ctx context.Context) (RevenueCatalog, error) {
+	if err := s.ensureUpstreamIdentities(ctx); err != nil {
+		return RevenueCatalog{}, err
+	}
 	result := RevenueCatalog{Accounts: []RevenueAccount{}}
 	rows, err := s.db.QueryContext(ctx, `SELECT id,name FROM accounts
 		ORDER BY CASE WHEN id GLOB '[0-9]*' THEN CAST(id AS INTEGER) ELSE 0 END,id`)
@@ -80,9 +84,10 @@ func (s *Store) RevenueCatalog(ctx context.Context) (RevenueCatalog, error) {
 	bindingRows, err := s.db.QueryContext(ctx, `SELECT b.local_account_id,b.upstream_host,
 		COALESCE(NULLIF(TRIM(b.source_auth_host),''),b.upstream_host),
 		COALESCE(u.upstream_type,''),b.upstream_key_id,b.upstream_key_name,
-		COALESCE(r.recharge_rate,r2.recharge_rate,'1')
+		COALESCE(r.recharge_rate,r2.recharge_rate,'1'),COALESCE(ih.upstream_id,'')
 		FROM bindings b
 		LEFT JOIN upstreams u ON u.host=b.upstream_host
+		LEFT JOIN upstream_identity_hosts ih ON ih.host=COALESCE(NULLIF(TRIM(b.source_auth_host),''),b.upstream_host)
 		LEFT JOIN recharge_rates r ON r.host=COALESCE(NULLIF(TRIM(b.source_auth_host),''),b.upstream_host)
 		LEFT JOIN recharge_rates r2 ON r2.host=b.upstream_host
 		WHERE COALESCE(b.status,'')<>'missing'
@@ -94,7 +99,7 @@ func (s *Store) RevenueCatalog(ctx context.Context) (RevenueCatalog, error) {
 		var accountID string
 		var binding RevenueBinding
 		if err := bindingRows.Scan(&accountID, &binding.UpstreamHost, &binding.AuthHost,
-			&binding.UpstreamType, &binding.UpstreamKeyID, &binding.UpstreamKeyName, &binding.RechargeRate); err != nil {
+			&binding.UpstreamType, &binding.UpstreamKeyID, &binding.UpstreamKeyName, &binding.RechargeRate, &binding.UpstreamID); err != nil {
 			bindingRows.Close()
 			return RevenueCatalog{}, err
 		}

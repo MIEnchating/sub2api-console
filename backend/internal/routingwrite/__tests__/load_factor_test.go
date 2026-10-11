@@ -154,6 +154,7 @@ func newLoadFactorService(t *testing.T, count int, verify bool) (*routingwrite.S
 }
 
 func TestClearingLoadFactorUsesIndividualUpdatesAndAcceptsExplicitNull(t *testing.T) {
+	t.Parallel()
 	for _, scenario := range []struct {
 		name   string
 		count  int
@@ -189,6 +190,7 @@ func TestClearingLoadFactorUsesIndividualUpdatesAndAcceptsExplicitNull(t *testin
 }
 
 func TestFailedLoadFactorClearRetainsBaselineForRetry(t *testing.T) {
+	t.Parallel()
 	service, fixture, targets := newLoadFactorService(t, 1, false)
 	fixture.ignoreClear = true
 	failed, err := service.Apply(t.Context(), targets, "test")
@@ -203,6 +205,7 @@ func TestFailedLoadFactorClearRetainsBaselineForRetry(t *testing.T) {
 }
 
 func TestClearingLoadFactorDoesNotAcceptUnchangedOrPartialReadback(t *testing.T) {
+	t.Parallel()
 	for _, scenario := range []string{"unchanged", "partial"} {
 		t.Run(scenario, func(t *testing.T) {
 			service, fixture, targets := newLoadFactorService(t, 1, false)
@@ -217,6 +220,7 @@ func TestClearingLoadFactorDoesNotAcceptUnchangedOrPartialReadback(t *testing.T)
 }
 
 func TestClearingLoadFactorAcceptsOmittedNullableFieldInFullAccountReadback(t *testing.T) {
+	t.Parallel()
 	for _, verify := range []bool{false, true} {
 		t.Run(strconv.FormatBool(verify), func(t *testing.T) {
 			service, fixture, targets := newLoadFactorService(t, 2, verify)

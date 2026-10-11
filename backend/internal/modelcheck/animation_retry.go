@@ -103,7 +103,9 @@ func animationRetryDelay(err error, retryCount int) (time.Duration, bool) {
 // persisted or replayed.
 func (s *Service) runAnimationWithRetry(ctx context.Context, account selectedAccount, timeout int, custom *AnimationCustomEndpoint, questions []string, result *AnimationResult, onPhase ...func()) error {
 	result.ReasoningEffort = "low"
-	result.Prompt = animationPrompt
+	if result.Prompt == "" {
+		result.Prompt = animationPrompt
+	}
 	if result.Mode == precheckMode {
 		result.ReasoningEffort = "medium"
 		result.Prompt = ""

@@ -11,6 +11,7 @@ import (
 )
 
 func TestPartialAutomaticReleaseRetainsBaselineForNextRound(t *testing.T) {
+	t.Parallel()
 	_, fixture := newUpstreamCapacityWriteFixture(t, writeCapacityPointer(20), 4, 4, true)
 	var failScheduling atomic.Bool
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {

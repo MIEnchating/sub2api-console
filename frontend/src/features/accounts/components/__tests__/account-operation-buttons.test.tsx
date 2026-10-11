@@ -216,9 +216,8 @@ describe("账号操作", () => {
           {...operationProps({ manual_priority: 3, manual_sync_balance_multiplier: syncBalance })}
         />,
       );
-      for (const label of ["探活测试", "手动熔断（停止调度）"]) {
-        expect(screen.getByRole("button", { name: label })).toBeDisabled();
-      }
+      expect(screen.getByRole("button", { name: "探活测试" })).toBeDisabled();
+      expect(screen.getByRole("button", { name: "手动熔断（停止调度）" })).toBeEnabled();
       expect(screen.getByRole("button", { name: "同步账号倍率" })).toBeEnabled();
       expect(screen.getByRole("button", { name: "调整手动控制" })).toBeEnabled();
     },
@@ -330,4 +329,32 @@ it("分组锁定时仅禁用切换分组，其他维护操作仍可用", async (
     "aria-disabled",
     "true",
   );
+});
+
+it.each([
+  { health: "manual_priority", schedulable: true, label: "手动熔断（停止调度）", action: "fuse" },
+  { health: "fused", schedulable: false, label: "解除熔断", action: "recover" },
+  { health: "paused", schedulable: false, label: "恢复调度", action: "resume" },
+])("人工控制账号处于 $health 时可发起 $action 确认", async (scenario) => {
+  const user = userEvent.setup();
+  const props = operationProps({
+    manual_priority: 3,
+    health: scenario.health,
+    schedulable: scenario.schedulable,
+  });
+  render(<AccountOperationButtons {...props} />);
+  await user.click(screen.getByRole("button", { name: scenario.label }));
+  expect(props.onControl).toHaveBeenCalledWith(
+    scenario.action,
+    expect.any(String),
+    scenario.action === "resume" ? undefined : expect.any(String),
+  );
+});
+
+it("人工熔断账号点击解除熔断时发起恢复确认", async () => {
+  const user = userEvent.setup();
+  const props = operationProps({ health: "fused", manual_fused: true, schedulable: false });
+  render(<AccountOperationButtons {...props} />);
+  await user.click(screen.getByRole("button", { name: "解除熔断" }));
+  expect(props.onControl).toHaveBeenCalledWith("recover", expect.any(String), expect.any(String));
 });

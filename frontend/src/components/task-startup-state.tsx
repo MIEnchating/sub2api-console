@@ -1,5 +1,6 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Ban, RefreshCw } from "lucide-react";
+import { useEffect, useRef } from "react";
 
 import { api } from "@/api";
 import { ContentLoading } from "@/components/content-loading";
@@ -58,16 +59,47 @@ export function TaskProgressState(props: ProgressProps) {
   );
 }
 
-export function TaskCancelButton(props: { taskId: string; className?: string; compact?: boolean }) {
+type CancelProps = { taskId: string; className?: string; compact?: boolean };
+
+export function TaskCancelButton(props: CancelProps) {
+  return <TaskCancelAction key={props.taskId} {...props} />;
+}
+
+function TaskCancelAction(props: CancelProps) {
   const queryClient = useQueryClient();
+  const submitted = useRef(false);
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
   const cancel = useMutation({
-    mutationFn: () => api.cancelTask(props.taskId),
-    onSuccess: () =>
-      queryClient.invalidateQueries({
-        predicate: (query) => query.queryKey.includes(props.taskId),
-        refetchType: "all",
-      }),
-    onError: (error) => notifyOperationError(error, "任务取消失败"),
+    retry: false,
+    networkMode: "always",
+    mutationFn: async (taskId: string) => {
+      const result = await api.cancelTask(taskId);
+      if (result.cancelled !== true) {
+        throw new Error("服务未确认取消，请刷新任务状态后重试");
+      }
+      return result;
+    },
+    onError: (error) => {
+      submitted.current = false;
+      if (mounted.current) notifyOperationError(error, "任务取消失败");
+    },
+    onSettled: (_data, _error, taskId) => {
+      // Feature pages use several task query aliases. Mark all matching caches
+      // stale, but only fetch observed queries; a closed detail can be large.
+      // Refresh on failure too: the task may have finished before cancellation.
+      void queryClient.invalidateQueries({
+        predicate: (query) =>
+          query.queryKey.includes(taskId) ||
+          (query.queryKey.length === 1 && query.queryKey[0] === "tasks"),
+        refetchType: "active",
+      });
+    },
   });
   return (
     <Button
@@ -77,7 +109,11 @@ export function TaskCancelButton(props: { taskId: string; className?: string; co
       className={props.className}
       aria-label={props.compact ? cancelLabel(cancel.isPending, cancel.isSuccess) : undefined}
       disabled={cancel.isPending || cancel.isSuccess}
-      onClick={() => cancel.mutate()}
+      onClick={() => {
+        if (submitted.current) return;
+        submitted.current = true;
+        cancel.mutate(props.taskId);
+      }}
     >
       <Ban aria-hidden="true" />
       {props.compact ? (

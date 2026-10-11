@@ -11,6 +11,7 @@ import (
 )
 
 func TestHealthProjectionDoesNotReadRemoteWriteAuditHistory(t *testing.T) {
+	t.Parallel()
 	path := filepath.Join(t.TempDir(), "health-query.db")
 	store, err := business.Open(path)
 	if err != nil {

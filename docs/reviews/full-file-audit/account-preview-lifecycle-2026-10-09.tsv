@@ -1,0 +1,4 @@
+frontend/src/features/accounts/components/account-delete-dialog.tsx	19243a62164486b475c6eb677dda0c0c1f11f8de7ddfa5a37ec738b03025708a	fixed	完整复审；关闭/进入删除阶段解除预览订阅，最后观察者离开时取消Fetch；每次打开重读删除范围，后台读取保留内容且禁用确认，业务任务不被取消。
+frontend/src/features/accounts/components/account-groups-dialog.tsx	1761f56e39e7f573d18550ff5ec208d5b4a09090c44fcf67059f3cf1c060e764	fixed	完整复审；分组Query传递signal，关闭卸载释放孤立请求，迟到结果不入缓存；当前缓存预览后台刷新时的表单草稿及提交边界仍需专项回归。
+frontend/src/features/accounts/components/__tests__/delete-request-lifecycle.test.tsx	27eccb278fe9a61168d8e96854bf3304377c224e437f92c5c77932c247166455	reviewed	完整阅读；真实Query/API/Fetch覆盖关闭仍挂载弹窗、迟到结果丢弃、共享观察者保留、15秒默认缓存下重开重新读取且禁用确认；仅GET无删除写入。
+frontend/src/features/accounts/components/__tests__/groups-request-lifecycle.test.tsx	f283590d922b4cffe63dc94a2e703185ff00fbb3436dffaddd5db0f43f914b1f	reviewed	完整阅读；慢分组预览关闭后取消，重开取得新分组、不显示迟到旧组；未变更范围禁止确认且没有业务写入。

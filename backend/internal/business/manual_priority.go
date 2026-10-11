@@ -130,18 +130,24 @@ func (s *Store) AssignManualPriority(ctx context.Context, accountID string, prio
 		}
 		return ManualPriorityAssignment{}, err
 	}
-	var occupiedBy, occupiedGroup string
-	err = tx.QueryRowContext(ctx, `SELECT DISTINCT m.account_id,shared.group_name
-		FROM manual_priority_accounts m
-		JOIN account_groups shared ON shared.account_id=m.account_id
-		JOIN account_groups current ON current.account_id=? AND current.group_name=shared.group_name
-		WHERE m.priority=? AND m.account_id<>?
-		ORDER BY shared.group_name,m.account_id LIMIT 1`, accountID, priority, accountID).Scan(&occupiedBy, &occupiedGroup)
-	if err == nil {
-		return ManualPriorityAssignment{}, fmt.Errorf("分组 %s 的手动控制 %d 已被账号 %s 占用", occupiedGroup, priority, occupiedBy)
-	}
-	if !errors.Is(err, sql.ErrNoRows) {
+	var currentPriority sql.NullInt64
+	if err := tx.QueryRowContext(ctx, `SELECT priority FROM manual_priority_accounts WHERE account_id=?`, accountID).Scan(&currentPriority); err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return ManualPriorityAssignment{}, err
+	}
+	if !currentPriority.Valid || currentPriority.Int64 != priority {
+		var fullGroup string
+		err := tx.QueryRowContext(ctx, `SELECT shared.group_name FROM manual_priority_accounts m
+			JOIN account_groups shared ON shared.account_id=m.account_id
+			JOIN account_groups current ON current.account_id=? AND current.group_name=shared.group_name
+			WHERE m.priority=? AND m.account_id<>?
+			GROUP BY shared.group_name HAVING COUNT(DISTINCT m.account_id)>=3
+			ORDER BY shared.group_name LIMIT 1`, accountID, priority, accountID).Scan(&fullGroup)
+		if err == nil {
+			return ManualPriorityAssignment{}, fmt.Errorf("分组 %s 的手动控制位置 %d 最多 3 个账号", fullGroup, priority)
+		}
+		if !errors.Is(err, sql.ErrNoRows) {
+			return ManualPriorityAssignment{}, err
+		}
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	if _, err := tx.ExecContext(ctx, `INSERT INTO manual_priority_accounts(

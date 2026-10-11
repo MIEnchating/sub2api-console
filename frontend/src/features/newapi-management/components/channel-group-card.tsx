@@ -22,7 +22,7 @@ export function ChannelGroupCard(props: {
   const errors = props.form.formState.errors.groups?.[props.index];
   return (
     <fieldset
-      className="min-w-0 rounded-xl border bg-background/50"
+      className="min-w-0 rounded-lg border bg-background/50"
       aria-label={`分组 ${props.index + 1}`}
     >
       <div className="flex min-w-0 flex-wrap items-start gap-3 p-3 sm:p-4">

@@ -8,7 +8,7 @@ import {
 } from "@tanstack/react-router";
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
-import App from "../App";
+import App from "../app-shell";
 let client: QueryClient;
 afterEach(() => {
   cleanup();

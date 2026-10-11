@@ -60,7 +60,7 @@ function accountActions(props: AccountOperationProps): {
 } {
   const state = accountPoolState(props.account).value;
   const paused = state === "paused";
-  const fused = state === "fused";
+  const fused = state === "fused" || state === "manual_fused";
   const policyStopped = state === "cost_blocked" || state === "concurrency_limited" || fused;
   const resumable = paused || (!policyStopped && props.account.schedulable === false);
   const manualControlled = props.account.manual_priority != null;
@@ -85,7 +85,7 @@ function accountActions(props: AccountOperationProps): {
         label: "恢复调度",
         icon: <Play />,
         tone: "primary",
-        disabled: props.pending || manualControlled,
+        disabled: props.pending,
         onClick: () => props.onControl("resume", "恢复调度", undefined),
       });
     }
@@ -94,7 +94,7 @@ function accountActions(props: AccountOperationProps): {
       icon: fused ? <RefreshCw /> : <Ban />,
       tone: fused ? "primary" : "danger",
       prominent: !fused,
-      disabled: props.pending || paused || manualControlled,
+      disabled: props.pending || paused,
       onClick: () =>
         props.onControl(
           fused ? "recover" : "fuse",

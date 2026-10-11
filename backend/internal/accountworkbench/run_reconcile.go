@@ -71,11 +71,11 @@ func (s *Service) reconcileItem(ctx context.Context, value *privateRun, index in
 		// Always compare the final template groups, including after creation.
 		requested["status"] = "active"
 		requested["schedulable"] = true
-		completed = verifyApplied(current, requested) == nil
+		completed = verifyImportedApplied(current, requested) == nil
 	}
 	if !completed {
 		if phase == "promoting" {
-			return verifyApplied(current, requested)
+			return verifyImportedApplied(current, requested)
 		}
 		requested["status"] = "active"
 		requested["schedulable"] = false
@@ -83,9 +83,9 @@ func (s *Service) reconcileItem(ctx context.Context, value *privateRun, index in
 			requested["group_ids"] = []int{}
 		}
 		if phase == "configuring" {
-			err = verifyApplied(current, requested)
+			err = verifyImportedApplied(current, requested)
 		} else {
-			err = verifyAppliedWhileIsolated(current, requested)
+			err = verifyImportedAppliedWhileIsolated(current, requested)
 		}
 		if err != nil {
 			return err

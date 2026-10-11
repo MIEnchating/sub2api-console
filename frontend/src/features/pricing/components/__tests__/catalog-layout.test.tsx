@@ -1,3 +1,4 @@
+import { seedDictionaries } from "@/test/dictionary-fixtures";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -36,6 +37,7 @@ const snapshot: PricingSnapshot = {
 
 it("价格分组已加载时搜索栏位于页面滚动区之外，筛选后可恢复列表", async () => {
   const client = new QueryClient({ defaultOptions: { queries: { enabled: false } } });
+  seedDictionaries(client);
   client.setQueryData(["pricing"], snapshot);
   render(
     <QueryClientProvider client={client}>

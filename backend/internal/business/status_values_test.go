@@ -5,6 +5,7 @@ import (
 )
 
 func TestCanonicalUpstreamAuthStatuses(t *testing.T) {
+	t.Parallel()
 	statuses := []string{
 		UpstreamAuthStatusAuthenticated,
 		UpstreamAuthStatusRecovered,
@@ -26,6 +27,7 @@ func TestCanonicalUpstreamAuthStatuses(t *testing.T) {
 }
 
 func TestUnknownUpstreamAuthStatusIsNotAuthenticated(t *testing.T) {
+	t.Parallel()
 	if !UpstreamAuthStatusIsReady("已发现鉴权记录") {
 		t.Fatal("legacy ready status must remain compatible")
 	}

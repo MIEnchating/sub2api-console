@@ -22,6 +22,9 @@ func (s *Service) executionAllowed(ctx context.Context, value *privateRun) error
 	if err := s.checkOwner(ctx, value.Owner); err != nil {
 		return err
 	}
+	if err := s.rememberedSourceAllowed(ctx, value); err != nil {
+		return err
+	}
 	if !value.Public.ExpiresAt.After(time.Now().UTC()) {
 		return errors.New("本批资料已到期，请重新输入")
 	}
@@ -29,11 +32,11 @@ func (s *Service) executionAllowed(ctx context.Context, value *privateRun) error
 		if _, err := targetguard.Pin(targetguard.Expect(ctx, value.Target), s.private); err != nil {
 			return err
 		}
-		library, err := s.readTemplates(ctx, value.Target)
+		revision, err := s.templateRevision(ctx, value.Target)
 		if err != nil {
 			return err
 		}
-		if library.Revision != value.TemplateRevision {
+		if revision != value.TemplateRevision {
 			return errors.New("模板已变化，请重新预览")
 		}
 	}
@@ -51,14 +54,10 @@ func (s *Service) execute(parent context.Context, value *privateRun, task taskst
 		return
 	}
 	value.Public.Status = "running"
-	for index := range value.Items {
+	indices := runWorkIndices(value)
+	processed := 0
+	for _, index := range indices {
 		row := &value.Public.Items[index]
-		if len(value.ManualIDs) > 0 && !slices.Contains(value.ManualIDs, row.ID) {
-			continue
-		}
-		if row.Status == "completed" || row.Status == "exported" {
-			continue
-		}
 		if err := s.executionAllowed(ctx, value); err != nil {
 			row.Status = "interrupted"
 			row.Message = "任务已停止，请核对登录会话、目标与模板后继续"
@@ -93,8 +92,9 @@ func (s *Service) execute(parent context.Context, value *privateRun, task taskst
 			value.Public.Status = "interrupted"
 			break
 		}
-		task.Progress = (index + 1) * 100 / len(value.Items)
-		task.Message = fmt.Sprintf("已处理 %d / %d 项", index+1, len(value.Items))
+		processed++
+		task.Progress = processed * 100 / len(indices)
+		task.Message = fmt.Sprintf("已处理 %d / %d 项", processed, len(indices))
 		task.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
 		if err := s.tasks.Save(ctx, task); err != nil {
 			value.Public.Status = "interrupted"
@@ -133,6 +133,22 @@ func (s *Service) execute(parent context.Context, value *privateRun, task taskst
 	task.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
 	taskstore.PersistFinal(s.tasks, task)
 }
+
+func runWorkIndices(value *privateRun) []int {
+	indices := make([]int, 0, len(value.Items))
+	for index := range value.Items {
+		row := &value.Public.Items[index]
+		if row.Status == "completed" || row.Status == "exported" {
+			continue
+		}
+		if len(value.ManualIDs) > 0 && !slices.Contains(value.ManualIDs, row.ID) {
+			continue
+		}
+		indices = append(indices, index)
+	}
+	return indices
+}
+
 func (s *Service) processItem(ctx context.Context, value *privateRun, index int, active *activeRun) error {
 	row := &value.Public.Items[index]
 	stored := &value.Items[index]
@@ -213,6 +229,9 @@ func (s *Service) processItem(ctx context.Context, value *privateRun, index int,
 	if stored.Item.Email != "" && !equalEmail(stored.Item.Email, identity.Email) {
 		return ErrIdentity
 	}
+	if source := value.RememberedSource; source != nil && (source.Workspace != identity.WorkspaceID || source.User != identity.UserID) {
+		return ErrIdentity
+	}
 	stored.Credentials["chatgpt_account_id"] = identity.WorkspaceID
 	stored.Credentials["chatgpt_user_id"] = identity.UserID
 	stored.Credentials["email"] = identity.Email
@@ -242,6 +261,9 @@ func (s *Service) processItem(ctx context.Context, value *privateRun, index int,
 	}
 	if err = s.configureImportedItem(ctx, value, index); err != nil {
 		return err
+	}
+	if err = s.saveRememberedAccount(ctx, value, index); err != nil {
+		return errors.New("账号已导入，但保存登录资料失败，请重试")
 	}
 	if value.Settings.Check {
 		if err = s.checkImportItem(ctx, value, index); err != nil {

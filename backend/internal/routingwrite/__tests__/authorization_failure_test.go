@@ -33,6 +33,7 @@ func (store *failingAuthorizationStore) RecordAccountOperation(ctx context.Conte
 }
 
 func TestAuthorizationReadFailurePreventsWriteAndRemainsFailureAlert(t *testing.T) {
+	t.Parallel()
 	_, fixture := newUpstreamCapacityWriteFixture(t, writeCapacityPointer(20), 4, 4, true)
 	repository := &failingAuthorizationStore{Store: fixture.store}
 	var mutations atomic.Int32
@@ -67,6 +68,7 @@ func TestAuthorizationReadFailurePreventsWriteAndRemainsFailureAlert(t *testing.
 }
 
 func TestPolicyDeferralAuditFailureRemainsExecutionFailure(t *testing.T) {
+	t.Parallel()
 	_, fixture := newUpstreamCapacityWriteFixture(t, writeCapacityPointer(20), 4, 4, true)
 	repository := &failingAuthorizationStore{Store: fixture.store, failSkipAudit: true}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {

@@ -1,10 +1,6 @@
 import type { UpstreamGroupChange } from "@/api";
 
-export function groupHistoryTime(value: string): string {
-  const date = new Date(value);
-  if (!Number.isFinite(date.getTime())) return value;
-  return date.toLocaleString("zh-CN", { hour12: false });
-}
+export { formatDateTime as groupHistoryTime } from "@/lib/date-format";
 
 type UpstreamHistorySummary = {
   upstreamID: string;

@@ -8,6 +8,7 @@ describe("最近结果连接状态", () => {
     const indicator = screen.getByRole("status", { name: "实时请求已连接" });
     expect(indicator).toHaveClass("size-5", "shrink-0");
     expect(indicator).toHaveAttribute("tabindex", "0");
+    expect(indicator).toHaveAccessibleDescription(expect.stringContaining("请求结果与健康评分"));
     expect(indicator).toHaveTextContent("");
     expect(screen.queryByText("实时请求已连接")).not.toBeInTheDocument();
   });

@@ -310,14 +310,16 @@ func (s *Store) syncManagementSnapshot(
 						return ManagementSyncResult{}, err
 					}
 				}
-			}
-			if _, err := tx.ExecContext(ctx, `DELETE FROM account_groups WHERE account_id=?`, account.ID); err != nil {
-				return ManagementSyncResult{}, err
+				if _, err := tx.ExecContext(ctx, `DELETE FROM account_groups WHERE account_id=?`, account.ID); err != nil {
+					return ManagementSyncResult{}, err
+				}
 			}
 			for _, membership := range account.Groups {
-				if _, err := tx.ExecContext(ctx, `INSERT INTO account_groups(account_id,group_name,group_id,group_rate)
-					VALUES(?,?,?,?)`, account.ID, membership.Name, managementNullableString(membership.ID), managementNullableString(account.Multiplier)); err != nil {
-					return ManagementSyncResult{}, err
+				if changed {
+					if _, err := tx.ExecContext(ctx, `INSERT INTO account_groups(account_id,group_name,group_id,group_rate)
+						VALUES(?,?,?,?)`, account.ID, membership.Name, managementNullableString(membership.ID), managementNullableString(account.Multiplier)); err != nil {
+						return ManagementSyncResult{}, err
+					}
 				}
 				if _, found := groupsByName[membership.Name]; !found {
 					if _, err := tx.ExecContext(ctx, `INSERT INTO local_groups(name,remote_id,strategy,strategy_source,updated_at)
@@ -344,9 +346,7 @@ func (s *Store) syncManagementSnapshot(
 	if err != nil {
 		return ManagementSyncResult{}, fmt.Errorf("已删除分组清理失败：%w", err)
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE local_groups SET account_count=(
-		SELECT COUNT(*) FROM account_groups WHERE group_name=local_groups.name
-	),updated_at=?`, now); err != nil {
+	if err := refreshAccountGroupCounts(ctx, tx, now); err != nil {
 		return ManagementSyncResult{}, err
 	}
 	payload := map[string]any{
@@ -378,19 +378,22 @@ func managementAccountGroupsChanged(
 	accountID string,
 	desired []managementMembership,
 ) (bool, error) {
-	rows, err := tx.QueryContext(ctx, `SELECT group_name,COALESCE(group_id,'') FROM account_groups
-		WHERE account_id=? ORDER BY group_name,COALESCE(group_id,'')`, accountID)
+	rows, err := tx.QueryContext(ctx, `SELECT group_name,group_id FROM account_groups WHERE account_id=?`, accountID)
 	if err != nil {
 		return false, err
 	}
-	current := make([]string, 0)
+	defer rows.Close()
+	// Compare persisted values exactly. Old whitespace and empty IDs still need
+	// canonical replacement; NULL is the only legacy membership identity.
+	current := make(map[string]sql.NullString, len(desired))
 	for rows.Next() {
-		var name, id string
+		var name string
+		var id sql.NullString
 		if err := rows.Scan(&name, &id); err != nil {
 			_ = rows.Close()
 			return false, err
 		}
-		current = append(current, strings.TrimSpace(name)+"\x00"+strings.TrimSpace(id))
+		current[name] = id
 	}
 	if err := rows.Err(); err != nil {
 		_ = rows.Close()
@@ -399,20 +402,15 @@ func managementAccountGroupsChanged(
 	if err := rows.Close(); err != nil {
 		return false, err
 	}
-	wanted := make([]string, 0, len(desired))
-	for _, membership := range desired {
-		id := ""
-		if membership.ID != nil {
-			id = strings.TrimSpace(*membership.ID)
-		}
-		wanted = append(wanted, strings.TrimSpace(membership.Name)+"\x00"+id)
-	}
-	sort.Strings(wanted)
-	if len(current) != len(wanted) {
+	if len(current) != len(desired) {
 		return true, nil
 	}
-	for index := range current {
-		if current[index] != wanted[index] {
+	for _, membership := range desired {
+		id := sql.NullString{}
+		if membership.ID != nil {
+			id = sql.NullString{String: *membership.ID, Valid: true}
+		}
+		if existing, present := current[membership.Name]; !present || existing != id {
 			return true, nil
 		}
 	}

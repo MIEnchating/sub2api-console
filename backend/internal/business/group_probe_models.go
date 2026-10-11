@@ -2,6 +2,8 @@ package business
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -20,12 +22,16 @@ func (s *Store) GroupProbeModels(ctx context.Context, groupID string) (GroupProb
 	if !positiveNumericID(groupID) {
 		return GroupProbeModels{}, fmt.Errorf("分组必须使用已登记的稳定数字 ID")
 	}
-	group, err := s.groupByID(ctx, groupID)
+	var groupName string
+	err := s.db.QueryRowContext(ctx, `SELECT name FROM local_groups WHERE remote_id=?`, groupID).Scan(&groupName)
+	if errors.Is(err, sql.ErrNoRows) {
+		return GroupProbeModels{}, ErrGroupNotFound
+	}
 	if err != nil {
 		return GroupProbeModels{}, err
 	}
 	result := GroupProbeModels{
-		GroupID: groupID, GroupName: group.Name, Models: []string{},
+		GroupID: groupID, GroupName: groupName, Models: []string{},
 	}
 	rows, err := s.db.QueryContext(ctx, `SELECT a.metadata_json
 		FROM account_groups ag JOIN accounts a ON a.id=ag.account_id

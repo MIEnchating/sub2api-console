@@ -203,11 +203,10 @@ export function GroupPolicyEditorFields(props: {
     props.value.probe_model,
   );
   let probeModelsButtonLabel = props.probeModels ? "重新获取组内模型" : "获取组内模型";
+  if (props.probeModelsError) probeModelsButtonLabel = "重新获取组内模型";
   if (props.probeModelsLoading) probeModelsButtonLabel = "正在获取";
   let probeModelsStatus: string | null = null;
-  if (props.probeModelsError) {
-    probeModelsStatus = "获取组内模型失败，请重新获取或手动输入探活模型。";
-  } else if (props.probeModels?.models.length === 0) {
+  if (props.probeModels?.models.length === 0) {
     probeModelsStatus = "暂无组内共同模型，可手动输入探活模型。";
   } else if (props.probeModels && !props.probeModels.complete) {
     probeModelsStatus = "部分账号尚无模型信息，当前选项仅基于已知模型。";
@@ -512,7 +511,7 @@ export function GroupPolicyEditorFields(props: {
                   : "全局未指定模型：使用各账号已同步的首个可用模型；无可用模型时跳过探活。"}
               </p>
             )}
-            {!props.probeModelsLoading && probeModelsStatus && (
+            {!props.probeModelsLoading && !props.probeModelsError && probeModelsStatus && (
               <p role="status" className="text-muted-foreground text-xs">
                 {probeModelsStatus}
               </p>

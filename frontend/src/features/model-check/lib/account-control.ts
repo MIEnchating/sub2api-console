@@ -1,5 +1,5 @@
-import type { AccountControlAction, AccountStatus } from "@/api";
-import { accountPoolState } from "@/features/accounts/lib/account-pool";
+import type { AccountControlAction, AccountControlState } from "@/api";
+import { effectiveAccountState } from "@/features/accounts/lib/account-state";
 import { accountConcurrencyLimitedHelp } from "@/features/accounts/constants";
 
 export type DetectionControlAction = Extract<AccountControlAction, "fuse" | "recover" | "resume">;
@@ -9,15 +9,14 @@ export const detectionControlLabels: Record<DetectionControlAction, string> = {
   resume: "恢复调度",
 };
 
-export function detectionControlState(account: AccountStatus): {
+export function detectionControlState(account: AccountControlState): {
   recovery: DetectionControlAction;
   fuseReason: string;
   recoveryReason: string;
 } {
-  const state = accountPoolState({ ...account, health: account.health ?? "" }).value;
+  const state = effectiveAccountState({ ...account, health: account.health ?? "" });
   let protectedReason = "";
   if (!/^[1-9]\d*$/.test(account.id)) protectedReason = "账号 ID 无效，请同步账号";
-  else if (account.manual_priority != null) protectedReason = "请先取消手动控制";
   else if (state === "excluded") protectedReason = "请先在账号管理恢复管控";
   const fused = state === "fused";
   const recovery = fused || state === "cost_blocked" ? "recover" : "resume";
@@ -33,7 +32,7 @@ export function detectionControlState(account: AccountStatus): {
 }
 
 export function detectionControlBlocked(
-  account: AccountStatus,
+  account: AccountControlState,
   action: DetectionControlAction,
 ): string {
   const state = detectionControlState(account);

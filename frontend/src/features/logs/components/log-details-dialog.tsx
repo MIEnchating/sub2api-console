@@ -2,6 +2,7 @@ import { ContentLoading } from "@/components/content-loading";
 import { ContentRetry } from "@/components/content-retry";
 import { useQuery } from "@tanstack/react-query";
 import type { ReactElement } from "react";
+import { useMemo, useState } from "react";
 
 import { api, type UnifiedLogEntry } from "@/api";
 import { DataTablePagination } from "@/components/data-table/pagination";
@@ -136,12 +137,20 @@ function logDisplayDetails(
   return { ...details, result };
 }
 
-function recordMapRows(value: LogRecord): LogRecord[] {
-  return Object.entries(value).flatMap(([key, item]) => {
-    if (!isLogRecord(item)) return [];
-    if (item.account_id !== undefined) return [item];
-    return [{ ...item, account_id: key }];
-  });
+function resultRecordCollection(values: unknown[] | LogRecord): {
+  records: LogRecord[];
+  accountIDs: string[] | null;
+} {
+  if (Array.isArray(values)) return { records: values.filter(isLogRecord), accountIDs: null };
+  const records: LogRecord[] = [];
+  const accountIDs: string[] = [];
+  for (const key of Object.keys(values)) {
+    const item = values[key];
+    if (!isLogRecord(item)) continue;
+    records.push(item);
+    accountIDs.push(key);
+  }
+  return { records, accountIDs };
 }
 
 function structuredCollectionCount(key: string, value: unknown): number | null {
@@ -199,19 +208,26 @@ function visibleRecordRows(record: LogRecord): LogDetailRow[] {
     .flatMap(([key, value]) => logDetailRows({ [key]: value }));
 }
 
-function LogResultItems(props: { values: unknown[] }): ReactElement {
-  const records = props.values.filter(isLogRecord);
-  const pagination = useClientPagination(records, 10);
+function LogResultItems(props: { values: unknown[] | LogRecord }): ReactElement {
+  const collection = useMemo(() => resultRecordCollection(props.values), [props.values]);
+  const pagination = useClientPagination(collection.records, 10);
   const startIndex = (pagination.currentPage - 1) * pagination.pageSize;
-  const rateSyncItems = isAccountRateSyncItems(records);
+  const rateSyncItems = useMemo(
+    () => isAccountRateSyncItems(collection.records),
+    [collection.records],
+  );
+  const visibleRecords = pagination.visibleItems.map((record, index) => {
+    if (!collection.accountIDs || record.account_id !== undefined) return record;
+    return { ...record, account_id: collection.accountIDs[startIndex + index] };
+  });
 
   return (
     <div data-slot="log-result-items" className="overflow-hidden rounded-md border">
       {rateSyncItems ? (
-        <AccountRateSyncResultTable records={pagination.visibleItems} startIndex={startIndex} />
+        <AccountRateSyncResultTable records={visibleRecords} startIndex={startIndex} />
       ) : (
         <div className="divide-border divide-y">
-          {pagination.visibleItems.map((record, index) => {
+          {visibleRecords.map((record, index) => {
             const absoluteIndex = startIndex + index;
             const status = recordStatus(record);
             const rows = visibleRecordRows(record);
@@ -219,7 +235,7 @@ function LogResultItems(props: { values: unknown[] }): ReactElement {
             return (
               <article
                 className="min-w-0 p-3"
-                key={String(record.id ?? record.account_id ?? index)}
+                key={String(record.id ?? record.account_id ?? absoluteIndex)}
               >
                 <div className="flex min-w-0 items-start justify-between gap-3">
                   <strong className="min-w-0 break-words font-medium">
@@ -257,11 +273,11 @@ function LogResultItems(props: { values: unknown[] }): ReactElement {
           })}
         </div>
       )}
-      {records.length > pagination.pageSize ? (
+      {collection.records.length > pagination.pageSize ? (
         <DataTablePagination
           currentPage={pagination.currentPage}
           totalPages={pagination.totalPages}
-          totalItems={records.length}
+          totalItems={collection.records.length}
           pageSize={pagination.pageSize}
           pageSizes={[10, 20, 50, 100]}
           onPageChange={pagination.setCurrentPage}
@@ -359,15 +375,20 @@ function LogScalarList(props: { values: unknown[]; fieldKey?: string }): ReactEl
 }
 
 function LogStructuredSection(props: { fieldKey: string; value: unknown }): ReactElement {
+  const [hasOpened, setHasOpened] = useState(false);
   const count = structuredCollectionCount(props.fieldKey, props.value);
   if (count !== null && count > 10 && !expandedRecordCollectionKeys.has(props.fieldKey)) {
     return (
-      <details>
+      <details
+        onToggle={(event) => {
+          if (event.currentTarget.open) setHasOpened(true);
+        }}
+      >
         <summary className="text-muted-foreground flex cursor-pointer items-center justify-between gap-3 border-y py-2 text-xs font-medium">
           <span>{logDetailLabel(props.fieldKey)}</span>
           <span className="shrink-0 tabular-nums">{count} 项</span>
         </summary>
-        <LogStructuredValue value={props.value} fieldKey={props.fieldKey} />
+        {hasOpened ? <LogStructuredValue value={props.value} fieldKey={props.fieldKey} /> : null}
       </details>
     );
   }
@@ -397,7 +418,7 @@ export function LogStructuredValue(props: { value: unknown; fieldKey?: string })
     return <p className="mt-1 break-words text-xs leading-5">{String(props.value)}</p>;
   }
   if (props.fieldKey && recordMapKeys.has(props.fieldKey)) {
-    return <LogResultItems values={recordMapRows(props.value)} />;
+    return <LogResultItems values={props.value} />;
   }
 
   const scalarRows = scalarDetailRows(props.value);
@@ -459,6 +480,7 @@ export function LogDetailsContent(props: {
   entry: UnifiedLogEntry;
   details?: Record<string, unknown>;
   loading?: boolean;
+  refreshing?: boolean;
   onRetry?: () => void;
 }): ReactElement {
   const details = logDisplayDetails(props.entry, props.details ?? props.entry.details);
@@ -520,7 +542,9 @@ export function LogDetailsContent(props: {
       </section>
 
       {props.loading ? <ContentLoading label="正在读取完整任务结果…" compact /> : null}
-      {props.onRetry ? <ContentRetry onRetry={props.onRetry} pending={props.loading} /> : null}
+      {props.onRetry ? (
+        <ContentRetry onRetry={props.onRetry} pending={props.loading || props.refreshing} />
+      ) : null}
 
       {detailRows.length > 0 ? (
         <section aria-labelledby="log-detail-heading">
@@ -610,10 +634,11 @@ export function LogDetailsDialog(props: {
   entry: UnifiedLogEntry | null;
   onClose: () => void;
 }): ReactElement {
+  const taskId = props.entry?.source === "task" ? props.entry.source_id : null;
   const taskDetail = useQuery({
-    queryKey: ["task", props.entry?.source_id],
-    queryFn: () => api.task(props.entry!.source_id),
-    enabled: props.entry?.source === "task",
+    queryKey: ["task", taskId],
+    queryFn: ({ signal }) => api.task(taskId!, signal),
+    enabled: taskId !== null,
     retry: false,
     refetchInterval: (query) =>
       props.entry?.source === "task" ? taskPollInterval(query, 1_000) : false,
@@ -658,6 +683,7 @@ export function LogDetailsDialog(props: {
             entry={currentEntry}
             details={details}
             loading={taskDetail.isLoading}
+            refreshing={taskDetail.isFetching}
             onRetry={
               taskDetail.isError && props.entry?.source === "task"
                 ? () => void taskDetail.refetch()

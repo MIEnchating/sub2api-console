@@ -28,6 +28,7 @@ test.beforeEach(async ({ page, colorScheme }) => {
     };
     if (path.endsWith("/automation/events"))
       await route.fulfill({ contentType: "text/event-stream", body: ": fixture\n\n" });
+    else if (path === "/api/dictionaries") await route.fulfill({ json: { items: [] } });
     else if (path in fixtures && route.request().method() === "GET")
       await route.fulfill({ json: fixtures[path] });
     else await route.fulfill({ status: 503, json: { detail: "隔离测试未配置此接口" } });
@@ -83,4 +84,50 @@ test("首次读取失败时显示明确错误和缺失指标，刷新成功后�
   failed = false;
   await page.getByRole("button", { name: "刷新运营总览" }).click();
   await expect(page.getByRole("heading", { name: groupName, exact: true })).toBeVisible();
+});
+
+test("同步状态失败后保留总览，键盘重试恢复原任务且不重复同步", async ({ page }) => {
+  let starts = 0;
+  let recover = false;
+  const task = {
+    id: "overview-sync-test",
+    operation: "management-sync",
+    skill: "console",
+    status: "running",
+    progress: 10,
+    message: "同步中",
+    result: {},
+    created_at: "2026-10-10T00:00:00Z",
+    updated_at: "2026-10-10T00:00:00Z",
+  };
+  await page.route("**/api/management/sync", async (route) => {
+    starts++;
+    await route.fulfill({ json: task });
+  });
+  await page.route("**/api/tasks/overview-sync-test", (route) =>
+    recover
+      ? route.fulfill({ json: { ...task, status: "succeeded", progress: 100 } })
+      : route.fulfill({ status: 503, json: { detail: "同步状态暂时不可用" } }),
+  );
+  await page.goto("/");
+  await expect(page.getByRole("heading", { name: groupName, exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "立即同步", exact: true }).click();
+  const retry = page
+    .getByRole("region", { name: "同步状态重试" })
+    .getByRole("button", { name: "重新读取" });
+  await expect(retry).toBeVisible({ timeout: 15000 });
+  await expect(page.getByRole("button", { name: "同步中", exact: true })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "取消任务", exact: true })).toBeEnabled();
+  await expect(page.getByRole("heading", { name: groupName, exact: true })).toBeVisible();
+  const content = page.locator('[data-slot="page-content"]');
+  expect(await content.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(
+    true,
+  );
+  await page.screenshot({ path: test.info().outputPath("overview-sync-retry.png") });
+  await retry.focus();
+  recover = true;
+  await retry.press("Enter");
+  await expect(page.getByRole("button", { name: "立即同步", exact: true })).toBeEnabled();
+  await expect(retry).toHaveCount(0);
+  expect(starts).toBe(1);
 });

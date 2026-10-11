@@ -62,10 +62,10 @@ func (c *catalog) DetectionTaskScope(ctx context.Context, groups []string) (busi
 	return scope, nil
 }
 func managedTask() modelcheck.DetectionTask {
-	return modelcheck.DetectionTask{Name: "每日组合检测", GroupIDs: []string{"7", "8"}, Model: "test-model", Precheck: true, Terminal: true, TerminalRounds: 3, ScheduleType: "daily", DailyTimes: []string{"09:00", "20:00"}, Timezone: "Asia/Shanghai", TimeoutSeconds: 5}
+	return modelcheck.DetectionTask{Name: "每日组合检测", GroupIDs: []string{"7", "8"}, Model: "test-model", Precheck: true, ScheduleType: "daily", DailyTimes: []string{"09:00", "20:00"}, Timezone: "Asia/Shanghai", TimeoutSeconds: 5}
 }
 
-func TestDetectionTaskUsesLatestGroupMembersAndKeepsStageAndRoundResults(t *testing.T) {
+func TestDetectionTaskUsesLatestGroupMembersAndKeepsSelectedStageResults(t *testing.T) {
 	f := setup(t, 2, "openai", func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
 			Input string `json:"input"`
@@ -92,7 +92,7 @@ func TestDetectionTaskUsesLatestGroupMembersAndKeepsStageAndRoundResults(t *test
 	f.catalog.groupMembers = map[string][]string{"7": {"2"}, "8": {"2"}}
 	runner.runs[0](context.Background())
 	task := finished(t, f)
-	if task.Status != "succeeded" || task.Result["total"] != 3 {
+	if task.Status != "succeeded" || task.Result["total"] != 2 {
 		t.Fatalf("bad result: %#v", task)
 	}
 	if ids := task.Result["account_ids"].([]string); fmt.Sprint(ids) != "[2]" {
@@ -107,15 +107,15 @@ func TestDetectionTaskUsesLatestGroupMembersAndKeepsStageAndRoundResults(t *test
 	if task.Result["account_names_by_id"].(map[string]string)["2"] != "测试账号 2" {
 		t.Fatal("pending account name missing")
 	}
-	if len(task.Result["animations"].([]modelcheck.AnimationResult)) != 2 || len(task.Result["checks"].([]modelcheck.TerminalContinuityResult)[0].RoundResults) != 3 {
+	if len(task.Result["animations"].([]modelcheck.AnimationResult)) != 2 || len(task.Result["checks"].([]modelcheck.TerminalContinuityResult)) != 0 {
 		t.Fatal("stage results missing")
 	}
 	if statuses, err := f.service.AccountStatuses(context.Background()); err != nil || len(statuses) != 0 {
 		t.Fatal("task changed behavior evidence")
 	}
 	history, err := f.service.TerminalContinuityHistory(context.Background())
-	if err != nil || len(history) != 1 || history[0].ID != task.ID {
-		t.Fatalf("managed terminal results missing from terminal tab history: %v %v", history, err)
+	if err != nil || len(history) != 0 {
+		t.Fatalf("new tasks unexpectedly created terminal history: %v %v", history, err)
 	}
 }
 

@@ -3,7 +3,7 @@ import type { AnimationResult, Task } from "../../src/api";
 import { account } from "../../src/features/accounts/__tests__/fixtures";
 import { pageFixtures } from "./fixtures/page-shell";
 
-test("前置检测结果支持筛选后生成动画及保存定时内容，窄屏控件不溢出", async ({
+test("前置检测精简操作栏后支持手动选择生成动画及保存定时内容，窄屏控件不溢出", async ({
   page,
   colorScheme,
 }, testInfo) => {
@@ -101,16 +101,8 @@ test("前置检测结果支持筛选后生成动画及保存定时内容，窄�
   const panel = page.getByRole("tabpanel", { name: "前置检测", exact: true });
   await expect(panel.getByRole("combobox", { name: "检测模型" })).toHaveValue("gpt-6-astra");
   await page.keyboard.press("Escape");
-  await panel.getByRole("button", { name: "选择前置检测题目" }).click();
-  const questions = page.getByRole("dialog", { name: "前置检测题目", exact: true });
-  await questions.getByRole("checkbox", { name: "糖果题", exact: true }).uncheck();
-  await expect(questions.getByRole("checkbox", { name: "全选", exact: true })).toHaveAttribute(
-    "aria-checked",
-    "false",
-  );
-  await questions.getByRole("checkbox", { name: "全选", exact: true }).check();
-  await page.screenshot({ path: testInfo.outputPath("precheck-questions.png") });
-  await page.keyboard.press("Escape");
+  await expect(panel.getByRole("button", { name: "选择前置检测题目" })).toHaveCount(0);
+  await expect(panel.getByRole("button", { name: /选择通过|选择降智|选择不通过/ })).toHaveCount(0);
   for (const item of accounts)
     await panel
       .getByRole("article", { name: `账号 ${item.name}`, exact: true })
@@ -146,7 +138,7 @@ test("前置检测结果支持筛选后生成动画及保存定时内容，窄�
   await expect(detail.getByText("21", { exact: true })).toBeVisible();
   await expect(detail.getByText("832", { exact: true })).toBeVisible();
   await expect(detail.getByText("632.0 TPS", { exact: true })).toBeVisible();
-  await expect(detail.getByText("无法估算", { exact: true })).toBeVisible();
+  await expect(detail.getByText(/预估费用|无法估算/)).toHaveCount(0);
   expect(await detail.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
   await page.screenshot({ path: testInfo.outputPath("precheck-detail.png") });
   await detail.getByRole("button", { name: "关闭", exact: true }).click();
@@ -160,14 +152,21 @@ test("前置检测结果支持筛选后生成动画及保存定时内容，窄�
   await answers.focus();
   await page.keyboard.press("End");
   await expect.poll(() => answers.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
-  await expect(detail.getByLabel("前置检测统计")).toBeInViewport({ ratio: 1 });
+  await expect(detail.getByRole("heading", { name: "前置检测详情", exact: true })).toBeInViewport({
+    ratio: 1,
+  });
+  await expect(detail.getByRole("button", { name: "关闭", exact: true })).toBeInViewport({
+    ratio: 1,
+  });
   await page.keyboard.press("Escape");
   await expect(detail).toHaveCount(0);
   await expect(rejectedDetail).toBeFocused();
-  await panel.getByRole("button", { name: "选择降智（1）" }).click();
+  await panel.getByRole("button", { name: "清空选择" }).click();
+  await rejected.getByRole("checkbox").check();
   await expect(rejected.getByRole("checkbox")).toBeChecked();
   await expect(passed.getByRole("checkbox")).not.toBeChecked();
-  await panel.getByRole("button", { name: "选择通过（1）" }).click();
+  await rejected.getByRole("checkbox").uncheck();
+  await passed.getByRole("checkbox").check();
   await expect(passed.getByRole("checkbox")).toBeChecked();
   await expect(rejected.getByRole("checkbox")).not.toBeChecked();
   await passed.scrollIntoViewIfNeeded();
@@ -175,7 +174,7 @@ test("前置检测结果支持筛选后生成动画及保存定时内容，窄�
   expect(await panel.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
   await page.screenshot({ path: testInfo.outputPath("precheck-results.png") });
   await panel.getByRole("group", { name: "前置检测操作", exact: true }).scrollIntoViewIfNeeded();
-  for (const name of ["前置检测（1）", "选择通过（1）", "选择降智（1）"]) {
+  for (const name of ["前置检测（1）", "全选账号", "清空选择"]) {
     await expect(panel.getByRole("button", { name })).toBeInViewport({ ratio: 1 });
   }
   await expect(panel.getByRole("group", { name: "动画预览区域" })).toHaveCount(0);

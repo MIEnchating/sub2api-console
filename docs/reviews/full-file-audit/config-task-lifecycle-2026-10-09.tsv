@@ -1,0 +1,15 @@
+frontend/src/features/config/components/log-cleanup-action.tsx	6c63a5626b73bf2ab06d8635d928a7ae35198e113197580b4342f616427e48d0	fixed	全文复审；读取消费Query取消信号，离页/切换无观察者时取消；关闭弹窗仍观察，其他观察者共享继续。后端目前终态仅成功/失败/取消，本轮不扩展协议；重复终态策略仍有维护成本。
+frontend/src/features/config/components/account-creation-settings-card.tsx	a436ac021a630fc01e924a427daf89d9b7af7b6d01ee478d13b12d7805a0f486	fixed	全文复审；池模式任务读取传递取消信号。保留确认范围、字典顺序和完整配置保存。后续：分组逐项find与未显示页构建，保存策略并发版本及跨页任务跟踪需结合后端继续审查。
+frontend/src/features/config/components/__tests__/log-cleanup-request-lifecycle.test.tsx	2109ce57a952e82942d1c5c23d9d25d9bbd6bc258565bd6f14361b5289671cb5	reviewed	全文阅读；两条旧实现失败，四项覆盖离页/切换取消和迟到结果、关闭继续及其他观察者共享；仅mock Fetch边界。
+frontend/src/features/config/components/__tests__/pool-mode-request-lifecycle.test.tsx	a552dc3cfb6c44165eb62be35d5780c1d7f822cc1d3293d95b07bcedc62061e9	reviewed	全文阅读；真实确认提交路径先失败后通过；离页取消GET、保留后台写入且迟到结果不覆盖缓存，隔离全部Fetch。
+frontend/src/features/config/components/__tests__/account-creation-settings-card.test.tsx	d5fe6e918872f47283e6f03301a4858cfd930fbea2cd8199897ffa85a2c4508f	reviewed	全文复审；字典排序、池模式确认、字段校验、分组独立设置与跨分组保留、错误提示；本轮设置回归通过。旧API方法mock仍可后续迁移Fetch边界。
+frontend/src/features/config/components/task-concurrency-settings-card.tsx	58e1824188e4d72784befd1b5ef07954db0f5cb2651eb8bb910eb2eb49ee2cfc	reviewed	全文阅读；RHF/Zod整数、版本化保存，后台刷新保留脏表单；初始骨架和重试、共享按钮。后续需核对重新读取丢弃草稿的交互及无取消读取。
+frontend/src/features/config/lib/task-concurrency-schema.ts	10bcdc56aa26ec9206c7fd58eb211d931e0314690171146b55b0e56e992f6da6	reviewed	全文阅读；并发/队列限制1到10000整数字符串，保持版本；服务端模块ID及版本仍由后端校验。
+frontend/src/features/config/lib/__tests__/task-concurrency-schema.test.ts	0a6d378c85f9c956a76488987b35fe618d21551a7c9a2baef9fa5b9d418ac26f	reviewed	全文阅读；无效并发/队列和合法边界；本轮设置回归通过。
+frontend/src/features/config/components/__tests__/task-concurrency.test.tsx	566633fc760e6d715c954d207cb594423e72dc161741991235a983e48e85ff81	reviewed	全文阅读；配置保存、草稿保留、字段失败与首次读取错误；本轮通过。后台刷新用例尚未提交以验证原版本，后续可加强。
+frontend/src/features/config/components/platform-settings-page.tsx	86fdf72154754670520eaa34afe5b9c8a7004d2022f58ab478327226108b77ff	reviewed	全文阅读；NewAPI/监控按需lazy，单一平台页和对应tabpanel，骨架占位。模块运行规则由各领域页处理。
+frontend/src/features/config/components/settings-section-layout.tsx	3be6393c033b34965f7b01bc5340a72e85a2d56733436e8ebc2135445d253168	reviewed	全文阅读；提取直接PageHeading为嵌入标题，内容统一滚动。fixedContent当前未使用，非直接标题不会提取；后续结合调用方审查布局契约。
+frontend/src/features/config/components/__tests__/platform-settings.test.tsx	88634ad15b17af7003c2ac573f6d4f2085807b15fe7f4482ff35c974b398e40b	reviewed	全文阅读；真实lazy模块与Fetch隔离，切换只读对应平台，唯一页头、可访问标签及必填说明；本轮通过。
+frontend/src/features/config/components/__tests__/form-refresh.test.tsx	63b8618099b0e4c3e53827871d298f50c8591cabdd5e75e23d8ae2eae3890920	reviewed	全文阅读；策略/模型表单后台更新保护草稿，保存成功清除脏状态，新快照更新无编辑表单；本轮通过。
+backend/internal/logs/cleanup_execution.go	e2e03f307a41b81047b1156aa5a79cf5e3c75b2b789d8093df122d59df44c30a	reviewed	全文复审；入队前互斥、先保存再dispatch、结果map隔离、分批计数/部分失败与取消、最终持久化及缓存失效。未修改后端，未新跑Go。
+backend/internal/logs/__tests__/cleanup_task_test.go	4b3ab6f935efdbe24e4f33fe97714e82267913332c6c4f59ec167f3608d23d69	reviewed	全文复审；临时SQLite写锁保护异步返回/重复拒绝；第二批触发器失败保留2000条提交，取消终态；本轮只阅读，未新跑Go。

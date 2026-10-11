@@ -10,6 +10,7 @@ import (
 )
 
 func TestSimultaneousFuseKeepsSuccessfulSlowAccountInsteadOfInvalidCredentials(t *testing.T) {
+	t.Parallel()
 	for _, score := range []int{65, 2} {
 		t.Run(strconv.Itoa(score), func(t *testing.T) {
 			testSimultaneousFuseSelection(t, score)

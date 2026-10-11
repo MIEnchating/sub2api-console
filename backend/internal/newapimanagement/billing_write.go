@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"time"
 
 	"github.com/MIEnchating/sub2api-console/backend/internal/configstore"
@@ -36,6 +37,13 @@ func (s *Service) writeBillingOptions(ctx context.Context, platform configstore.
 	}
 	writes := make([]write, 0, len(planned))
 	for _, step := range planned {
+		before, err := decodeStringMap(current[step.key])
+		if err != nil {
+			return err
+		}
+		if maps.Equal(before, step.values) {
+			continue
+		}
 		raw, err := json.Marshal(step.values)
 		if err != nil {
 			return err

@@ -12,38 +12,47 @@ import { QueryErrorToast } from "@/components/query-error-toast";
 import { Button } from "@/components/ui/button";
 import { PageActions } from "@/components/page-actions";
 import { RefreshButton } from "@/components/refresh-button";
-import { TaskProgressState } from "@/components/task-startup-state";
+import { KumaTaskProgress } from "./kuma-task-progress";
 import { Save, Unplug } from "lucide-react";
 import { notifyOperationError } from "@/lib/operation-feedback";
 import { kumaConfigKey, kumaMonitorsKey, kumaQueryKey } from "../constants";
 import type { ConfigValues } from "../lib/schemas";
 import { useTaskCompletion } from "../hooks/use-task-completion";
 import { ConfigForm } from "./config-form";
+import { isKumaTaskCancellation } from "../lib/task-cancellation";
 
 export function KumaConfigPage(props: { embedded?: boolean } = {}) {
   const client = useQueryClient();
   const task = useTaskCompletion();
   const query = useQuery({
     queryKey: kumaConfigKey,
-    queryFn: api.kumaConfig,
+    queryFn: ({ signal }) => api.kumaConfig(signal),
     retry: false,
     refetchOnWindowFocus: false,
   });
   const config = query.data;
-  const [disconnectOpen, setDisconnectOpen] = useState(false);
+  const [disconnectRevision, setDisconnectRevision] = useState<number | null>(null);
   const save = useMutation({
-    mutationFn: (values: ConfigValues) =>
-      api.saveKumaConfig({ ...values, revision: config!.revision }).then(task.wait),
+    mutationFn: (values: ConfigValues) => {
+      task.prepare();
+      return api.saveKumaConfig({ ...values, revision: config!.revision }).then(task.wait);
+    },
     onSuccess: async () => {
       await client.invalidateQueries({ queryKey: kumaQueryKey });
       toast.success("Uptime Kuma 接入配置已保存");
       save.reset();
     },
+    onError: async (error) => {
+      if (isKumaTaskCancellation(error)) {
+        toast.info(error.message);
+        await client.invalidateQueries({ queryKey: kumaQueryKey });
+      }
+    },
   });
   const disconnect = useMutation({
-    mutationFn: () => api.disconnectKuma(config!.revision),
+    mutationFn: (revision: number) => api.disconnectKuma(revision),
     onSuccess: async () => {
-      setDisconnectOpen(false);
+      setDisconnectRevision(null);
       save.reset();
       client.removeQueries({ queryKey: kumaMonitorsKey });
       await client.invalidateQueries({ queryKey: kumaConfigKey });
@@ -71,7 +80,7 @@ export function KumaConfigPage(props: { embedded?: boolean } = {}) {
               <Button
                 variant="destructive"
                 disabled={pending || query.isError}
-                onClick={() => setDisconnectOpen(true)}
+                onClick={() => setDisconnectRevision(config.revision)}
               >
                 <Unplug aria-hidden="true" />
                 断开接入
@@ -92,29 +101,40 @@ export function KumaConfigPage(props: { embedded?: boolean } = {}) {
         {query.isPending && (
           <PageLoadingSkeleton label="正在读取接入配置…" variant="form" panels={2} />
         )}
-        {save.isPending && task.task && (
-          <TaskProgressState message={task.task.message} progress={task.task.progress} />
-        )}
+        {save.isPending && <KumaTaskProgress task={task.task} starting={task.starting} />}
         {config && (
           <>
             <ConfigForm
               key={config.revision}
               config={config}
               pending={pending || query.isError}
-              error={save.error}
+              error={isKumaTaskCancellation(save.error) ? null : save.error}
               onSubmit={(values) => save.mutate(values)}
             />
           </>
         )}
       </div>
       <ConfirmActionDialog
-        open={disconnectOpen}
+        open={disconnectRevision !== null}
         title="断开 Uptime Kuma 接入"
         description="清除控制台保存的地址和凭据。远端监控项及历史记录会保留。"
         confirmLabel="断开接入"
         pending={disconnect.isPending}
-        onOpenChange={setDisconnectOpen}
-        onConfirm={() => disconnect.mutate()}
+        onOpenChange={(open) => {
+          if (!open) setDisconnectRevision(null);
+        }}
+        onConfirm={() => {
+          if (disconnectRevision === null) return;
+          if (disconnectRevision !== config?.revision) {
+            notifyOperationError("监控平台配置已更改，请关闭窗口并重新确认", "断开接入未提交");
+            return;
+          }
+          if (query.isError || query.isFetching) {
+            notifyOperationError("接入配置尚未读取完成，请刷新后重试", "断开接入未提交");
+            return;
+          }
+          disconnect.mutate(disconnectRevision);
+        }}
       />
     </Layout>
   );

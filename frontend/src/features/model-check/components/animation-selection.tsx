@@ -15,7 +15,6 @@ import type {
   AnimationSchedule,
   AnimationTarget,
   Task,
-  PrecheckQuestionID,
 } from "@/api";
 import { AnimationAccountsSkeleton } from "./animation-accounts-skeleton";
 import { ContentRetry } from "@/components/content-retry";
@@ -35,13 +34,12 @@ import {
 import type { AnimationForm } from "../lib/animation-schema";
 import type { AnimationActivity } from "../lib/animation-task-results";
 import { AnimationAccountCard } from "./animation-account-card";
-import { ShieldCheck, CheckCheck, ListX, ListChecks, X } from "lucide-react";
-import { selectPrecheckAccounts } from "../lib/precheck-selection";
-import { PrecheckQuestionSelector } from "./precheck-question-selector";
+import { ShieldCheck, ListChecks, X } from "lucide-react";
+import { sortAccounts } from "@/features/accounts/lib/account-sort";
+import { AnimationPromptDialog } from "./animation-prompt-dialog";
 
 const pageSizes = [6, 12, 24];
 const emptyAccounts: AccountStatus[] = [];
-const emptyPrecheckResults = new Map<string, AnimationResult>();
 
 export function AnimationSelection(props: {
   mode?: "animation" | "precheck";
@@ -56,8 +54,6 @@ export function AnimationSelection(props: {
   precheckResults?: Map<string, AnimationResult>;
   precheckStatuses?: Map<string, Task["status"]>;
   onPrecheck: (value: AnimationForm) => void;
-  precheckQuestions: PrecheckQuestionID[];
-  onPrecheckQuestionsChange: (value: PrecheckQuestionID[]) => void;
   onRetry: (target: AnimationTarget) => void;
   taskRetry: ReactNode;
   accounts: UseQueryResult<AccountStatus[], Error>;
@@ -75,39 +71,26 @@ export function AnimationSelection(props: {
   const filters = props.filters ?? localFilters;
   const setFilters = props.onFiltersChange ?? setLocalFilters;
   const selected = useWatch({ control: props.form.control, name: "account_ids", exact: true });
-  const model = useWatch({ control: props.form.control, name: "unified_model", exact: true });
   const accounts = props.accounts.data ?? emptyAccounts;
-  const availableSelected = selected.filter(
-    (id) => accounts.some((account) => account.id === id) && !props.busyIDs.has(id),
+  const accountIDs = useMemo(() => new Set(accounts.map((account) => account.id)), [accounts]);
+  const availableSelected = useMemo(
+    () => selected.filter((id) => accountIDs.has(id) && !props.busyIDs.has(id)),
+    [selected, accountIDs, props.busyIDs],
   );
   const filtered = useMemo(
     () =>
-      filterAnimationAccounts(
-        accounts.filter((account) => !props.accountID || account.id === props.accountID),
-        filters,
+      sortAccounts(
+        filterAnimationAccounts(
+          accounts.filter((account) => !props.accountID || account.id === props.accountID),
+          filters,
+        ),
+        filters.sort,
       ),
     [accounts, filters, props.accountID],
   );
   const selectableIDs = useMemo(
     () => selectableDetectionAccountIDs(filtered, props.busyIDs),
     [filtered, props.busyIDs],
-  );
-  const precheckQuestions = props.precheckQuestions;
-  const passedIDs = selectPrecheckAccounts(
-    filtered,
-    props.precheckResults ?? emptyPrecheckResults,
-    model,
-    "passed",
-    props.busyIDs,
-    precheckQuestions,
-  );
-  const notPassedIDs = selectPrecheckAccounts(
-    filtered,
-    props.precheckResults ?? emptyPrecheckResults,
-    model,
-    "not_passed",
-    props.busyIDs,
-    precheckQuestions,
   );
   const pagination = useClientPagination(filtered, 12);
   useEffect(() => {
@@ -135,12 +118,11 @@ export function AnimationSelection(props: {
   const form = props.form;
   useEffect(() => {
     if (!props.accounts.data) return;
-    const ids = new Set(props.accounts.data.map((account) => account.id));
     const current = form.getValues("account_ids");
-    const next = current.filter((id) => ids.has(id));
+    const next = current.filter((id) => accountIDs.has(id));
     if (next.length !== current.length)
       form.setValue("account_ids", next, { shouldValidate: true });
-  }, [props.accounts.data, form]);
+  }, [props.accounts.data, accountIDs, form]);
   let startLabel = props.pending
     ? "正在启动检测"
     : `开始检测（${availableSelected.length} 个账号）`;
@@ -172,22 +154,15 @@ export function AnimationSelection(props: {
         aria-label={precheckMode ? "前置检测设置" : "动画检测设置"}
         className="shrink-0 border-b"
       >
-        <div
-          role="group"
-          aria-label="动画筛选与模型"
-          className="flex min-w-0 flex-wrap items-start gap-x-5 gap-y-3 px-3 py-3 sm:px-4"
-        >
-          <div className="min-w-0 flex-1 basis-[28rem]">
-            <AnimationAccountFilters
-              accounts={accounts}
-              value={filters}
-              onChange={(value) => {
-                setFilters(value);
-                pagination.setCurrentPage(1);
-              }}
-            />
-          </div>
-          <AnimationModelSettings form={props.form} pending={false} />
+        <div className="min-w-0 px-3 py-3 sm:px-4">
+          <AnimationAccountFilters
+            accounts={accounts}
+            value={filters}
+            onChange={(value) => {
+              setFilters(value);
+              pagination.setCurrentPage(1);
+            }}
+          />
         </div>
         <div
           role="group"
@@ -233,33 +208,9 @@ export function AnimationSelection(props: {
               <TooltipContent>清空选择</TooltipContent>
             </Tooltip>
           </div>
-          {precheckMode ? (
-            <>
-              <PrecheckQuestionSelector
-                value={precheckQuestions}
-                onChange={props.onPrecheckQuestionsChange}
-                disabled={props.pending}
-              />
-              <Button
-                type="button"
-                variant="outline"
-                disabled={props.pending || passedIDs.length === 0}
-                onClick={() => form.setValue("account_ids", passedIDs, { shouldValidate: true })}
-              >
-                <CheckCheck aria-hidden="true" />
-                选择通过（{passedIDs.length}）
-              </Button>
-              <Button
-                type="button"
-                variant="outline"
-                disabled={props.pending || notPassedIDs.length === 0}
-                onClick={() => form.setValue("account_ids", notPassedIDs, { shouldValidate: true })}
-              >
-                <ListX aria-hidden="true" />
-                选择降智（{notPassedIDs.length}）
-              </Button>
-            </>
-          ) : null}
+          {!precheckMode ? <AnimationPromptDialog disabled={props.pending} /> : null}
+          {props.taskRetry}
+          <AnimationModelSettings form={props.form} pending={false} />
           <div className="ml-auto flex min-w-0 flex-wrap items-center justify-end gap-2">
             {props.onBatchSchedule && (
               <Button
@@ -275,27 +226,15 @@ export function AnimationSelection(props: {
                 批量自动检测设置
               </Button>
             )}
-            <div className="flex shrink-0 items-center gap-2">
-              <div className="flex min-w-8 shrink-0 items-center justify-end gap-2">
-                {props.taskRetry}
-              </div>
-              <div className="w-40 shrink-0">
-                <Button
-                  type="submit"
-                  className="w-full tabular-nums"
-                  aria-busy={props.pending}
-                  disabled={
-                    props.pending ||
-                    availableSelected.length === 0 ||
-                    !props.accounts.data ||
-                    (precheckMode && precheckQuestions.length === 0)
-                  }
-                >
-                  {precheckMode ? <ShieldCheck aria-hidden="true" /> : null}
-                  {startLabel}
-                </Button>
-              </div>
-            </div>
+            <Button
+              type="submit"
+              className="min-w-40 shrink-0 tabular-nums"
+              aria-busy={props.pending}
+              disabled={props.pending || availableSelected.length === 0 || !props.accounts.data}
+            >
+              {precheckMode ? <ShieldCheck aria-hidden="true" /> : null}
+              {startLabel}
+            </Button>
           </div>
         </div>
       </div>

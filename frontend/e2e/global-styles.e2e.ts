@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { dictionaryResponse } from "./__tests__/fixtures/dictionaries";
 
 const groups = Array.from({ length: 30 }, (_, index) => ({
   id: String(index + 1),
@@ -30,6 +31,10 @@ test.beforeEach(async ({ page, colorScheme }) => {
         traffic_collection: { enabled: false },
       },
       "/api/groups": groups,
+      "/api/dictionaries": dictionaryResponse(
+        route.request().url(),
+        groups.map((group) => ({ value: group.id, name: group.name })),
+      ),
       "/api/logs": { items: [], total: 0, page: 1, page_size: 20, truncated: false },
     };
     if (path.endsWith("/events")) {
@@ -70,6 +75,7 @@ test("keeps filter options scrollable on short screens and reveals keyboard sele
   await page.getByRole("button", { name: "事件分组筛选" }).click();
   const search = page.getByRole("combobox", { name: "搜索事件分组" });
   await expect(search).toBeFocused();
+  await expect(page.getByRole("option")).toHaveCount(groups.length);
   await search.press("End");
   const lastOption = page.getByRole("option").last();
   await expect(lastOption).toBeInViewport();

@@ -8,6 +8,7 @@ import (
 )
 
 func TestPersistedHealthSamplesSelectNewestAcrossPrecisionAndTimezone(t *testing.T) {
+	t.Parallel()
 	for _, source := range []string{"traffic", "active-probe"} {
 		for _, older := range []string{"2026-09-07T12:00:00Z", "2026-09-07T14:00:00+02:00"} {
 			t.Run(source+"/"+older, func(t *testing.T) {
@@ -41,6 +42,7 @@ func TestPersistedHealthSamplesSelectNewestAcrossPrecisionAndTimezone(t *testing
 }
 
 func TestHealthRetentionRemovesOldestWholeSecondBeforeNewerFractionalSamples(t *testing.T) {
+	t.Parallel()
 	store := openPolicyStore(t)
 	ctx := context.Background()
 	base := time.Date(2026, 9, 7, 12, 0, 0, 0, time.UTC)

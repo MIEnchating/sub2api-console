@@ -95,7 +95,7 @@ func animationModeLabel(mode string) string {
 
 func runPrecheckTarget(ctx context.Context, client *http.Client, credential directCredential, timeout int, questions []string, result *AnimationResult) error {
 	return runPrecheckQuestions(ctx, questions, result, func(question AstraQuestion, requestID string) (string, string, error) {
-		sender := directBundleSender{client: client, credential: credential, requestID: requestID, usage: result.Usage}
+		sender := directBundleSender{stream: true, client: client, credential: credential, requestID: requestID, usage: result.Usage}
 		effort := result.ReasoningEffort
 		text, model, err := sender.SendWithReasoning(ctx, result.AccountID, result.Model, question.Question, timeout, effort)
 		if err == nil && credential.Secret != "" && strings.Contains(text, credential.Secret) {

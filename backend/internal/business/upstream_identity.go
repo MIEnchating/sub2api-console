@@ -375,6 +375,19 @@ func (s *Store) lookupUpstreamIdentityID(ctx context.Context, host string) (stri
 	return upstreamID, err
 }
 
+// UpstreamCatalogIdentityID resolves a primary Host or alias only when its
+// identity still has a primary catalog entry. A missing Host returns no ID.
+func (s *Store) UpstreamCatalogIdentityID(ctx context.Context, host string) (string, error) {
+	var id string
+	err := s.db.QueryRowContext(ctx, `SELECT h.upstream_id FROM upstream_identity_hosts h
+		JOIN upstream_identity_hosts p ON p.upstream_id=h.upstream_id AND p.is_primary=1
+		JOIN upstreams u ON u.host=p.host WHERE h.host=?`, canonicalHost(host)).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	return id, err
+}
+
 func upstreamIdentityHostsForQueryer(ctx context.Context, queryer upstreamIdentityQueryer, host string) (string, []string, error) {
 	host = canonicalHost(host)
 	var upstreamID string

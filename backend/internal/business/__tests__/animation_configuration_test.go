@@ -25,6 +25,9 @@ func TestAnimationSchedulesPersistSeparatelyFromProfilesAndAuditExcludesPayload(
 	if err := store.SaveAnimationConfiguration(ctx, schedules, "operator"); err != nil {
 		t.Fatal(err)
 	}
+	if err := store.SaveAnimationPrompt(ctx, []byte(`{"prompt":"private-prompt-marker","version":1}`), "operator"); err != nil {
+		t.Fatal(err)
+	}
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -41,6 +44,9 @@ func TestAnimationSchedulesPersistSeparatelyFromProfilesAndAuditExcludesPayload(
 	if err != nil || string(loadedSchedules) != string(schedules) {
 		t.Fatalf("schedules not restored: %s %v", loadedSchedules, err)
 	}
+	if raw, err := reopened.LoadAnimationPrompt(ctx); err != nil || string(raw) != `{"prompt":"private-prompt-marker","version":1}` {
+		t.Fatalf("prompt not restored: %s %v", raw, err)
+	}
 	audit, err := reopened.AuditEvents(ctx, nil, false)
 	if err != nil {
 		t.Fatal(err)
@@ -49,7 +55,7 @@ func TestAnimationSchedulesPersistSeparatelyFromProfilesAndAuditExcludesPayload(
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(raw), "animation.schedule.saved") || strings.Contains(string(raw), "private-model-marker") {
+	if !strings.Contains(string(raw), "animation.schedule.saved") || strings.Contains(string(raw), "private-model-marker") || strings.Contains(string(raw), "private-prompt-marker") {
 		t.Fatalf("unexpected audit: %s", raw)
 	}
 }

@@ -55,6 +55,9 @@ func (s *Service) importItem(ctx context.Context, value *privateRun, index int, 
 	if text(matched["id"]) != text(existing["id"]) {
 		return errors.New("账号目录已变化，请重新处理")
 	}
+	if source := value.RememberedSource; source != nil && (text(matched["id"]) != source.AccountID || accountVersion(matched) != source.AccountVersion) {
+		return errors.New("重新登录的目标账号或配置已变化，请重新预览")
+	}
 	body := maps.Clone(payload)
 	body["status"] = "inactive"
 	body["schedulable"] = false
@@ -142,10 +145,7 @@ func (s *Service) importItem(ctx context.Context, value *privateRun, index int, 
 			return errors.New("新账号隔离状态或身份已变化，已停止启用")
 		}
 	}
-	if err = verifyModelMappings(current, object(value.Exports[index]["credentials"])); err != nil {
-		return err
-	}
-	if err = verifyAppliedWhileIsolated(current, body); err != nil {
+	if err = verifyImportedAppliedWhileIsolated(current, body); err != nil {
 		return err
 	}
 	value.AccountVersions[id] = accountVersion(current)
@@ -242,7 +242,7 @@ func (s *Service) applyImportedItem(ctx context.Context, value *privateRun, inde
 		if err = verifyModelMappings(current, object(value.Exports[index]["credentials"])); err != nil {
 			return err
 		}
-		if err = verifyApplied(current, body); err != nil {
+		if err = verifyImportedApplied(current, body); err != nil {
 			return err
 		}
 		value.AccountVersions[id] = accountVersion(current)
@@ -272,7 +272,7 @@ func (s *Service) applyImportedItem(ctx context.Context, value *privateRun, inde
 	if err = verifyModelMappings(current, object(value.Exports[index]["credentials"])); err != nil {
 		return err
 	}
-	if err = verifyApplied(current, body); err != nil {
+	if err = verifyImportedApplied(current, body); err != nil {
 		return err
 	}
 	value.AccountVersions[id] = accountVersion(current)

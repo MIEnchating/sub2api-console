@@ -109,7 +109,21 @@ func (s *Service) EnqueueKeyCleanup(ctx context.Context, host string, keyIDs []s
 func (s *Service) executeKeyCleanup(parent context.Context, task taskstore.Task, host string, requested []string, actor string) {
 	ctx, cancel := context.WithTimeout(parent, s.timeout)
 	defer cancel()
-	task.Status, task.Progress, task.Message = "running", 5, "正在重新复核上游 Key 与本地绑定关系"
+	items := make([]map[string]any, 0, len(requested))
+	deleted, skipped, failed, auditFailed := 0, 0, 0, 0
+	remoteWrite := false
+	snapshot := func() map[string]any {
+		result := map[string]any{
+			"operation": "upstream-key-cleanup", "host": host, "total": len(requested), "completed": len(items),
+			"deleted": deleted, "skipped": skipped, "failed": failed, "items": items,
+		}
+		if auditFailed > 0 {
+			result["audit_failed"] = auditFailed
+		}
+		return result
+	}
+	task.Status, task.Progress, task.Message = "running", 0, "正在重新复核上游 Key 与本地绑定关系"
+	task.Result = snapshot()
 	task.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
 	if !taskstore.SaveRunning(ctx, s.tasks, task) {
 		return
@@ -141,9 +155,6 @@ func (s *Service) executeKeyCleanup(parent context.Context, task taskstore.Task,
 		s.finishKeyCleanupFailure(ctx, task, err)
 		return
 	}
-	items := make([]map[string]any, 0, len(requested))
-	deleted, skipped, failed, auditFailed := 0, 0, 0, 0
-	remoteWrite := false
 	appendAuditedResult := func(
 		key UnboundUpstreamKey,
 		status, reason string,
@@ -162,7 +173,8 @@ func (s *Service) executeKeyCleanup(parent context.Context, task taskstore.Task,
 		if ctx.Err() != nil {
 			break
 		}
-		task.Progress = 5 + index*90/len(requested)
+		task.Progress = len(items) * 100 / len(requested)
+		task.Result = snapshot()
 		task.Message = fmt.Sprintf("正在清理 %d/%d：Key %s", index+1, len(requested), keyID)
 		task.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
 		taskstore.PersistProgress(s.tasks, task)
@@ -219,14 +231,9 @@ func (s *Service) executeKeyCleanup(parent context.Context, task taskstore.Task,
 	}
 	task.Progress = 100
 	task.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
-	task.Result = map[string]any{
-		"operation": "upstream-key-cleanup", "host": host, "total": len(requested),
-		"deleted": deleted, "skipped": skipped, "failed": failed, "items": items,
-		"remote_write": remoteWrite, "readback_confirmed": remoteWrite && failed == 0,
-	}
-	if auditFailed > 0 {
-		task.Result["audit_failed"] = auditFailed
-	}
+	task.Result = snapshot()
+	task.Result["remote_write"] = remoteWrite
+	task.Result["readback_confirmed"] = remoteWrite && failed == 0
 	if failed > 0 || auditFailed > 0 {
 		task.Status = "failed"
 		task.Message = fmt.Sprintf("无绑定 Key 清理完成：删除 %d 个，跳过 %d 个，失败 %d 个", deleted, skipped, failed)

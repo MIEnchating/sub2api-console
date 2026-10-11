@@ -1,11 +1,13 @@
 import { expect, test } from "@playwright/test";
+import type { Task } from "../../src/api";
 import { account } from "../../src/features/accounts/__tests__/fixtures";
 import { pageFixtures } from "./fixtures/page-shell";
 
-for (const tab of ["账号检测", "前置检测", "终端续接检测"]) {
+for (const tab of ["账号检测", "前置检测"]) {
   test(`${tab} 卡片支持熔断和恢复且窄屏操作区不溢出`, async ({ page }) => {
     let current = { ...account, platform: "openai" };
     const actions: string[] = [];
+    const tasks: Record<string, Task> = {};
     await page.route("**/api/**", async (route) => {
       const path = new URL(route.request().url()).pathname;
       if (path === "/api/accounts/41/control") {
@@ -14,29 +16,41 @@ for (const tab of ["账号检测", "前置检测", "终端续接检测"]) {
         current = {
           ...current,
           health: action === "fuse" ? "fused" : "healthy",
+          health_status: action === "fuse" ? "fused" : "healthy",
+          routing_state: action === "fuse" ? "fused" : "healthy",
           schedulable: action !== "fuse",
         };
-        await route.fulfill({
-          json: {
-            id: `control-${actions.length}`,
-            skill: "console",
-            operation: "account-control",
-            status: "succeeded",
-            progress: 100,
-            message: "账号处置完成",
-            result: {},
-            created_at: "2026-09-22T00:00:00Z",
-            updated_at: "2026-09-22T00:00:00Z",
-          },
-        });
+        const task: Task = {
+          id: `control-${actions.length}`,
+          skill: "console",
+          operation: "account-control",
+          status: "succeeded",
+          progress: 100,
+          message: "账号处置完成",
+          result: {},
+          created_at: "2026-09-22T00:00:00Z",
+          updated_at: "2026-09-22T00:00:00Z",
+        };
+        tasks[`/api/tasks/${task.id}`] = task;
+        await route.fulfill({ json: task });
         return;
       }
       const fixtures: Record<string, unknown> = {
         ...pageFixtures,
+        ...tasks,
         "/api/setup/status": { initialized: true, configuration_errors: [] },
         "/api/auth/session": { authenticated: true, username: "隔离测试" },
         "/api/accounts": [current],
-        "/api/accounts/41": current,
+        "/api/accounts/41/control-state": {
+          id: current.id,
+          name: current.name,
+          health: current.health,
+          health_status: current.health_status,
+          routing_state: current.routing_state,
+          manual_priority: current.manual_priority,
+          paused: current.paused,
+          schedulable: current.schedulable,
+        },
         "/api/model-checks/animation-schedules": [],
         "/api/model-checks/animations": [],
         "/api/model-checks/terminal-continuity": [],

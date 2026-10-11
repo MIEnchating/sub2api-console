@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor, cleanup } from "@testing-library/react";
+import { act, render, screen, waitFor, cleanup } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, it, vi } from "vitest";
 import type { KumaTemplateDetail } from "@/api";
@@ -45,6 +45,10 @@ it("编辑 JSON 请求体同步模型字段并提交新的请求头与请求体"
   const user = userEvent.setup();
   const submit = renderTemplate();
   await user.click(screen.getByRole("button", { name: "查看请求体" }));
+  // Wait for the real lazy editor module before testing editing and submission.
+  await act(async () => {
+    await vi.dynamicImportSettled();
+  });
   const body = await screen.findByRole("textbox", { name: "请求体" });
   await user.click(body);
   await user.keyboard("{Control>}a{/Control}");
@@ -69,8 +73,13 @@ it("编辑 JSON 请求体同步模型字段并提交新的请求头与请求体"
 it("切换为 XML 编码保留请求体并允许纯文本提交", async () => {
   const user = userEvent.setup();
   const submit = renderTemplate();
-  await user.click(screen.getByRole("combobox", { name: "请求体编码" }));
-  await user.click(screen.getByRole("option", { name: "XML" }));
+  await act(async () => {
+    await vi.dynamicImportSettled();
+  });
+  const encoding = screen.getByRole("combobox", { name: "请求体编码" });
+  encoding.focus();
+  await user.keyboard("{ArrowDown}");
+  await user.click(await screen.findByRole("option", { name: "XML" }));
   await user.click(screen.getByRole("button", { name: "查看请求体" }));
   const body = screen.getByRole("textbox", { name: "请求体" });
   expect(body).toHaveValue(

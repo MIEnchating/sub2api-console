@@ -37,7 +37,6 @@ import {
   TableRow,
 } from "@/components/ui/table";
 
-import { accountPlatformLabel } from "../lib/account-labels";
 import { platformProbeSchema, type PlatformProbeForm } from "../lib/platform-probe-schema";
 import { formatProbeDuration } from "@/lib/probe-task-feedback";
 import { orderedDictionaryOptions } from "@/lib/domain-dictionaries";
@@ -77,14 +76,7 @@ export function platformProbeOptions(
     if (!platform) continue;
     counts.set(platform, (counts.get(platform) ?? 0) + 1);
   }
-  const discovered = [...counts.entries()]
-    .map(([value, accountCount]) => ({
-      value,
-      label: accountPlatformLabel(value) ?? value,
-      accountCount,
-    }))
-    .sort((left, right) => left.label.localeCompare(right.label, "zh-CN"));
-  const ordered = orderedDictionaryOptions(dictionaryEntries, discovered);
+  const ordered = orderedDictionaryOptions(dictionaryEntries);
   return ordered.flatMap((option) => {
     const accountCount = counts.get(option.value);
     return accountCount === undefined ? [] : [{ ...option, accountCount }];
@@ -307,7 +299,7 @@ export function PlatformProbeDialog(props: {
                   >
                     <SelectValue placeholder="选择平台" />
                   </SelectTrigger>
-                  <SelectContent align="start">
+                  <SelectContent align="start" dictionaryKind="platform">
                     {options.map((option) => (
                       <SelectItem key={option.value} value={option.value}>
                         {option.label}（{option.accountCount} 个账号）

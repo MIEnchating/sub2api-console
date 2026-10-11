@@ -3,6 +3,7 @@ package business
 import (
 	"container/heap"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"hash/fnv"
@@ -127,7 +128,7 @@ func (s *Store) TrafficRanking(ctx context.Context, query TrafficRankingQuery) (
 	if !validTrafficRankingSort(query.SortBy) {
 		return TrafficRanking{}, errors.New("流量排行排序方式无效")
 	}
-	accounts, order, err := s.trafficRankingAccounts(ctx)
+	accounts, order, err := s.trafficRankingAccounts(ctx, query.GroupName)
 	if err != nil {
 		return TrafficRanking{}, err
 	}
@@ -176,11 +177,22 @@ func (s *Store) TrafficRanking(ctx context.Context, query TrafficRankingQuery) (
 	return result, nil
 }
 
-func (s *Store) trafficRankingAccounts(ctx context.Context) (map[string]*trafficRankingAccumulator, []string, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT a.id,a.name,COALESCE(a.upstream_host,''),COALESCE(a.upstream_type,''),
-		a.metadata_json,COALESCE(ag.group_name,'') FROM accounts a
+func (s *Store) trafficRankingAccounts(ctx context.Context, groupName string) (map[string]*trafficRankingAccumulator, []string, error) {
+	statement := `SELECT a.id,a.name,COALESCE(a.upstream_host,''),COALESCE(a.upstream_type,''),
+		CASE WHEN json_valid(a.metadata_json)=1 AND json_type(a.metadata_json)='object' AND json_type(a.metadata_json,'$.platform')='text'
+			THEN CAST(json_extract(a.metadata_json,'$.platform') AS TEXT) END,
+		CASE WHEN json_valid(a.metadata_json)=1 AND json_type(a.metadata_json)='object' THEN 1 ELSE 0 END,
+		COALESCE(ag.group_name,'') FROM accounts a
 		LEFT JOIN account_groups ag ON ag.account_id=a.id
-		ORDER BY CASE WHEN a.id GLOB '[0-9]*' THEN CAST(a.id AS INTEGER) ELSE 0 END,a.id,ag.group_name`)
+		`
+	args := []any{}
+	if groupName != "" {
+		statement += `WHERE EXISTS (SELECT 1 FROM account_groups selected_ag
+			WHERE selected_ag.account_id=a.id AND selected_ag.group_name=?) `
+		args = append(args, groupName)
+	}
+	statement += `ORDER BY CASE WHEN a.id GLOB '[0-9]*' THEN CAST(a.id AS INTEGER) ELSE 0 END,a.id,ag.group_name`
+	rows, err := s.db.QueryContext(ctx, statement, args...)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -188,17 +200,18 @@ func (s *Store) trafficRankingAccounts(ctx context.Context) (map[string]*traffic
 	accounts := map[string]*trafficRankingAccumulator{}
 	order := []string{}
 	for rows.Next() {
-		var accountID, name, host, upstreamType, metadataRaw, groupName string
-		if err := rows.Scan(&accountID, &name, &host, &upstreamType, &metadataRaw, &groupName); err != nil {
+		var accountID, name, host, upstreamType, groupName string
+		var platformRaw sql.NullString
+		var metadataValid int64
+		if err := rows.Scan(&accountID, &name, &host, &upstreamType, &platformRaw, &metadataValid, &groupName); err != nil {
 			return nil, nil, err
 		}
 		account := accounts[accountID]
 		if account == nil {
-			metadata, err := decodeObject(metadataRaw)
-			if err != nil {
+			if metadataValid != 1 {
 				return nil, nil, errors.New("账号 " + accountID + " 元数据记录损坏")
 			}
-			platform, _ := metadata["platform"].(string)
+			platform := platformRaw.String
 			platform = strings.ToLower(strings.TrimSpace(platform))
 			if platform == "" {
 				platform = strings.ToLower(strings.TrimSpace(upstreamType))
@@ -219,17 +232,27 @@ func (s *Store) trafficRankingAccounts(ctx context.Context) (map[string]*traffic
 
 // Traffic evidence is persisted in fixed-precision UTC, so indexed text ranges
 // preserve nanosecond boundaries before request deduplication.
-const trafficRankingWindowCandidates = `WITH ranked AS (
- SELECT request_id,account_id,is_error,first_token_ms,observed_at,payload_json,
-  ROW_NUMBER() OVER(PARTITION BY account_id,request_id ORDER BY observed_at,id) AS request_rank
- FROM usage_records WHERE LOWER(source)='traffic' AND observed_at>=? AND observed_at<=?
-`
+const trafficRankingWindowCandidates = `SELECT request_id,account_id,is_error,first_token_ms,observed_at,payload_json
+ FROM usage_records INDEXED BY ix_usage_records_traffic_window
+ WHERE LOWER(source)='traffic' AND observed_at>=? AND observed_at<=?`
 
-const trafficRankingWindowResults = `)
-SELECT request_id,account_id,is_error,first_token_ms,observed_at,payload_json
-FROM ranked WHERE request_rank=1 ORDER BY observed_at`
+const trafficRankingWindowResults = ` ORDER BY observed_at,account_id,request_id,id`
 
 const trafficRankingWindowQuery = trafficRankingWindowCandidates + trafficRankingWindowResults
+
+// Rank only identifiers; carrying payload_json through the window sort copies
+// potentially large upstream responses for every duplicate. Aggregation below
+// is order independent, so the selected rows need no second payload sort.
+const trafficRankingLargeWindowCandidates = `WITH ranked AS (
+ SELECT id,
+  ROW_NUMBER() OVER(PARTITION BY account_id,request_id ORDER BY observed_at,id) AS request_rank
+ FROM usage_records INDEXED BY ix_usage_records_traffic_window
+ WHERE LOWER(source)='traffic' AND observed_at>=? AND observed_at<=?
+`
+
+const trafficRankingLargeWindowResults = `)
+SELECT u.request_id,u.account_id,u.is_error,u.first_token_ms,u.observed_at,u.payload_json
+FROM ranked JOIN usage_records u ON u.id=ranked.id WHERE ranked.request_rank=1`
 
 func (s *Store) accumulateTrafficRanking(
 	ctx context.Context,
@@ -241,6 +264,12 @@ func (s *Store) accumulateTrafficRanking(
 		return nil
 	}
 	statement := trafficRankingWindowCandidates
+	results := trafficRankingWindowResults
+	streaming := query.EndAt.Sub(query.StartAt) <= 7*24*time.Hour
+	if !streaming {
+		statement = trafficRankingLargeWindowCandidates
+		results = trafficRankingLargeWindowResults
+	}
 	arguments := []any{query.StartAt.Format(healthSampleTimeLayout), query.EndAt.Format(healthSampleTimeLayout)}
 	if query.GroupName != "" {
 		// Restrict membership before deduplication and sorting; unrelated groups
@@ -248,11 +277,15 @@ func (s *Store) accumulateTrafficRanking(
 		statement += ` AND account_id IN (SELECT account_id FROM account_groups WHERE group_name=?)`
 		arguments = append(arguments, query.GroupName)
 	}
-	rows, err := s.db.QueryContext(ctx, statement+trafficRankingWindowResults, arguments...)
+	rows, err := s.db.QueryContext(ctx, statement+results, arguments...)
 	if err != nil {
 		return err
 	}
 	defer rows.Close()
+	var seen map[string]map[string]struct{}
+	if streaming {
+		seen = make(map[string]map[string]struct{}, len(accounts))
+	}
 	for rows.Next() {
 		var requestID, accountID string
 		var isError *bool
@@ -268,6 +301,17 @@ func (s *Store) accumulateTrafficRanking(
 		observedAt, err := time.Parse(time.RFC3339Nano, *observed)
 		if err != nil || observedAt.Before(query.StartAt) || observedAt.After(query.EndAt) {
 			continue
+		}
+		if streaming {
+			requests := seen[accountID]
+			if requests == nil {
+				requests = map[string]struct{}{}
+				seen[accountID] = requests
+			}
+			if _, duplicate := requests[requestID]; duplicate {
+				continue
+			}
+			requests[requestID] = struct{}{}
 		}
 		account.row.Requests++
 		if isError != nil && !*isError {

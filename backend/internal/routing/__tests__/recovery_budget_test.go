@@ -7,6 +7,7 @@ import (
 )
 
 func TestCapacityRecoveryLowersPausedConcurrencyToConfirmedGlobalHeadroomBeforeResuming(t *testing.T) {
+	t.Parallel()
 	for _, missingConcurrency := range []bool{false, true} {
 		name := "retained concurrency exceeds remaining global capacity"
 		if missingConcurrency {
@@ -50,6 +51,7 @@ func TestCapacityRecoveryLowersPausedConcurrencyToConfirmedGlobalHeadroomBeforeR
 }
 
 func TestCapacityRecoveryKeepsPausedConfigurationWhenGlobalHeadroomIsZero(t *testing.T) {
+	t.Parallel()
 	paused, other := upstreamCapacityAccount("41", 20, 100), upstreamCapacityAccount("42", 100, 100)
 	inactive := false
 	paused.Schedulable, paused.EffectiveState = &inactive, "concurrency_limited"

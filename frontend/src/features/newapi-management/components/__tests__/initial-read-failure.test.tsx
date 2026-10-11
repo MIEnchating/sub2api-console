@@ -47,7 +47,7 @@ it.each(["groups", "prices", "differences"] as const)(
       "fetch",
       vi.fn(async (input: RequestInfo | URL) => {
         const url = String(input);
-        if (url.includes("/refresh"))
+        if (url.includes("/refresh") || url.endsWith("/groups"))
           return failed
             ? Response.json({ detail: "远端读取暂时不可用" }, { status: 503 })
             : Response.json({

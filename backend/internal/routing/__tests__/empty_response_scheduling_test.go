@@ -13,6 +13,7 @@ import (
 )
 
 func TestEmptyResponseLowersWeightWithoutRepeatedPenaltyThenConfirms(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "routing.sqlite3")
 	store, err := business.Open(path)
@@ -69,6 +70,7 @@ func TestEmptyResponseLowersWeightWithoutRepeatedPenaltyThenConfirms(t *testing.
 }
 
 func TestEmptyResponseScorePolicyAcceptsValidValuesAndRejectsInvalidValues(t *testing.T) {
+	t.Parallel()
 	for _, value := range []any{35, -1, 101, "40"} {
 		t.Run(fmt.Sprint(value), func(t *testing.T) {
 			store, err := business.Open(filepath.Join(t.TempDir(), "policy.sqlite3"))

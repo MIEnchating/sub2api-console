@@ -36,7 +36,10 @@ describe("全局屏蔽模型设置", () => {
     await user.click(screen.getByRole("button", { name: "保存屏蔽规则" }));
 
     await waitFor(() =>
-      expect(update).toHaveBeenCalledWith({ blocked_patterns: ["*-image-*", "GEMINI-*"] }),
+      expect(update).toHaveBeenCalledWith({
+        blocked_patterns: ["*-image-*", "GEMINI-*"],
+        expected_patterns: ["claude-*"],
+      }),
     );
   });
 

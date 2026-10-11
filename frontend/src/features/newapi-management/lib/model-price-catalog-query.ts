@@ -23,7 +23,7 @@ function catalogStaleTime(catalog: ModelPriceCatalog | undefined, updatedAt: num
 export function modelPriceCatalogQueryOptions(platformId: string) {
   return queryOptions({
     queryKey: ["newapi-management-model-prices", platformId],
-    queryFn: () => api.managementModelPrices(platformId),
+    queryFn: ({ signal }) => api.managementModelPrices(platformId, signal),
     retry: false,
     gcTime: cacheLifetime,
     // Use the backend expiry; reading its cache must not restart the 24-hour lifetime.

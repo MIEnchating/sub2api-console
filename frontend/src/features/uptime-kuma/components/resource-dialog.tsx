@@ -1,6 +1,6 @@
 import { ContentRetry } from "@/components/content-retry";
 import { ContentLoading } from "@/components/content-loading";
-import type { Task } from "@/api";
+import type { KumaProgressTask } from "./kuma-task-progress";
 import { OperationDialogFooter } from "./operation-dialog-footer";
 import { notifyOperationError } from "@/lib/operation-feedback";
 import { useEffect } from "react";
@@ -28,10 +28,11 @@ export function ResourceDialog(props: {
   item?: KumaResource;
   options: KumaResourceList;
   pending: boolean;
+  starting?: boolean;
   loading?: boolean;
   loadError?: Error | null;
   onRetry?: () => void;
-  task?: Pick<Task, "message" | "progress"> | null;
+  task?: KumaProgressTask | null;
   error: Error | null;
   onClose: () => void;
   onSubmit: (v: ResourceValues) => void;
@@ -98,7 +99,7 @@ export function ResourceDialog(props: {
             </form>
           )}
         </DialogBody>
-        <OperationDialogFooter pending={props.pending} task={props.task}>
+        <OperationDialogFooter pending={props.pending} task={props.task} starting={props.starting}>
           <Button variant="outline" disabled={props.pending} onClick={props.onClose}>
             取消
           </Button>

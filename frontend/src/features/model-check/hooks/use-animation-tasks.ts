@@ -1,40 +1,121 @@
-import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useCallback, useMemo, useRef, useState } from "react";
+import {
+  useMutation,
+  useQueries,
+  useQuery,
+  useQueryClient,
+  type UseQueryResult,
+} from "@tanstack/react-query";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, type AnimationRequest, type Task } from "@/api";
 import { notifyOperationError } from "@/lib/operation-feedback";
-import { taskPollInterval } from "@/lib/task-state";
+import { taskIsTerminal, taskPollInterval } from "@/lib/task-state";
 import { registerBackgroundTask } from "../lib/register-background-task";
 import { collectAnimationTasks } from "../lib/animation-task-results";
+import { taskEventIsOlder } from "../lib/task-event-schema";
+import { createAnimationTaskReader } from "../lib/animation-task-reader";
+
+type AnimationQueries = {
+  tasks: (Task | undefined)[];
+  isError: boolean;
+  isLoading: boolean;
+  isFetching: boolean;
+  failedQueries: UseQueryResult<Task>["refetch"][];
+};
 
 export function useAnimationTasks(active = true) {
   const client = useQueryClient();
+  const [readTask] = useState(createAnimationTaskReader);
   const [createdIDs, setCreatedIDs] = useState<string[]>([]);
+  const displayedIDs = useRef(new Set<string>());
   const submittingRef = useRef(new Set<string>());
   const [submitting, setSubmitting] = useState(new Set<string>());
   const precheckSubmittingRef = useRef(new Set<string>());
   const [precheckSubmitting, setPrecheckSubmitting] = useState(new Set<string>());
   const history = useQuery({
     queryKey: ["model-animation", "history"],
-    queryFn: api.animationHistory,
-    refetchOnMount: (query) => (query.state.data === undefined ? "always" : false),
+    queryFn: ({ signal }) => api.animationHistory(signal),
+    refetchOnMount: (query) =>
+      query.state.data === undefined || query.state.isInvalidated ? "always" : false,
     refetchInterval: active ? 15_000 : false,
   });
   const ids = useMemo(
     () => [...new Set([...createdIDs, ...(history.data ?? []).map((task) => task.id)])],
     [createdIDs, history.data],
   );
+  const historyByID = useMemo(
+    () => new Map((history.data ?? []).map((task) => [task.id, task])),
+    [history.data],
+  );
+  useEffect(() => {
+    if (!history.isSuccess) return;
+    setCreatedIDs((current) => {
+      const pending = current.filter((id) => !historyByID.has(id));
+      return pending.length === current.length ? current : pending;
+    });
+  }, [history.isSuccess, historyByID]);
+  useEffect(() => {
+    if (!active) return;
+    for (const summary of historyByID.values()) {
+      const queryKey = ["model-animation", "task", summary.id];
+      const cached = client.getQueryData<Task>(queryKey);
+      // History carries versions, not full results. Keep cached content while
+      // refreshing changes made by another page or session, including terminals.
+      if (cached && taskEventIsOlder(summary, cached)) {
+        void client.invalidateQueries({ queryKey, exact: true }, { cancelRefetch: false });
+      }
+    }
+  }, [active, client, historyByID, history.dataUpdatedAt]);
+  const combineQueries = useCallback(
+    (queries: UseQueryResult<Task>[]): AnimationQueries => ({
+      tasks: ids.map((id, index) => queries[index]?.data ?? historyByID.get(id)),
+      isError: queries.some((query) => query.isError),
+      isLoading: queries.some((query) => query.isLoading),
+      isFetching: queries.some((query) => query.isFetching),
+      failedQueries: queries.filter((query) => query.isError).map((query) => query.refetch),
+    }),
+    [ids, historyByID],
+  );
   const queries = useQueries({
+    combine: combineQueries,
     queries: ids.map((id) => ({
       queryKey: ["model-animation", "task", id],
-      queryFn: () => api.task(id),
+      queryFn: ({ signal }) => {
+        const cached = client.getQueryData<Task>(["model-animation", "task", id]);
+        const summary = historyByID.get(id);
+        const latest = cached && !taskEventIsOlder(summary, cached) ? cached : summary;
+        return readTask(id, signal, !taskIsTerminal(latest));
+      },
       enabled: active,
       staleTime: Infinity,
       refetchInterval: (query: { state: { status: string; data?: Task } }) =>
         active ? taskPollInterval(query, 1000) : false,
     })),
   });
-  const tasks = ids.map((id, index) => queryDataByID(id, queries[index]?.data, history.data));
-  const state = collectAnimationTasks(tasks, submitting, precheckSubmitting);
+  useEffect(() => {
+    for (const id of ids) displayedIDs.current.add(id);
+    if (!history.isSuccess || !history.isFetchedAfterMount || history.isFetching) return;
+    const retainedIDs = new Set(ids);
+    for (const id of displayedIDs.current) {
+      if (retainedIDs.has(id)) continue;
+      const queryKey = ["model-animation", "task", id];
+      const query = client.getQueryCache().find({ queryKey, exact: true });
+      if (query?.getObserversCount()) continue;
+      if (query) client.removeQueries({ queryKey, exact: true });
+      displayedIDs.current.delete(id);
+    }
+  }, [
+    client,
+    history.isSuccess,
+    history.isFetchedAfterMount,
+    history.isFetching,
+    history.dataUpdatedAt,
+    ids,
+  ]);
+  // Query's combine keeps unchanged task data stable even when fetch flags change.
+  const state = useMemo(
+    () => collectAnimationTasks(queries.tasks, submitting, precheckSubmitting),
+    [queries.tasks, submitting, precheckSubmitting],
+  );
   const run = useMutation({
     mutationFn: api.runAnimation,
     gcTime: 0,
@@ -104,22 +185,14 @@ export function useAnimationTasks(active = true) {
   return {
     ...state,
     start,
-    historyError: history.isError || queries.some((query) => query.isError),
-    historyLoading: history.isPending || queries.some((query) => query.isLoading),
-    retryingHistory: history.isFetching || queries.some((query) => query.isFetching),
+    historyError: history.isError || queries.isError,
+    historyLoading: history.isPending || queries.isLoading,
+    retryingHistory: history.isFetching || queries.isFetching,
     retryHistory: (): void => {
       if (history.isError) void history.refetch();
-      for (const query of queries) if (query.isError) void query.refetch();
+      for (const refetch of queries.failedQueries) void refetch();
     },
     cancelActive,
     cancelling: cancel.isPending,
   };
-}
-
-function queryDataByID(
-  id: string,
-  data: Task | undefined,
-  history: Task[] | undefined,
-): Task | undefined {
-  return data ?? history?.find((task) => task.id === id);
 }

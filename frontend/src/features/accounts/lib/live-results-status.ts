@@ -3,7 +3,7 @@ export const liveResultsPresentation = {
   connecting: { label: "正在连接实时请求", detail: "连接后自动追加新请求，无需刷新页面。" },
   connected: {
     label: "实时请求已连接",
-    detail: "自动采集当前页账号的新请求；健康分由调度另行更新。",
+    detail: "实时更新当前页账号的请求结果与健康评分，无需刷新页面。",
   },
   retrying: { label: "部分账号采集失败", detail: "正在重试上游日志采集，已有请求结果仍保留。" },
   reconnecting: {

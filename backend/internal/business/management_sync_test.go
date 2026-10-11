@@ -10,6 +10,7 @@ import (
 )
 
 func TestManagementSnapshotUsesStableIDsAndPreservesLocalPolicyAndPartialFields(t *testing.T) {
+	t.Parallel()
 	path := filepath.Join(t.TempDir(), "management.sqlite3")
 	store, err := Open(path)
 	if err != nil {
@@ -106,6 +107,7 @@ func TestManagementSnapshotUsesStableIDsAndPreservesLocalPolicyAndPartialFields(
 }
 
 func TestManagementSnapshotPreservesCompositeGroupPlatform(t *testing.T) {
+	t.Parallel()
 	store, err := Open(filepath.Join(t.TempDir(), "management-composite-group.sqlite3"))
 	if err != nil {
 		t.Fatal(err)
@@ -132,6 +134,7 @@ func TestManagementSnapshotPreservesCompositeGroupPlatform(t *testing.T) {
 }
 
 func TestManagementSnapshotClearsCurrentProjectionsWhenAccountBecomesUngrouped(t *testing.T) {
+	t.Parallel()
 	store, err := Open(filepath.Join(t.TempDir(), "management-account-ungrouped.sqlite3"))
 	if err != nil {
 		t.Fatal(err)
@@ -186,6 +189,7 @@ func TestManagementSnapshotClearsCurrentProjectionsWhenAccountBecomesUngrouped(t
 }
 
 func TestManagementSnapshotReconcilesGroupRenameByStableID(t *testing.T) {
+	t.Parallel()
 	store, err := Open(filepath.Join(t.TempDir(), "management-group-rename.sqlite3"))
 	if err != nil {
 		t.Fatal(err)
@@ -267,6 +271,7 @@ func TestManagementSnapshotReconcilesGroupRenameByStableID(t *testing.T) {
 }
 
 func TestManagementSnapshotReusesDeletedGroupNameForNewStableID(t *testing.T) {
+	t.Parallel()
 	store, err := Open(filepath.Join(t.TempDir(), "management-group-name-reuse.sqlite3"))
 	if err != nil {
 		t.Fatal(err)
@@ -362,6 +367,7 @@ func TestManagementSnapshotReusesDeletedGroupNameForNewStableID(t *testing.T) {
 }
 
 func TestManagementSnapshotReusesNameAfterConfirmedDeletionWithoutReattributingReferences(t *testing.T) {
+	t.Parallel()
 	store, err := Open(filepath.Join(t.TempDir(), "management-group-name-reuse-after-delete.sqlite3"))
 	if err != nil {
 		t.Fatal(err)
@@ -455,6 +461,7 @@ func TestManagementSnapshotReusesNameAfterConfirmedDeletionWithoutReattributingR
 }
 
 func TestManagementSnapshotSwapsGroupNamesByStableID(t *testing.T) {
+	t.Parallel()
 	store, err := Open(filepath.Join(t.TempDir(), "management-group-name-swap.sqlite3"))
 	if err != nil {
 		t.Fatal(err)
@@ -520,6 +527,7 @@ func TestManagementSnapshotSwapsGroupNamesByStableID(t *testing.T) {
 }
 
 func TestManagementSnapshotGroupRenameKeepsNewestConflictingHealthSample(t *testing.T) {
+	t.Parallel()
 	store, err := Open(filepath.Join(t.TempDir(), "management-group-health-merge.sqlite3"))
 	if err != nil {
 		t.Fatal(err)
@@ -579,6 +587,7 @@ func TestManagementSnapshotGroupRenameKeepsNewestConflictingHealthSample(t *test
 }
 
 func TestManagementSnapshotGroupRenameKeepsNewestConflictingUsageRecord(t *testing.T) {
+	t.Parallel()
 	store, err := Open(filepath.Join(t.TempDir(), "management-group-usage-merge.sqlite3"))
 	if err != nil {
 		t.Fatal(err)
@@ -635,6 +644,7 @@ func TestManagementSnapshotGroupRenameKeepsNewestConflictingUsageRecord(t *testi
 }
 
 func TestManagementSnapshotGroupStagingPrefersCurrentNameMetadata(t *testing.T) {
+	t.Parallel()
 	store, err := Open(filepath.Join(t.TempDir(), "management-group-staging-canonical.sqlite3"))
 	if err != nil {
 		t.Fatal(err)
@@ -674,6 +684,7 @@ func TestManagementSnapshotGroupStagingPrefersCurrentNameMetadata(t *testing.T) 
 }
 
 func TestManagementSnapshotGroupStagingFailureRollsBack(t *testing.T) {
+	t.Parallel()
 	store, err := Open(filepath.Join(t.TempDir(), "management-group-staging-rollback.sqlite3"))
 	if err != nil {
 		t.Fatal(err)
@@ -729,6 +740,7 @@ func TestManagementSnapshotGroupStagingFailureRollsBack(t *testing.T) {
 }
 
 func TestManagementSnapshotGroupMergeBackfillsStableMembershipID(t *testing.T) {
+	t.Parallel()
 	store, err := Open(filepath.Join(t.TempDir(), "management-group-membership-id.sqlite3"))
 	if err != nil {
 		t.Fatal(err)
@@ -769,6 +781,7 @@ func TestManagementSnapshotGroupMergeBackfillsStableMembershipID(t *testing.T) {
 }
 
 func TestManagementSnapshotCountsDeletedStableGroupOnce(t *testing.T) {
+	t.Parallel()
 	store, err := Open(filepath.Join(t.TempDir(), "management-group-deleted-duplicates.sqlite3"))
 	if err != nil {
 		t.Fatal(err)
@@ -800,6 +813,7 @@ func TestManagementSnapshotCountsDeletedStableGroupOnce(t *testing.T) {
 }
 
 func TestManagementSnapshotKeepsWholeDeletedIdentityWhileAnyNameIsReferenced(t *testing.T) {
+	t.Parallel()
 	store, err := Open(filepath.Join(t.TempDir(), "management-group-partially-referenced.sqlite3"))
 	if err != nil {
 		t.Fatal(err)
@@ -833,6 +847,7 @@ func TestManagementSnapshotKeepsWholeDeletedIdentityWhileAnyNameIsReferenced(t *
 }
 
 func TestManagementSnapshotRejectsMismatchedMembershipIdentity(t *testing.T) {
+	t.Parallel()
 	store, err := Open(filepath.Join(t.TempDir(), "management-membership-identity.sqlite3"))
 	if err != nil {
 		t.Fatal(err)
@@ -865,6 +880,7 @@ func TestManagementSnapshotRejectsMismatchedMembershipIdentity(t *testing.T) {
 }
 
 func TestManagementSnapshotRejectsMembershipStableIDOutsideCatalog(t *testing.T) {
+	t.Parallel()
 	store, err := Open(filepath.Join(t.TempDir(), "management-membership-unknown-id.sqlite3"))
 	if err != nil {
 		t.Fatal(err)
@@ -894,6 +910,7 @@ func TestManagementSnapshotRejectsMembershipStableIDOutsideCatalog(t *testing.T)
 }
 
 func TestManagementSnapshotRemovesGroupDeletedFromRemoteCatalog(t *testing.T) {
+	t.Parallel()
 	store, err := Open(filepath.Join(t.TempDir(), "management-group-deleted.sqlite3"))
 	if err != nil {
 		t.Fatal(err)
@@ -1004,6 +1021,7 @@ func containsPolicyGroupID(value any, groupID string) bool {
 }
 
 func TestManagementSnapshotKeepsBaseURLWhenListCredentialsOmitIt(t *testing.T) {
+	t.Parallel()
 	store, err := Open(filepath.Join(t.TempDir(), "management-base-url.sqlite3"))
 	if err != nil {
 		t.Fatal(err)
@@ -1044,6 +1062,7 @@ func TestManagementSnapshotKeepsBaseURLWhenListCredentialsOmitIt(t *testing.T) {
 }
 
 func TestManagementSnapshotCannotOverwriteBoundAccountConvertedCostOrName(t *testing.T) {
+	t.Parallel()
 	store, err := Open(filepath.Join(t.TempDir(), "management-bound-rate.sqlite3"))
 	if err != nil {
 		t.Fatal(err)
@@ -1075,6 +1094,7 @@ func TestManagementSnapshotCannotOverwriteBoundAccountConvertedCostOrName(t *tes
 }
 
 func TestManagementSnapshotCannotPopulateBoundAccountMissingCostFromRemoteRawRate(t *testing.T) {
+	t.Parallel()
 	store, err := Open(filepath.Join(t.TempDir(), "management-bound-empty-rate.sqlite3"))
 	if err != nil {
 		t.Fatal(err)
@@ -1107,6 +1127,7 @@ func TestManagementSnapshotCannotPopulateBoundAccountMissingCostFromRemoteRawRat
 }
 
 func TestCommitAccountBaseURLObservationsOnlyUpdatesBaseURLMetadata(t *testing.T) {
+	t.Parallel()
 	store, err := Open(filepath.Join(t.TempDir(), "base-url-observations.sqlite3"))
 	if err != nil {
 		t.Fatal(err)
@@ -1170,6 +1191,7 @@ func TestCommitAccountBaseURLObservationsOnlyUpdatesBaseURLMetadata(t *testing.T
 }
 
 func TestManagementSnapshotKeepsCurrentAccountErrorAndClearsStaleError(t *testing.T) {
+	t.Parallel()
 	path := filepath.Join(t.TempDir(), "management-error.sqlite3")
 	store, err := Open(path)
 	if err != nil {
@@ -1207,6 +1229,7 @@ func TestManagementSnapshotKeepsCurrentAccountErrorAndClearsStaleError(t *testin
 }
 
 func TestManagementSnapshotRollsBackOnInvalidStableIDOrField(t *testing.T) {
+	t.Parallel()
 	path := filepath.Join(t.TempDir(), "management-invalid.sqlite3")
 	store, err := Open(path)
 	if err != nil {

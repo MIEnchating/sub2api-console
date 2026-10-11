@@ -112,3 +112,56 @@ func (s *Server) accountWorkbenchAccounts(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, result)
 }
+
+func (s *Server) accountWorkbenchRememberedAccounts(c *gin.Context) {
+	c.Header("Cache-Control", "no-store")
+	if s.accountWorkbench == nil {
+		writeError(c, http.StatusServiceUnavailable, "账号工作台尚未就绪")
+		return
+	}
+	result, err := s.accountWorkbench.RememberedAccounts(c.Request.Context(), workbenchOwner(c))
+	if err != nil {
+		writeError(c, http.StatusBadGateway, err.Error())
+		return
+	}
+	c.JSON(http.StatusOK, result)
+}
+
+func (s *Server) accountWorkbenchDeleteRememberedAccount(c *gin.Context) {
+	c.Header("Cache-Control", "no-store")
+	if s.accountWorkbench == nil {
+		writeError(c, http.StatusServiceUnavailable, "账号工作台尚未就绪")
+		return
+	}
+	var input struct {
+		Revision int64 `json:"revision"`
+	}
+	if err := bindRequestJSON(c, &input); err != nil {
+		writeError(c, http.StatusUnprocessableEntity, "已记住账号版本无效")
+		return
+	}
+	if err := s.accountWorkbench.DeleteRememberedAccount(c.Request.Context(), workbenchOwner(c), c.Param("id"), input.Revision); err != nil {
+		writeError(c, http.StatusConflict, err.Error())
+		return
+	}
+	c.Status(http.StatusNoContent)
+}
+
+func (s *Server) accountWorkbenchRememberedLogin(c *gin.Context) {
+	if !s.workbenchReady(c) {
+		return
+	}
+	var input struct {
+		Revision int64 `json:"revision"`
+	}
+	if bindRequestJSON(c, &input) != nil {
+		writeError(c, http.StatusUnprocessableEntity, "已记住账号版本无效")
+		return
+	}
+	result, err := s.accountWorkbench.PreviewRememberedLogin(c.Request.Context(), workbenchOwner(c), c.Param("id"), input.Revision)
+	if err != nil {
+		writeError(c, http.StatusConflict, err.Error())
+		return
+	}
+	c.JSON(http.StatusOK, result)
+}

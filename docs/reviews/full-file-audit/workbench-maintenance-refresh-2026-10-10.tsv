@@ -1,0 +1,5 @@
+frontend/src/features/account-workbench/components/maintenance-form.tsx	8138ee8f0d26a2998ce027f98a166ac097b3eccbd5b0f5cec55e2f94287bc39e	fixed	全文核对维护预览与确认、刷新冲突和分组加载；已观察到配置变化时保留草稿并禁止旧范围提交，允许载入最新值。
+frontend/src/features/account-workbench/lib/maintenance-schema.ts	bba5fb7558ca24d1d3701dc321de46bbce351c1aa47329b642345ce73d63b182	fixed	全文核对字段校验与设置提取；比较范围仅含五项可编辑设置，排除运行状态与结果。
+frontend/src/features/account-workbench/hooks/use-maintenance-draft.ts	a04ac0bbcf1e427edf3ce545a960774652d15ffa8440398654e5ba6cf7e9c336	fixed	全文核对干净表单同步、草稿及预览保护、一次冲突通知和成功保存版本下界；不宣称覆盖尚未观察到的并发写入。
+frontend/src/features/account-workbench/__tests__/maintenance-refresh.test.tsx	b99dcd2c6da703e9071c188c8be89c69538081fa5fbf5363d341b4bf4a7b2de0	reviewed	全文核对七项真实表单回归：干净刷新、草稿冲突、状态刷新、预览冲突、读取重试、保存重试及缓存保留。
+frontend/e2e/__tests__/account-workbench-maintenance-refresh.e2e.ts	c0f0054b3ac79f13450d86e31927d94f6ca250294cbfd46c19db9ad24faab867	reviewed	全文核对隔离API、桌面浅色与手机深色、键盘载入最新设置、分组失败恢复及等待预览冲突；无生产写入。

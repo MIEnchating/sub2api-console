@@ -1,3 +1,4 @@
+import { seedDictionaries } from "@/test/dictionary-fixtures";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -97,6 +98,13 @@ function setup(
   );
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+  });
+  seedDictionaries(client, {
+    group: snapshot.groups.map((group) => ({ value: group.id, name: group.name })),
+    platform: [
+      { value: "openai", name: "OpenAI" },
+      { value: "composite", name: "composite" },
+    ],
   });
   clients.push(client);
   client.setQueryData(["pricing"], snapshot);

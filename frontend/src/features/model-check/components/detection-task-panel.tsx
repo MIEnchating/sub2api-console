@@ -16,10 +16,10 @@ export function DetectionTaskPanel(): ReactElement {
   const client = useQueryClient();
   const plans = useQuery({
     queryKey: ["model-detection-tasks"],
-    queryFn: api.detectionTasks,
+    queryFn: ({ signal }) => api.detectionTasks(signal),
     refetchInterval: 5000,
   });
-  const groups = useQuery({ queryKey: ["groups"], queryFn: api.groups });
+  const groups = useQuery({ queryKey: ["groups"], queryFn: ({ signal }) => api.groups(signal) });
   const [edit, setEdit] = useState<DetectionTask | null | undefined>(undefined);
   const [remove, setRemove] = useState<DetectionTask | null>(null);
   const [details, setDetails] = useState<string | null>(null);
@@ -30,7 +30,6 @@ export function DetectionTaskPanel(): ReactElement {
       toast.success("检测任务已转入后台，可在系统信息或运行详情查看进度");
       void client.invalidateQueries({ queryKey: ["model-detection-tasks"] });
       void client.invalidateQueries({ queryKey: ["model-animation"] });
-      void client.invalidateQueries({ queryKey: ["terminal-continuity", "history"] });
     },
     onError: (error) => notifyOperationError(error, "检测任务启动失败"),
   });
@@ -45,9 +44,7 @@ export function DetectionTaskPanel(): ReactElement {
   return (
     <div className="flex h-full min-h-0 flex-col">
       <header className="flex flex-wrap items-center justify-between gap-3 border-b p-3">
-        <p className="text-sm text-muted-foreground">
-          自由组合动画、前置和终端检测，按分组手动执行或自动检测。
-        </p>
+        <p className="text-sm text-muted-foreground">动画检测、前置检测</p>
         <Button onClick={() => setEdit(null)}>新增任务</Button>
       </header>
       <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-3" aria-label="检测任务列表">
@@ -70,7 +67,7 @@ export function DetectionTaskPanel(): ReactElement {
           <article
             key={plan.id}
             aria-label={`检测任务 ${plan.name}`}
-            className="min-w-0 overflow-hidden rounded-xl border bg-card"
+            className="min-w-0 overflow-hidden rounded-lg border bg-card"
           >
             <div className="min-w-0 space-y-3 p-4">
               <div className="flex flex-wrap items-start justify-between gap-3">
@@ -114,7 +111,10 @@ export function DetectionTaskPanel(): ReactElement {
                   : ""}
               </p>
               <div className="flex flex-wrap gap-2">
-                <Button disabled={plan.running || run.isPending} onClick={() => run.mutate(plan)}>
+                <Button
+                  disabled={plan.running || run.isPending || detectionTaskStages(plan).length === 0}
+                  onClick={() => run.mutate(plan)}
+                >
                   立即执行
                 </Button>
                 <Button variant="outline" onClick={() => setEdit(plan)}>

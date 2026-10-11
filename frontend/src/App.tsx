@@ -1,3 +1,5 @@
+import { DictionaryReadState } from "@/components/dictionary-read-state";
+import { LogCleanupAction } from "./features/config/components/log-cleanup-action";
 import { AbnormalCleanupCard } from "./features/policy/components/abnormal-cleanup-card";
 import { abnormalCleanupSchema } from "./features/policy/lib/abnormal-cleanup-schema";
 import {
@@ -13,22 +15,21 @@ import { useOnboardingPreparation } from "@/features/upstreams/hooks/use-onboard
 import { inspectionAuthRecoveryActions } from "@/features/auto-inspection/constants";
 import { ServiceSettings } from "@/features/auto-inspection/components/service-settings";
 import { InspectionQueueRound } from "@/features/auto-inspection/components/inspection-queue-round";
-import { LoginPage } from "@/features/auth/components/login-page";
-
 import { ContentLoading } from "@/components/content-loading";
 import { ContentRetry } from "@/components/content-retry";
 import { TableEmptyState } from "@/components/data-table/empty-state";
 import { FieldError } from "@/components/field-error";
 import { FormField } from "@/components/form-field";
 import { SelectionToolbar } from "@/components/data-table/selection-toolbar";
-export { FormField } from "@/components/form-field";
-import { StartupLoading } from "@/components/startup-loading";
 import { FormFieldsSkeleton } from "@/components/form-fields-skeleton";
 import { AccountLiveStatus } from "@/features/accounts/components/account-live-status";
 import { useAccountResultEvents } from "@/features/accounts/hooks/use-account-result-events";
-import { shareAccountHealthSnapshots } from "@/features/accounts/lib/account-health-snapshot";
+import { useAccountCollection } from "@/features/accounts/hooks/use-account-collection";
+import { useConfigurationResults } from "@/features/accounts/hooks/use-configuration-results";
+import { refreshAccountManualPriority } from "@/features/accounts/lib/manual-priority-refresh";
 import { GroupsPageActions } from "./features/groups/components/groups-page-actions";
 import { UpstreamsPageActions } from "./features/upstreams/components/upstreams-page-actions";
+import { UpstreamUsageSummary } from "./features/upstreams/components/upstream-usage-summary";
 import {
   PolicyCategoryNavigation,
   type PolicyCategory,
@@ -51,68 +52,42 @@ import { GroupBatchDialog } from "./features/groups/components/group-batch-dialo
 import { GroupSelectionToolbar } from "./features/groups/components/group-selection-toolbar";
 import { useGroupBatchActions } from "./features/groups/hooks/use-group-batch-actions";
 import * as React from "react";
-import { useDictionaryOrder } from "@/hooks/use-dictionary-order";
+import {
+  useDictionaryOrder,
+  useDictionary,
+  useDictionaryRecordOrder,
+  useDictionaryLabel,
+} from "@/hooks/use-dictionary-order";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useState } from "react";
-import { motion, useReducedMotion } from "motion/react";
 import {
   Activity,
   ListChecks,
-  Files,
-  PanelsTopLeft,
   Ban,
   BellRing,
-  BadgeDollarSign,
-  ChartSpline,
-  ChartNoAxesColumnIncreasing,
-  ChartNoAxesCombined,
   Check,
   CircleAlert,
-  CircleDollarSign,
   CircleHelp,
   Eye,
   ExternalLink,
-  FileSearch,
-  Fingerprint,
   FolderOpen,
   Gauge,
-  GitCompareArrows,
-  HeartPulse,
-  KeyRound,
-  Layers3,
-  Link2,
-  ListTodo,
   LoaderCircle,
-  LogOut,
-  Moon,
   MoreHorizontal,
-  Network,
   Pause,
   Pencil,
-  Play,
-  RadioTower,
   RefreshCw,
   RotateCcw,
-  Route,
   Save,
   ScanSearch,
   Search,
-  ScrollText,
-  Settings,
-  ShieldAlert,
   ShieldCheck,
   ShieldOff,
   SpellCheck2,
-  Siren,
-  SlidersHorizontal,
-  Sun,
   Trash2,
-  UserRound,
   UserPlus,
-  UsersRound,
   WalletCards,
   X,
 } from "lucide-react";
-import type { LucideIcon } from "lucide-react";
 import {
   useIsFetching,
   useIsMutating,
@@ -120,14 +95,7 @@ import {
   useQuery,
   useQueryClient,
 } from "@tanstack/react-query";
-import {
-  Link,
-  Outlet,
-  useLocation,
-  useNavigate,
-  useRouterState,
-  useSearch,
-} from "@tanstack/react-router";
+import { useNavigate, useRouterState, useSearch } from "@tanstack/react-router";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Controller, useForm } from "react-hook-form";
 import { toast } from "sonner";
@@ -150,7 +118,6 @@ import {
   type PolicyUpdatePayload,
   type RuntimeConfig,
   type RuntimeMode,
-  type SetupStatus,
   type Task,
   type UpstreamConfiguration,
   type UpstreamGroup,
@@ -244,18 +211,6 @@ import {
   TableRow,
 } from "./components/ui/table";
 import {
-  Sidebar,
-  SidebarContent,
-  SidebarGroup,
-  SidebarGroupLabel,
-  SidebarInset,
-  SidebarMenu,
-  SidebarMenuButton,
-  SidebarMenuItem,
-  SidebarProvider,
-  SidebarTrigger,
-} from "./components/ui/sidebar";
-import {
   taskIsPending,
   taskIsTerminal,
   taskPollInterval,
@@ -294,7 +249,6 @@ import {
 import { notifyOperationError } from "./lib/operation-feedback";
 import { notifyTaskResult } from "./lib/task-result-feedback";
 import { sensitiveFieldPlaceholder } from "./lib/sensitive-field";
-import { sessionExpiredEvent, sessionExpiredMessage } from "./lib/session-auth";
 import { cn } from "./lib/utils";
 import { StatusBadge } from "./components/status-badge";
 import { TableFilterToolbar } from "./components/data-table/filter-toolbar";
@@ -317,10 +271,7 @@ import { UpstreamEditDialog } from "./features/upstreams/components/upstream-edi
 import { UpstreamBoundAccountSelect } from "./features/upstreams/components/upstream-bound-account-select";
 import { OnboardingHeadingActions } from "./features/upstreams/components/onboarding-heading-actions";
 import { OnboardingMaintenanceActions } from "./features/upstreams/components/onboarding-maintenance-actions";
-import {
-  NavigationSettingsCard,
-  type NavigationSettingsSection,
-} from "./features/config/components/navigation-settings-card";
+import { NavigationSettingsCard } from "./features/config/components/navigation-settings-card";
 import { AccountCreationSettingsCard } from "./features/config/components/account-creation-settings-card";
 import { SettingsFooter } from "./features/config/components/settings-footer";
 import { ModelSyncSettingsCard } from "./features/config/components/model-sync-settings-card";
@@ -334,6 +285,7 @@ import {
   LogCleanupSettingsSkeleton,
 } from "./features/config/components/settings-loading";
 import type { ConfigTab } from "./features/config/constants";
+import { settingsQueryScope } from "./features/config/lib/settings-query-scope";
 import { OnboardingKeyCleanupDialog } from "./features/upstreams/components/onboarding-key-cleanup-dialog";
 import { OnboardingGroupBindingSelect } from "./features/upstreams/components/onboarding-group-binding-select";
 import { OnboardingCandidateVisibilityFilter } from "./features/upstreams/components/onboarding-candidate-visibility-filter";
@@ -418,7 +370,6 @@ import { sortAccounts, type AccountSort } from "./features/accounts/lib/account-
 import {
   accountMatchesPlatform,
   accountPlatformLabel,
-  concreteAccountPlatformOptions,
   groupPlatformSummary,
 } from "./features/accounts/lib/account-labels";
 import {
@@ -434,9 +385,6 @@ import {
   vaultEntriesForHost,
   vaultEntryLabel,
 } from "./lib/vault-entry-label";
-import { visibleNavigationSections } from "./lib/navigation-preferences";
-import { useNavigationPreferences } from "./hooks/use-navigation-preferences";
-import { browserPreferenceStorage } from "./lib/browser-preferences";
 import {
   adjacentOnboardingUpstreams,
   canSubmitOnboarding,
@@ -466,1025 +414,25 @@ import {
   rechargeRatioLabel,
   sameOnboardingGroupSelection,
 } from "./lib/onboarding-entry";
-import { AppShellContext } from "./app-shell-context";
+import { formatDate } from "./lib/date-format";
+import {
+  emptyHiddenNavigationItemIDs,
+  lockedNavigationItemIDs,
+  navigationSettingsSections,
+} from "./app-shell";
+import type { View } from "./app-shell";
+export {
+  navItems,
+  viewForPath,
+  SchedulerHeaderControls,
+  SchedulerSidebarStatus,
+} from "./app-shell";
 
-export type View =
-  | "overview"
-  | "accounts"
-  | "account-workbench"
-  | "upstreams"
-  | "groups"
-  | "uptime-kuma-templates"
-  | "uptime-kuma-status-pages"
-  | "uptime-kuma-config"
-  | "uptime-kuma"
-  | "newapi"
-  | "newapi-groups"
-  | "newapi-channels"
-  | "newapi-prices"
-  | "newapi-differences"
-  | "pricing"
-  | "revenue-analysis"
-  | "pricing-config"
-  | "auto-inspection"
-  | "model-check"
-  | "animation-check"
-  | "traffic"
-  | "logs"
-  | "alerts"
-  | "alert-policy"
-  | "onboarding"
-  | "trace"
-  | "vault"
-  | "system-info"
-  | "profile"
-  | "config"
-  | "policy";
-
-export const navItems: Array<{
-  id: View;
-  label: string;
-  icon: LucideIcon;
-  to:
-    | "/"
-    | "/accounts"
-    | "/account-workbench"
-    | "/upstreams"
-    | "/groups"
-    | "/uptime-kuma/templates"
-    | "/uptime-kuma/status-pages"
-    | "/uptime-kuma/config"
-    | "/uptime-kuma"
-    | "/newapi"
-    | "/newapi/groups"
-    | "/newapi/channels"
-    | "/newapi/prices"
-    | "/newapi/differences"
-    | "/pricing"
-    | "/revenue-analysis"
-    | "/pricing-config"
-    | "/auto-inspection"
-    | "/model-check"
-    | "/animation-check"
-    | "/traffic"
-    | "/logs"
-    | "/alerts"
-    | "/alert-policy"
-    | "/onboarding"
-    | "/trace"
-    | "/vault"
-    | "/system-info"
-    | "/profile"
-    | "/config"
-    | "/policy";
-}> = [
-  { id: "overview", label: "运营总览", icon: ChartSpline, to: "/" },
-  { id: "upstreams", label: "上游管理", icon: Network, to: "/upstreams" },
-  { id: "groups", label: "分组管理", icon: Layers3, to: "/groups" },
-  { id: "pricing", label: "价格管理", icon: CircleDollarSign, to: "/pricing" },
-  {
-    id: "revenue-analysis",
-    label: "收益分析",
-    icon: ChartNoAxesCombined,
-    to: "/revenue-analysis",
-  },
-  { id: "accounts", label: "账号管理", icon: UsersRound, to: "/accounts" },
-  { id: "account-workbench", label: "账号工作台", icon: UserPlus, to: "/account-workbench" },
-  {
-    id: "auto-inspection",
-    label: "自动巡检",
-    icon: HeartPulse,
-    to: "/auto-inspection",
-  },
-  {
-    id: "model-check",
-    label: "模型检测",
-    icon: Fingerprint,
-    to: "/model-check",
-  },
-  { id: "animation-check", label: "动画检测", icon: ScanSearch, to: "/animation-check" },
-  {
-    id: "traffic",
-    label: "流量排行",
-    icon: ChartNoAxesColumnIncreasing,
-    to: "/traffic",
-  },
-  { id: "trace", label: "请求查询", icon: FileSearch, to: "/trace" },
-  { id: "alerts", label: "告警通知", icon: Siren, to: "/alerts" },
-  { id: "newapi-groups", label: "分组绑定", icon: Link2, to: "/newapi/groups" },
-  { id: "newapi-channels", label: "渠道管理", icon: RadioTower, to: "/newapi/channels" },
-  { id: "newapi-prices", label: "模型价格", icon: BadgeDollarSign, to: "/newapi/prices" },
-  {
-    id: "newapi-differences",
-    label: "价格比对",
-    icon: GitCompareArrows,
-    to: "/newapi/differences",
-  },
-  { id: "uptime-kuma", label: "监控管理", icon: Activity, to: "/uptime-kuma" },
-  {
-    id: "uptime-kuma-templates",
-    label: "功能模板",
-    icon: Files,
-    to: "/uptime-kuma/templates",
-  },
-  {
-    id: "uptime-kuma-status-pages",
-    label: "状态页管理",
-    icon: PanelsTopLeft,
-    to: "/uptime-kuma/status-pages",
-  },
-  {
-    id: "pricing-config",
-    label: "价格配置",
-    icon: SlidersHorizontal,
-    to: "/pricing-config",
-  },
-  {
-    id: "policy",
-    label: "调度策略",
-    icon: Route,
-    to: "/policy",
-  },
-  {
-    id: "alert-policy",
-    label: "告警策略",
-    icon: ShieldAlert,
-    to: "/alert-policy",
-  },
-  { id: "system-info", label: "系统信息", icon: ListTodo, to: "/system-info" },
-  { id: "vault", label: "密码箱", icon: KeyRound, to: "/vault" },
-  { id: "logs", label: "日志中心", icon: ScrollText, to: "/logs" },
-  { id: "config", label: "系统设置", icon: Settings, to: "/config" },
-];
-
-export const navSections: Array<{ label: string; itemIDs: View[] }> = [
-  {
-    label: "运营管理",
-    itemIDs: [
-      "overview",
-      "upstreams",
-      "groups",
-      "pricing",
-      "revenue-analysis",
-      "accounts",
-      "account-workbench",
-      "auto-inspection",
-      "model-check",
-      "animation-check",
-      "traffic",
-      "trace",
-      "alerts",
-    ],
-  },
-  {
-    label: "New API",
-    itemIDs: ["newapi-groups", "newapi-channels", "newapi-prices", "newapi-differences"],
-  },
-  {
-    label: "Uptime Kuma",
-    itemIDs: ["uptime-kuma", "uptime-kuma-templates", "uptime-kuma-status-pages"],
-  },
-  { label: "策略配置", itemIDs: ["pricing-config", "policy", "alert-policy"] },
-  { label: "系统管理", itemIDs: ["system-info", "vault", "logs", "config"] },
-];
-
-const navigationItemIDs = navItems.map((item) => item.id);
-const lockedNavigationItemIDs = new Set<View>(["config"]);
-const emptyHiddenNavigationItemIDs = new Set<View>();
-const navigationSettingsSections: Array<NavigationSettingsSection<View>> = navSections.map(
-  (section) => ({
-    label: section.label,
-    items: section.itemIDs.flatMap((itemID) => {
-      const item = navItems.find((candidate) => candidate.id === itemID);
-      return item ? [{ id: item.id, label: item.label, path: item.to }] : [];
-    }),
-  }),
-);
-
-const viewByPath: Record<string, View> = {
-  "/": "overview",
-  "/accounts": "accounts",
-  "/account-workbench": "account-workbench",
-  "/upstreams": "upstreams",
-  "/groups": "groups",
-  "/uptime-kuma/config": "config",
-  "/uptime-kuma/templates": "uptime-kuma-templates",
-  "/uptime-kuma/status-pages": "uptime-kuma-status-pages",
-  "/uptime-kuma": "uptime-kuma",
-  "/newapi": "config",
-  "/newapi/groups": "newapi-groups",
-  "/newapi/channels": "newapi-channels",
-  "/newapi/prices": "newapi-prices",
-  "/newapi/differences": "newapi-differences",
-  "/pricing": "pricing",
-  "/revenue-analysis": "revenue-analysis",
-  "/pricing-config": "pricing-config",
-  "/auto-inspection": "auto-inspection",
-  "/model-check": "model-check",
-  "/animation-check": "animation-check",
-  "/traffic": "traffic",
-  "/logs": "logs",
-  "/alerts": "alerts",
-  "/alert-policy": "alert-policy",
-  "/onboarding": "onboarding",
-  "/trace": "trace",
-  "/vault": "vault",
-  "/system-info": "system-info",
-  "/profile": "profile",
-  "/config": "config",
-  "/policy": "policy",
-};
-
-export function viewForPath(pathname: string): View {
-  return viewByPath[pathname.replace(/\/+$/, "") || "/"] ?? "overview";
-}
-
-function App() {
-  const queryClient = useQueryClient();
-  const [loginReason, setLoginReason] = useState<string | null>(null);
-  const [theme, setTheme] = useState<"dark" | "light">(() => {
-    if (typeof window === "undefined") return "dark";
-    return browserPreferenceStorage.getItem("sub2api-console-theme") === "light" ? "light" : "dark";
-  });
-  const location = useLocation();
-  const navigate = useNavigate();
-  const shouldReduceMotion = useReducedMotion();
-  const clearSession = useCallback((): void => {
-    void queryClient.cancelQueries();
-    queryClient.removeQueries({
-      predicate: (query) => !["setup-status", "session"].includes(String(query.queryKey[0])),
-    });
-    queryClient.getMutationCache().clear();
-    queryClient.setQueryData(["session"], { authenticated: false, username: null });
-  }, [queryClient]);
-  useEffect(() => {
-    document.documentElement.dataset.theme = theme;
-    document.documentElement.classList.toggle("dark", theme === "dark");
-    document.documentElement.style.colorScheme = theme;
-    browserPreferenceStorage.setItem("sub2api-console-theme", theme);
-  }, [theme]);
-  useEffect(() => {
-    const handleSessionExpired = () => {
-      clearSession();
-      setLoginReason(sessionExpiredMessage);
-    };
-    window.addEventListener(sessionExpiredEvent, handleSessionExpired);
-    return () => window.removeEventListener(sessionExpiredEvent, handleSessionExpired);
-  }, [clearSession]);
-  const setup = useQuery({
-    queryKey: ["setup-status"],
-    queryFn: api.setupStatus,
-    retry: false,
-  });
-  const session = useQuery({
-    queryKey: ["session"],
-    queryFn: api.session,
-    enabled: setup.data?.initialized === true,
-    retry: false,
-  });
-  const shellContext = useNavigationPreferences(
-    session.data?.authenticated === true,
-    navigationItemIDs,
-    lockedNavigationItemIDs,
-  );
-  const hiddenNavigationItemIDs = shellContext.hiddenNavigationItemIDs;
-  const overview = useQuery({
-    queryKey: ["overview"],
-    queryFn: api.overview,
-    enabled: session.data?.authenticated === true,
-    refetchInterval: 30_000,
-  });
-  useAutoInspectionEvents(session.data?.authenticated === true);
-
-  if (setup.isLoading) return <StartupLoading label="正在读取初始化状态…" />;
-  if (setup.error)
-    return (
-      <>
-        <QueryErrorToast error={setup.error} fallback="控制台 API 不可用" />
-        <StartupState text="Sub2API Console" onRetry={() => void setup.refetch()} />
-      </>
-    );
-  if (setup.data?.configuration_errors?.length)
-    return (
-      <StartupState text={`初始化配置无效：${setup.data.configuration_errors.join("、")}`} error />
-    );
-  if (!setup.data?.initialized)
-    return (
-      <SetupPage
-        status={setup.data}
-        onComplete={() => {
-          void setup.refetch();
-          void session.refetch();
-        }}
-      />
-    );
-  if (session.isLoading) return <StartupLoading label="正在验证登录状态…" />;
-  if (session.error)
-    return (
-      <>
-        <QueryErrorToast error={session.error} fallback="登录状态读取失败" />
-        <StartupState text="Sub2API Console" onRetry={() => void session.refetch()} />
-      </>
-    );
-  if (!session.data?.authenticated)
-    return (
-      <LoginPage
-        reason={loginReason}
-        theme={theme}
-        onThemeChange={() => setTheme(theme === "dark" ? "light" : "dark")}
-        onLogin={() => {
-          setLoginReason(null);
-          void session.refetch();
-        }}
-      />
-    );
-
-  const activeView = viewForPath(location.pathname);
-  const displayedNavigationSections = visibleNavigationSections(
-    navSections,
-    hiddenNavigationItemIDs,
-  );
-  let openAlertsLabel: number | string | undefined = overview.data?.open_alerts;
-  if (overview.isError) openAlertsLabel = "错误";
-  else if (overview.isLoading) openAlertsLabel = "…";
-  return (
-    <>
-      <SidebarProvider className="h-svh max-h-svh flex-col overflow-clip" defaultOpen>
-        <header className="sticky top-0 z-40 h-[var(--app-header-height)] w-full shrink-0 bg-transparent">
-          <div className="flex h-full items-center gap-1 px-2 sm:gap-2 sm:px-3">
-            <SidebarTrigger variant="ghost" className="size-8" />
-            <Link
-              to="/"
-              aria-label="Sub2API"
-              className="text-foreground inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md px-1.5 text-sm font-medium transition-colors hover:bg-accent"
-            >
-              <img
-                src="/console-mark.svg"
-                width={20}
-                height={20}
-                alt=""
-                className="size-5 shrink-0"
-              />
-              <span className="hidden sm:inline">Sub2API</span>
-            </Link>
-            <div className="ml-auto flex min-w-0 items-center overflow-x-auto sm:gap-2">
-              <SchedulerHeaderControls />
-              <Button
-                variant="ghost"
-                size="icon"
-                className="gap-1.5 sm:w-auto sm:px-2.5"
-                aria-label={`告警：${openAlertsLabel ?? 0}`}
-                onClick={() => void navigate({ to: "/alerts" })}
-              >
-                <BellRing size={15} />
-                <span className="hidden sm:inline">告警</span>
-                <Badge variant="destructive" className="hidden sm:inline-flex">
-                  {openAlertsLabel}
-                </Badge>
-              </Button>
-              <Tooltip>
-                <TooltipTrigger
-                  render={
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      aria-label={theme === "dark" ? "切换亮色主题" : "切换暗色主题"}
-                      onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
-                    />
-                  }
-                >
-                  {theme === "dark" ? <Sun size={16} /> : <Moon size={16} />}
-                </TooltipTrigger>
-                <TooltipContent>
-                  {theme === "dark" ? "切换亮色主题" : "切换暗色主题"}
-                </TooltipContent>
-              </Tooltip>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="gap-1.5 sm:w-auto sm:max-w-44 sm:px-2.5"
-                aria-label="个人资料"
-                onClick={() => void navigate({ to: "/profile" })}
-              >
-                <UserRound size={15} />
-                <span className="hidden truncate sm:inline">{session.data?.username}</span>
-              </Button>
-              <Tooltip>
-                <TooltipTrigger
-                  render={
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      aria-label="退出登录"
-                      onClick={async () => {
-                        try {
-                          await api.logout();
-                          clearSession();
-                          setLoginReason(null);
-                        } catch (error) {
-                          notifyOperationError(error, "退出登录失败");
-                        }
-                      }}
-                    />
-                  }
-                >
-                  <LogOut size={16} />
-                </TooltipTrigger>
-                <TooltipContent>退出登录</TooltipContent>
-              </Tooltip>
-            </div>
-          </div>
-        </header>
-        <div className="flex min-h-0 w-full flex-1">
-          <ConsoleSidebar activeView={activeView} sections={displayedNavigationSections} />
-          <SidebarInset className="@container/content h-[calc(100svh-var(--app-header-height,0px))] min-h-0 overflow-hidden peer-data-[variant=inset]:h-[calc(100svh-var(--app-header-height,0px)-(var(--spacing)*4))]">
-            <motion.div
-              key={activeView}
-              initial={shouldReduceMotion ? false : { opacity: 0, y: 8, filter: "blur(4px)" }}
-              animate={{ opacity: 1, y: 0, filter: "blur(0px)" }}
-              transition={{ duration: 0.15, ease: [0.33, 1, 0.68, 1] }}
-              className="console-page flex min-h-0 w-full min-w-0 flex-1 flex-col overflow-hidden"
-            >
-              <AppShellContext.Provider value={shellContext}>
-                <Outlet />
-              </AppShellContext.Provider>
-            </motion.div>
-          </SidebarInset>
-        </div>
-      </SidebarProvider>
-    </>
-  );
-}
-
-function ConsoleSidebar(props: {
-  activeView: View;
-  sections: Array<{ label: string; itemIDs: View[] }>;
-}) {
-  return (
-    <Sidebar variant="inset" collapsible="icon">
-      <SidebarContent className="py-2">
-        {props.sections.map((section) => (
-          <SidebarGroup key={section.label} className="px-2 py-1">
-            <SidebarGroupLabel className="text-muted-foreground/70 px-2 text-[11px] font-medium tracking-wider uppercase">
-              {section.label}
-            </SidebarGroupLabel>
-            <SidebarMenu>
-              {section.itemIDs.map((itemID) => {
-                const item = navItems.find((candidate) => candidate.id === itemID);
-                if (!item) return null;
-                const Icon = item.icon;
-                return (
-                  <SidebarMenuItem key={item.id}>
-                    <SidebarMenuButton
-                      isActive={props.activeView === item.id}
-                      tooltip={item.label}
-                      render={<Link to={item.to} />}
-                    >
-                      <Icon />
-                      <span>{item.label}</span>
-                    </SidebarMenuButton>
-                  </SidebarMenuItem>
-                );
-              })}
-            </SidebarMenu>
-          </SidebarGroup>
-        ))}
-      </SidebarContent>
-      <SchedulerSidebarStatus />
-    </Sidebar>
-  );
-}
-
-function useAutoInspectionEvents(enabled: boolean): boolean {
-  const queryClient = useQueryClient();
-  const [connected, setConnected] = useState(false);
-  useEffect(() => {
-    if (!enabled || typeof EventSource === "undefined") {
-      setConnected(false);
-      return;
-    }
-    const source = new EventSource(api.autoInspectionEventsURL(), {
-      withCredentials: true,
-    });
-    source.onopen = () => setConnected(true);
-    source.onerror = () => setConnected(false);
-    const updateStatus = (event: MessageEvent<string>) => {
-      try {
-        queryClient.setQueryData<AutoInspectionStatus>(["auto-inspection"], JSON.parse(event.data));
-        setConnected(true);
-      } catch {
-        // The polling fallback below recovers malformed or interrupted event streams.
-      }
-    };
-    source.addEventListener("status", updateStatus as EventListener);
-    return () => {
-      source.close();
-      setConnected(false);
-    };
-  }, [enabled, queryClient]);
-  return connected;
-}
-
-export function SchedulerHeaderControls() {
-  const queryClient = useQueryClient();
-  const status = useQuery({
-    queryKey: ["auto-inspection"],
-    queryFn: api.autoInspection,
-    refetchInterval: 15_000,
-  });
-  const [syncTaskId, setSyncTaskId] = useState<string | null>(null);
-  const [runTaskId, setRunTaskId] = useState<string | null>(null);
-  const sync = useMutation({
-    mutationFn: api.syncManagement,
-    onSuccess: (task) => {
-      setSyncTaskId(task.id);
-      toast.success("账号与分组同步已开始");
-    },
-    onError: (error) => notifyOperationError(error, "同步启动失败"),
-  });
-  const run = useMutation({
-    mutationFn: () => api.runInspection(),
-    onSuccess: (task) => {
-      setRunTaskId(task.id);
-      void status.refetch();
-    },
-    onError: (error) => notifyOperationError(error, "巡检启动失败"),
-  });
-  const toggle = useMutation({
-    mutationFn: async () => {
-      if (status.data?.enabled) {
-        return (await api.cancelAutoInspection()).status;
-      }
-      return api.resumeAutoInspection();
-    },
-    onSuccess: (value) => {
-      queryClient.setQueryData(["auto-inspection"], value);
-      toast.success(value.enabled ? "自动巡检已启动" : "自动巡检已停止");
-    },
-    onError: (error) => notifyOperationError(error, "调度状态更新失败"),
-  });
-  const syncTask = useQuery({
-    queryKey: ["header-management-sync", syncTaskId],
-    queryFn: () => api.task(syncTaskId!),
-    enabled: Boolean(syncTaskId),
-    refetchInterval: taskPollInterval,
-  });
-  const runTask = useQuery({
-    queryKey: ["header-inspection", runTaskId],
-    queryFn: () => api.task(runTaskId!),
-    enabled: Boolean(runTaskId),
-    refetchInterval: taskPollInterval,
-  });
-  useEffect(() => {
-    for (const key of terminalRefreshKeys("management-sync", syncTask.data)) {
-      void queryClient.invalidateQueries({ queryKey: key });
-    }
-  }, [queryClient, syncTask.data]);
-  useEffect(() => {
-    for (const key of terminalRefreshKeys("inspection", runTask.data)) {
-      void queryClient.invalidateQueries({ queryKey: key });
-    }
-    if (
-      runTask.data &&
-      ["succeeded", "partial", "failed", "cancelled"].includes(runTask.data.status)
-    ) {
-      void queryClient.invalidateQueries({ queryKey: ["auto-inspection"] });
-    }
-  }, [queryClient, runTask.data]);
-  const syncing = sync.isPending || taskIsPending(syncTaskId, syncTask);
-  const executing =
-    run.isPending || taskIsPending(runTaskId, runTask) || status.data?.running === true;
-  const schedulingEnabled = status.data?.enabled === true;
-  let runtimeLabel = "等待首次调度";
-  if (status.data?.running) runtimeLabel = "调度中";
-  else if (status.data?.last_run_at)
-    runtimeLabel = `上次 ${formatRelativeRun(status.data.last_run_at)}`;
-  let toggleLabel = "启动调度";
-  if (toggle.isPending) toggleLabel = "处理中";
-  else if (schedulingEnabled) toggleLabel = "取消调度";
-  let statusDotClassName = "bg-muted-foreground/60";
-  if (status.isError) statusDotClassName = "bg-destructive";
-  else if (status.isLoading) statusDotClassName = "animate-pulse bg-muted-foreground";
-  else if (status.data?.running) statusDotClassName = "animate-pulse bg-amber-500";
-  else if (status.data?.enabled) statusDotClassName = "bg-emerald-500";
-  let statusLabel = runtimeLabel;
-  if (status.isError) statusLabel = "状态读取失败";
-  else if (status.isLoading) statusLabel = "读取状态";
-  let statusDescription = "尚未执行巡检";
-  if (status.isError) statusDescription = "自动巡检状态接口暂时不可用";
-  else if (status.data?.last_run_at) {
-    statusDescription = `上次执行：${formatDate(status.data.last_run_at, true)}`;
-  }
-  return (
-    <div className="flex items-center gap-1" data-testid="scheduler-header-controls">
-      {syncTaskId && taskIsPending(syncTaskId, syncTask) ? (
-        <TaskCancelButton taskId={syncTaskId} compact />
-      ) : null}
-      {runTaskId && taskIsPending(runTaskId, runTask) ? (
-        <TaskCancelButton taskId={runTaskId} compact />
-      ) : null}
-      <Tooltip>
-        <TooltipTrigger
-          render={
-            <span
-              className="bg-muted text-muted-foreground hidden h-7 items-center gap-1.5 rounded-md px-2 text-xs lg:inline-flex"
-              tabIndex={0}
-            />
-          }
-        >
-          <span className={cn("size-1.5 rounded-full", statusDotClassName)} />
-          {statusLabel}
-        </TooltipTrigger>
-        <TooltipContent>{statusDescription}</TooltipContent>
-      </Tooltip>
-      <Tooltip>
-        <TooltipTrigger render={<span className="inline-flex" />}>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="gap-1.5 xl:w-auto xl:px-2.5"
-            disabled={syncing}
-            aria-label={syncing ? "正在同步账号与分组" : "同步账号与分组"}
-            onClick={() => sync.mutate()}
-          >
-            <RefreshCw size={15} className={syncing ? "animate-spin" : undefined} />
-            <span className="hidden xl:inline">{syncing ? "同步中" : "同步"}</span>
-          </Button>
-        </TooltipTrigger>
-        <TooltipContent>同步 Sub2API 账号与分组目录</TooltipContent>
-      </Tooltip>
-      <Tooltip>
-        <TooltipTrigger render={<span className="inline-flex" />}>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="gap-1.5 xl:w-auto xl:px-2.5"
-            disabled={executing}
-            aria-label={executing ? "巡检执行中" : "立即检查一轮到期任务"}
-            onClick={() => run.mutate()}
-          >
-            <Play size={15} />
-            <span className="hidden xl:inline">{executing ? "执行中" : "跑一轮"}</span>
-          </Button>
-        </TooltipTrigger>
-        <TooltipContent>立即按当前策略检查一次，只执行已到期任务</TooltipContent>
-      </Tooltip>
-      <Tooltip>
-        <TooltipTrigger render={<span className="inline-flex" />}>
-          <Button
-            variant={schedulingEnabled ? "destructive" : "default"}
-            size="icon"
-            className="gap-1.5 2xl:w-auto 2xl:px-2.5"
-            disabled={!status.data || toggle.isPending}
-            aria-label={schedulingEnabled ? "取消自动调度" : "启动自动调度"}
-            onClick={() => toggle.mutate()}
-          >
-            {schedulingEnabled ? <Pause size={15} /> : <Play size={15} />}
-            <span className="hidden 2xl:inline">{toggleLabel}</span>
-          </Button>
-        </TooltipTrigger>
-        <TooltipContent>
-          {schedulingEnabled ? "中断当前巡检并停止后续自动调度" : "启动自动巡检"}
-        </TooltipContent>
-      </Tooltip>
-    </div>
-  );
-}
-
-function formatRelativeRun(value: string): string {
-  const elapsed = Math.max(0, Math.floor((Date.now() - new Date(value).getTime()) / 1_000));
-  if (elapsed < 60) return `${elapsed}秒前`;
-  if (elapsed < 3_600) return `${Math.floor(elapsed / 60)}分钟前`;
-  if (elapsed < 86_400) return `${Math.floor(elapsed / 3_600)}小时前`;
-  return `${Math.floor(elapsed / 86_400)}天前`;
-}
-
-function trafficCollectionState(value?: AutoInspectionStatus, failed = false) {
-  if (failed) {
-    return {
-      label: "真实流量状态读取失败",
-      shortLabel: "读取失败",
-      tone: "danger" as const,
-    };
-  }
-  if (!value) {
-    return {
-      label: "真实流量状态读取中",
-      shortLabel: "读取中",
-      tone: "neutral" as const,
-    };
-  }
-  if (!value.monitoring_configured) {
-    return {
-      label: "真实流量采集已关闭",
-      shortLabel: "采集已关闭",
-      tone: "neutral" as const,
-    };
-  }
-  if (!value.monitoring_checked_at) {
-    return {
-      label: "真实流量随巡检同步",
-      shortLabel: "随巡检同步",
-      tone: "info" as const,
-    };
-  }
-  if (value.monitoring_enabled) {
-    return {
-      label: "真实流量同步正常",
-      shortLabel: "同步正常",
-      tone: "success" as const,
-    };
-  }
-  return {
-    label: "本轮未获取真实流量",
-    shortLabel: "本轮无样本",
-    tone: "warning" as const,
-  };
-}
-
-function trafficStateDot(tone: ReturnType<typeof trafficCollectionState>["tone"]): string {
-  if (tone === "danger") return "bg-destructive";
-  if (tone === "success") return "bg-emerald-500";
-  if (tone === "warning") return "bg-amber-500";
-  if (tone === "info") return "bg-sky-500";
-  return "bg-muted-foreground/50";
-}
-
-export function SchedulerSidebarStatus() {
-  const status = useQuery({
-    queryKey: ["auto-inspection"],
-    queryFn: api.autoInspection,
-    refetchInterval: 15_000,
-  });
-  const trafficState = trafficCollectionState(status.data, status.isError);
-  let inspectionDotClassName = "bg-muted-foreground/50";
-  let inspectionLabel = "自动巡检已暂停";
-  if (status.isError) {
-    inspectionDotClassName = "bg-destructive";
-    inspectionLabel = "自动巡检状态读取失败";
-  } else if (status.data?.enabled) {
-    inspectionDotClassName = "bg-emerald-500";
-    inspectionLabel = "自动巡检中";
-  }
-  return (
-    <div
-      className="border-sidebar-border mt-auto min-w-0 space-y-2 overflow-hidden border-t px-4 py-3 group-data-[collapsible=icon]:hidden"
-      data-testid="scheduler-sidebar-status"
-    >
-      <div className="flex h-4 min-w-0 items-center gap-2 overflow-hidden text-xs whitespace-nowrap">
-        <span className={cn("size-2 shrink-0 rounded-full", inspectionDotClassName)} />
-        <span className="min-w-0 truncate">{inspectionLabel}</span>
-      </div>
-      <div className="flex h-4 min-w-0 items-center gap-2 overflow-hidden text-xs whitespace-nowrap">
-        <span className={cn("size-2 shrink-0 rounded-full", trafficStateDot(trafficState.tone))} />
-        <span className="min-w-0 truncate">{trafficState.label}</span>
-      </div>
-    </div>
-  );
-}
-
-function StartupState(props: { text: string; error?: boolean; onRetry?: () => void }) {
-  return (
-    <div className="bg-background text-foreground grid min-h-svh place-items-center p-6">
-      <Card className={cn("w-full max-w-md p-6", props.error && "border-destructive")}>
-        <div className="flex items-center gap-3">
-          <img src="/console-mark.svg" width={36} height={36} alt="" className="size-9 shrink-0" />
-          <div>
-            <strong className="block text-sm">{props.text}</strong>
-            {props.onRetry ? (
-              <Button className="mt-3" variant="outline" onClick={props.onRetry}>
-                重新连接
-              </Button>
-            ) : (
-              <span className="text-muted-foreground mt-1 block text-xs">
-                {props.error ? "请检查 API 地址和服务状态。" : "Sub2API Console"}
-              </span>
-            )}
-          </div>
-        </div>
-      </Card>
-    </div>
-  );
-}
-
-function createSetupSchema(setupTokenRequired: boolean) {
-  return z
-    .object({
-      local_export_only: z.boolean(),
-      username: z.string().min(2, "账号至少 2 个字符"),
-      password: z.string().min(10, "密码至少 10 个字符"),
-      confirm_password: z.string().min(1, "请再次输入密码"),
-      admin_base_url: z.union([z.literal(""), z.string().url("请输入完整的 http/https 地址")]),
-      admin_key: z.string(),
-      setup_token: setupTokenRequired ? z.string().min(1, "请输入初始化令牌") : z.string(),
-    })
-    .refine((value) => value.password === value.confirm_password, {
-      path: ["confirm_password"],
-      message: "两次输入的密码不一致",
-    })
-    .refine(
-      (value) =>
-        value.local_export_only ||
-        (value.admin_base_url === "" && value.admin_key === "") ||
-        (value.admin_base_url !== "" && value.admin_key !== ""),
-      {
-        path: ["admin_base_url"],
-        message: "Admin Base URL 和 Admin Key 必须同时填写",
-      },
-    );
-}
-type SetupForm = z.infer<ReturnType<typeof createSetupSchema>>;
-
-export function SetupPage(props: { status?: SetupStatus; onComplete: () => void }) {
-  const fieldID = React.useId();
-  const setupTokenRequired = props.status?.setup_token_required === true;
-  const form = useForm<SetupForm>({
-    resolver: zodResolver(createSetupSchema(setupTokenRequired)),
-    defaultValues: {
-      local_export_only: false,
-      username: "",
-      password: "",
-      confirm_password: "",
-      admin_base_url: "",
-      admin_key: "",
-      setup_token: "",
-    },
-  });
-  const submit = form.handleSubmit(async (values) => {
-    try {
-      await api.initialize(
-        {
-          username: values.username,
-          password: values.password,
-          local_export_only: values.local_export_only,
-          admin_base_url:
-            props.status?.target_configured || values.local_export_only
-              ? ""
-              : values.admin_base_url,
-          admin_key:
-            props.status?.target_configured || values.local_export_only ? "" : values.admin_key,
-        },
-        setupTokenRequired ? values.setup_token : undefined,
-      );
-      props.onComplete();
-    } catch (reason) {
-      notifyOperationError(reason, "初始化失败");
-    }
-  });
-  return (
-    <div className="bg-background text-foreground grid min-h-svh place-items-center p-6">
-      <Card className="w-full max-w-md">
-        <CardHeader>
-          <div className="flex items-start gap-3">
-            <img
-              src="/console-mark.svg"
-              width={36}
-              height={36}
-              alt=""
-              className="size-9 shrink-0"
-            />
-            <div>
-              <div className="text-muted-foreground text-[11px] font-medium tracking-wider uppercase">
-                FIRST RUN / SETUP
-              </div>
-              <CardTitle className="mt-1">初始化控制台</CardTitle>
-              <p className="text-muted-foreground mt-2 text-sm">
-                {props.status?.target_configured
-                  ? "管理目标已存在，只需设置控制台登录账号。"
-                  : "设置登录账号，并连接 Sub2API 管理端。"}
-              </p>
-            </div>
-          </div>
-        </CardHeader>
-        <CardContent>
-          <form className="grid gap-4" onSubmit={submit}>
-            <FormField
-              label="控制台账号"
-              htmlFor={`${fieldID}-username`}
-              error={form.formState.errors.username?.message}
-            >
-              <Input
-                id={`${fieldID}-username`}
-                autoComplete="username"
-                aria-invalid={Boolean(form.formState.errors.username)}
-                {...form.register("username")}
-                placeholder="例如 operator"
-              />
-            </FormField>
-            <FormField
-              label="控制台密码"
-              htmlFor={`${fieldID}-password`}
-              error={form.formState.errors.password?.message}
-            >
-              <Input
-                id={`${fieldID}-password`}
-                type="password"
-                autoComplete="new-password"
-                aria-invalid={Boolean(form.formState.errors.password)}
-                {...form.register("password")}
-                placeholder="至少 10 个字符"
-              />
-            </FormField>
-            <FormField
-              label="确认控制台密码"
-              htmlFor={`${fieldID}-confirm-password`}
-              error={form.formState.errors.confirm_password?.message}
-            >
-              <Input
-                id={`${fieldID}-confirm-password`}
-                type="password"
-                autoComplete="new-password"
-                aria-invalid={Boolean(form.formState.errors.confirm_password)}
-                {...form.register("confirm_password")}
-              />
-            </FormField>
-            {setupTokenRequired ? (
-              <FormField
-                label="初始化令牌"
-                htmlFor={`${fieldID}-setup-token`}
-                error={form.formState.errors.setup_token?.message}
-              >
-                <Input
-                  id={`${fieldID}-setup-token`}
-                  type="password"
-                  autoComplete="off"
-                  required
-                  aria-label="初始化令牌"
-                  aria-invalid={Boolean(form.formState.errors.setup_token)}
-                  {...form.register("setup_token")}
-                />
-              </FormField>
-            ) : null}
-            {!props.status?.target_configured && (
-              <>
-                <label className="flex items-start gap-2 text-sm">
-                  <Checkbox
-                    checked={form.watch("local_export_only")}
-                    disabled={form.formState.isSubmitting}
-                    onCheckedChange={(value) => {
-                      const local = value === true;
-                      form.setValue("local_export_only", local);
-                      if (local) {
-                        form.setValue("admin_base_url", "");
-                        form.setValue("admin_key", "");
-                        form.clearErrors(["admin_base_url", "admin_key"]);
-                      }
-                    }}
-                  />
-                  仅使用本地账号工作台（不配置线上管理目标）
-                </label>
-                {!form.watch("local_export_only") && (
-                  <>
-                    <FormField
-                      label="Admin Base URL"
-                      htmlFor={`${fieldID}-admin-base-url`}
-                      error={form.formState.errors.admin_base_url?.message}
-                    >
-                      <Input
-                        id={`${fieldID}-admin-base-url`}
-                        type="url"
-                        aria-invalid={Boolean(form.formState.errors.admin_base_url)}
-                        {...form.register("admin_base_url")}
-                        placeholder="https://sub2api.example.com"
-                      />
-                    </FormField>
-                    <FormField
-                      label="Admin Key"
-                      htmlFor={`${fieldID}-admin-key`}
-                      error={form.formState.errors.admin_key?.message}
-                    >
-                      <Input
-                        id={`${fieldID}-admin-key`}
-                        type="password"
-                        autoComplete="off"
-                        aria-invalid={Boolean(form.formState.errors.admin_key)}
-                        {...form.register("admin_key")}
-                        placeholder="只提交到后端，不会回显"
-                      />
-                    </FormField>
-                  </>
-                )}
-              </>
-            )}
-            <Button type="submit" disabled={form.formState.isSubmitting}>
-              <ShieldCheck size={16} />
-              {form.formState.isSubmitting ? "正在初始化…" : "完成初始化"}
-            </Button>
-          </form>
-          <div className="border-border text-muted-foreground mt-5 flex items-start gap-2 border-t pt-4 text-xs leading-relaxed">
-            <ShieldCheck size={15} className="text-primary shrink-0" />
-            {props.status?.target_configured
-              ? "管理目标已保存在 Console 私有配置库，Admin Key 不会重新要求输入。"
-              : "Admin Key 仅保存在后端本地配置库，页面不会读取或显示它。"}
-          </div>
-        </CardContent>
-      </Card>
-    </div>
-  );
-}
-
-function searchable(values: Array<string | number | null | undefined>, query: string) {
-  const normalizedQuery = query.trim().toLocaleLowerCase();
+function searchable(
+  values: Array<string | number | null | undefined>,
+  query: string,
+  normalizedQuery = query.trim().toLocaleLowerCase(),
+) {
   return (
     !normalizedQuery ||
     values.some((value) =>
@@ -2030,17 +978,17 @@ export function UpstreamsPage() {
   } | null>(null);
   const upstreams = useQuery({
     queryKey: ["upstreams"],
-    queryFn: api.upstreams,
+    queryFn: ({ signal }) => api.upstreams(signal),
     refetchInterval: 30_000,
   });
   const config = useQuery({
     queryKey: ["config"],
-    queryFn: api.config,
+    queryFn: ({ signal }) => api.config(signal),
     staleTime: 15_000,
   });
   const groupHistoryOverview = useQuery({
     queryKey: ["upstream-group-history-overview"],
-    queryFn: api.allUpstreamGroupHistory,
+    queryFn: ({ signal }) => api.allUpstreamGroupHistory(signal),
     enabled: groupHistoryOverviewOpen,
     retry: false,
   });
@@ -2070,7 +1018,7 @@ export function UpstreamsPage() {
   });
   const syncTask = useQuery({
     queryKey: ["upstream-sync", syncTaskId],
-    queryFn: () => api.task(syncTaskId!),
+    queryFn: ({ signal }) => api.task(syncTaskId!, signal),
     enabled: Boolean(syncTaskId),
     refetchInterval: taskPollInterval,
   });
@@ -2080,7 +1028,7 @@ export function UpstreamsPage() {
   const [managementTaskId, setManagementTaskId] = useState<string | null>(null);
   const managementTask = useQuery({
     queryKey: ["management-sync", managementTaskId],
-    queryFn: () => api.task(managementTaskId!),
+    queryFn: ({ signal }) => api.task(managementTaskId!, signal),
     enabled: Boolean(managementTaskId),
     refetchInterval: taskPollInterval,
   });
@@ -2098,7 +1046,7 @@ export function UpstreamsPage() {
   const [groupAuditDetailHost, setGroupAuditDetailHost] = useState<string | null>(null);
   const [onlyGroupAuditIssues, setOnlyGroupAuditIssues] = useState(false);
   const groupAuditMutation = useMutation({
-    mutationFn: api.upstreamGroupBindingAudit,
+    mutationFn: () => api.upstreamGroupBindingAudit(),
     onSuccess: (result) => {
       setGroupAudit(result);
       toast.success("上游分组核对完成");
@@ -2130,7 +1078,7 @@ export function UpstreamsPage() {
     }) > 0;
   const actionTask = useQuery({
     queryKey: ["upstream-action", actionTaskId],
-    queryFn: () => api.task(actionTaskId!),
+    queryFn: ({ signal }) => api.task(actionTaskId!, signal),
     enabled: Boolean(actionTaskId),
     refetchInterval: taskPollInterval,
   });
@@ -2150,7 +1098,7 @@ export function UpstreamsPage() {
   });
   const deleteTask = useQuery({
     queryKey: ["upstream-delete-task", deleteTaskId],
-    queryFn: () => api.task(deleteTaskId!),
+    queryFn: ({ signal }) => api.task(deleteTaskId!, signal),
     enabled: Boolean(deleteTaskId),
     refetchInterval: taskPollInterval,
   });
@@ -2170,7 +1118,7 @@ export function UpstreamsPage() {
   });
   const batchRecoveryTask = useQuery({
     queryKey: ["upstream-auth-recovery-batch", batchRecoveryTaskId],
-    queryFn: () => api.task(batchRecoveryTaskId!),
+    queryFn: ({ signal }) => api.task(batchRecoveryTaskId!, signal),
     enabled: Boolean(batchRecoveryTaskId),
     refetchInterval: taskPollInterval,
   });
@@ -2218,7 +1166,7 @@ export function UpstreamsPage() {
   );
   const historyBindingAudit = useQuery({
     queryKey: ["upstream-group-binding-audit"],
-    queryFn: api.upstreamGroupBindingAudit,
+    queryFn: ({ signal }) => api.upstreamGroupBindingAudit(signal),
     enabled: groupHistoryOverviewOpen || (Boolean(selectedHost) && groupDialogView === "history"),
     retry: false,
   });
@@ -2272,7 +1220,7 @@ export function UpstreamsPage() {
   }
   const localBindingGroups = useQuery({
     queryKey: ["groups"],
-    queryFn: api.groups,
+    queryFn: ({ signal }) => api.groups(signal),
     enabled: Boolean(selectedHost),
   });
   const saveGroupBindings = useMutation({
@@ -2286,7 +1234,7 @@ export function UpstreamsPage() {
   });
   const groupBindingTask = useQuery({
     queryKey: ["task", groupBindingTaskId],
-    queryFn: () => api.task(groupBindingTaskId!),
+    queryFn: ({ signal }) => api.task(groupBindingTaskId!, signal),
     enabled: Boolean(groupBindingTaskId),
     refetchInterval: taskPollInterval,
   });
@@ -2343,7 +1291,7 @@ export function UpstreamsPage() {
       account_ids: accountIDs.length > 0 ? accountIDs : undefined,
       concurrency: config.data?.account_default_concurrency,
       priority: config.data?.account_default_priority,
-      schedulable: false,
+      schedulable: accountIDs.length === 0,
     } satisfies OnboardingRequest;
     return expandOnboardingCreationRequests(request);
   });
@@ -2393,6 +1341,7 @@ export function UpstreamsPage() {
   const data = upstreams.data;
   const minimumBalance = filters.minimumBalance ? Number(filters.minimumBalance) : null;
   const maximumBalance = filters.maximumBalance ? Number(filters.maximumBalance) : null;
+  const normalizedHostKeyword = filters.keyword.trim().toLocaleLowerCase();
   const hasActiveFilters =
     onlyGroupAuditIssues || Object.values(filters).some((value) => value !== "" && value !== "all");
   const allHosts =
@@ -2409,7 +1358,7 @@ export function UpstreamsPage() {
         !onlyGroupAuditIssues ||
         upstreamHasGroupBindingAuditIssue(groupAuditItemsByHost.get(host.host) ?? []);
       return (
-        searchable([host.host, host.name], filters.keyword) &&
+        searchable([host.host, host.name], filters.keyword, normalizedHostKeyword) &&
         (filters.upstreamType === "all" || host.upstream_type === filters.upstreamType) &&
         (filters.authStatus === "all" || host.auth_status === filters.authStatus) &&
         balanceMatches &&
@@ -2605,6 +1554,7 @@ export function UpstreamsPage() {
           <FilterMenu
             label="类型"
             options={orderedUpstreamTypes.map((option) => option.value)}
+            dictionaryKind="upstream_type"
             value={filterDraft.upstreamType === "all" ? null : filterDraft.upstreamType}
             onValueChange={(upstreamType) =>
               setFilterDraft((current) => ({
@@ -2612,11 +1562,15 @@ export function UpstreamsPage() {
                 upstreamType: upstreamType ?? "all",
               }))
             }
-            optionLabel={displayUpstreamType}
+            optionLabel={(value) =>
+              orderedUpstreamTypes.find((option) => option.value === value)?.label ??
+              displayUpstreamType(value)
+            }
           />
           <FilterMenu
             label="状态"
             options={orderedAuthStatuses.map((option) => option.value)}
+            dictionaryKind="auth_status"
             value={filterDraft.authStatus === "all" ? null : filterDraft.authStatus}
             onValueChange={(authStatus) =>
               setFilterDraft((current) => ({
@@ -2624,7 +1578,10 @@ export function UpstreamsPage() {
                 authStatus: authStatus ?? "all",
               }))
             }
-            optionLabel={(value) => upstreamAuthStatusMeta(value).label}
+            optionLabel={(value) =>
+              orderedAuthStatuses.find((option) => option.value === value)?.label ??
+              upstreamAuthStatusMeta(value).label
+            }
           />
           <NumberRangeFilter
             label="余额"
@@ -2755,13 +1712,22 @@ export function UpstreamsPage() {
                         }
                       />
                     </TableCell>
-                    <TableCell className="max-w-80">
-                      <UpstreamIdentity
-                        name={host.name}
-                        host={host.host}
-                        hosts={host.hosts}
-                        baseUrl={host.base_url}
-                      />
+                    <TableCell className="max-w-80" overflowTooltip={false}>
+                      <div className="grid min-w-0 gap-1">
+                        <UpstreamIdentity
+                          name={host.name}
+                          host={host.host}
+                          hosts={host.hosts}
+                          baseUrl={host.base_url}
+                        />
+                        <UpstreamUsageSummary
+                          name={host.name || host.host}
+                          spending={host.spending}
+                          requestCount={host.request_count ?? 0}
+                          requestWindowDays={host.request_window_days ?? 30}
+                          accountRequestUsage={host.account_request_usage ?? []}
+                        />
+                      </div>
                     </TableCell>
                     <TableCell>{displayUpstreamType(host.upstream_type)}</TableCell>
                     <TableCell>{host.group_count}</TableCell>
@@ -3775,7 +2741,7 @@ export function ManualAuthForm(props: {
   const queryClient = useQueryClient();
   const authConfig = useQuery({
     queryKey: ["auth-recovery-config"],
-    queryFn: api.authRecoveryConfig,
+    queryFn: ({ signal }) => api.authRecoveryConfig(signal),
     staleTime: 15_000,
   });
   const manualModes = authModesForPlatform(props.upstreamType);
@@ -4255,11 +3221,9 @@ export function AccountsPage() {
 
 function AccountsPageContent() {
   const navigate = useNavigate();
-  const checks = useQuery({
-    queryKey: ["model-check-account-statuses"],
-    queryFn: api.modelCheckAccountStatuses,
-    refetchInterval: 30_000,
-  });
+  const [modelSyncOpen, setModelSyncOpen] = useState(false);
+  const [modelSyncAccountIds, setModelSyncAccountIds] = useState<string[]>([]);
+  const { accounts, checks } = useAccountCollection(modelSyncOpen);
   const orderedAccountTypes = useDictionaryOrder(
     "account_type",
     accountTypeOptions,
@@ -4270,17 +3234,11 @@ function AccountsPageContent() {
     queryFn: () => api.dictionaries("group"),
     staleTime: 60_000,
   });
-  const accounts = useQuery({
-    queryKey: ["accounts"],
-    queryFn: api.accounts,
-    structuralSharing: shareAccountHealthSnapshots,
-    refetchInterval: 30_000,
-  });
   const platformDictionary = useQuery({
     queryKey: ["dictionaries", "platform"],
     queryFn: () => api.dictionaries("platform"),
   });
-  const policy = useQuery({ queryKey: ["policy"], queryFn: api.policy });
+  const policy = useQuery({ queryKey: ["policy"], queryFn: ({ signal }) => api.policy(signal) });
   const queryClient = useQueryClient();
   const rows = useMemo(() => accounts.data ?? [], [accounts.data]);
   const checksByID = useMemo(
@@ -4299,6 +3257,19 @@ function AccountsPageContent() {
   );
   const accountGroups = useMemo(
     () => new Map((accounts.data ?? []).map((account) => [account.id, account.groups] as const)),
+    [accounts.data],
+  );
+  const accountUpstreams = useMemo(
+    () =>
+      new Map(
+        (accounts.data ?? []).map(
+          (account) =>
+            [
+              account.id,
+              { upstreamId: account.upstream_id, upstreamHost: account.upstream_host },
+            ] as const,
+        ),
+      ),
     [accounts.data],
   );
   const manualPrioritySection = policy.data?.advanced_policy?.manual_priority;
@@ -4328,7 +3299,6 @@ function AccountsPageContent() {
   const [baseURLCheckOpen, setBaseURLCheckOpen] = useState(false);
   const [baseURLCheckTaskId, setBaseURLCheckTaskId] = useState<string | null>(null);
   const [baseURLCheckAccountIds, setBaseURLCheckAccountIds] = useState<string[]>([]);
-  const [baseURLCheckResultsReady, setBaseURLCheckResultsReady] = useState(false);
   const [baseURLRepairAccountId, setBaseURLRepairAccountId] = useState<string | null>(null);
   const [baseURLRepairKind, setBaseURLRepairKind] = useState<"base_url" | "upstream_host" | null>(
     null,
@@ -4337,32 +3307,16 @@ function AccountsPageContent() {
   const [batchDeleteOpen, setBatchDeleteOpen] = useState(false);
   const [batchDeleteAccountIds, setBatchDeleteAccountIds] = useState<string[]>([]);
   const [batchDeleteTaskId, setBatchDeleteTaskId] = useState<string | null>(null);
-  const [modelSyncOpen, setModelSyncOpen] = useState(false);
-  const [modelSyncAccountIds, setModelSyncAccountIds] = useState<string[]>([]);
   const [platformProbeOpen, setPlatformProbeOpen] = useState(false);
   const [batchProbeOpen, setBatchProbeOpen] = useState(false);
   const [batchProbeAccounts, setBatchProbeAccounts] = useState<AccountStatus[]>([]);
   const [batchProbePending, setBatchProbePending] = useState(false);
-  const groupOptions = Array.from(
-    new Set([
-      ...(groupDictionary.data?.items ?? [])
-        .filter((item) => item.enabled)
-        .map((item) => item.name),
-      ...rows.flatMap((account) => account.groups),
-    ]),
-  );
-  const platformOptions = orderedDictionaryOptions(
-    platformDictionary.data?.items,
-    Array.from(
-      new Set([
-        ...concreteAccountPlatformOptions.map((option) => option.value),
-        ...rows.flatMap((account) => {
-          const platform = account.platform?.trim().toLowerCase();
-          return platform ? [platform] : [];
-        }),
-      ]),
-    ).map((value) => ({ value, label: accountPlatformLabel(value) ?? value })),
-  ).map((option) => option.value);
+  const groupOptions = [
+    ...new Set(
+      (groupDictionary.data?.items ?? []).filter((item) => item.enabled).map((item) => item.name),
+    ),
+  ];
+  const platformOptions = orderedDictionaryOptions(platformDictionary.data?.items);
   const filteredRows = useMemo(
     () =>
       sortAccounts(
@@ -4410,27 +3364,46 @@ function AccountsPageContent() {
   );
   const pagination = useClientPagination(filteredRows, 20);
   const pageRows = pagination.visibleItems;
-  const liveResultsStatus = useAccountResultEvents(pageRows.map((account) => account.id));
+  const liveResultsStatus = useAccountResultEvents(
+    pageRows.map((account) => account.id),
+    modelSyncOpen,
+  );
   const pageAccountIds = pageRows.map((account) => account.id);
-  const selectedRows = rows.filter(
-    (account) =>
-      (showManualPriorityAccounts || account.manual_priority == null) &&
-      selectedAccountIds.has(account.id),
-  );
-  const selectedAccountIDs = selectedRows.map((account) => account.id);
-  const automaticAccountRows = filteredRows.filter((account) => account.manual_priority == null);
-  const automaticAccountIDs = automaticAccountRows.map((account) => account.id);
-  const rateSyncAccountIDs = automaticAccountRows.map((account) => account.id);
-  const rateSyncPlatforms = Array.from(
-    new Set(
-      automaticAccountRows.map((account) => accountPlatformLabel(account.platform) ?? "未识别"),
-    ),
-  );
+  const selectedAccountProjection = useMemo(() => {
+    const selectedRows: AccountStatus[] = [];
+    for (const account of rows) {
+      if (
+        (showManualPriorityAccounts || account.manual_priority == null) &&
+        selectedAccountIds.has(account.id)
+      ) {
+        selectedRows.push(account);
+      }
+    }
+    return { rows: selectedRows, ids: selectedRows.map((account) => account.id) };
+  }, [rows, selectedAccountIds, showManualPriorityAccounts]);
+  const selectedRows = selectedAccountProjection.rows;
+  const selectedAccountIDs = selectedAccountProjection.ids;
+  const automaticAccountProjection = useMemo(() => {
+    const ids: string[] = [];
+    const platforms = new Set<string>();
+    for (const account of filteredRows) {
+      if (account.manual_priority != null) continue;
+      ids.push(account.id);
+      platforms.add(accountPlatformLabel(account.platform) ?? "未识别");
+    }
+    return { ids, platforms: Array.from(platforms) };
+  }, [filteredRows]);
+  const automaticAccountIDs = automaticAccountProjection.ids;
+  const rateSyncAccountIDs = automaticAccountProjection.ids;
+  const rateSyncPlatforms = automaticAccountProjection.platforms;
   const allPageSelected =
     pageAccountIds.length > 0 &&
     pageAccountIds.every((accountId) => selectedAccountIds.has(accountId));
   const somePageSelected = pageAccountIds.some((accountId) => selectedAccountIds.has(accountId));
-  const baseURLCheckRows = rows.filter((account) => baseURLCheckAccountIds.includes(account.id));
+  const baseURLCheckRows = useMemo(() => {
+    const checkedIDs = new Set(baseURLCheckAccountIds);
+    return rows.filter((account) => checkedIDs.has(account.id));
+  }, [rows, baseURLCheckAccountIds]);
   useEffect(() => {
     setSelectedAccountIds((current) => {
       const next = pruneAccountSelection(
@@ -4449,12 +3422,17 @@ function AccountsPageContent() {
   });
   const baseURLCheckTask = useQuery({
     queryKey: ["account-base-url-check", baseURLCheckTaskId],
-    queryFn: () => api.task(baseURLCheckTaskId!),
+    queryFn: ({ signal }) => api.task(baseURLCheckTaskId!, signal),
     enabled: Boolean(baseURLCheckTaskId),
     refetchInterval: taskPollInterval,
   });
   const baseURLCheckPending =
     baseURLCheckMutation.isPending || taskIsPending(baseURLCheckTaskId, baseURLCheckTask);
+  const baseURLCheckResults = useConfigurationResults(
+    taskStopsPolling(baseURLCheckTask.data) ? baseURLCheckTaskId : null,
+    accounts.refetch,
+  );
+  const baseURLCheckResultsReady = baseURLCheckResults.ready;
   const batchDeletePreview = useQuery({
     queryKey: ["account-delete-batch-preview", batchDeleteAccountIds],
     queryFn: () => api.accountDeleteBatchPreview(batchDeleteAccountIds),
@@ -4468,7 +3446,7 @@ function AccountsPageContent() {
   });
   const batchDeleteTask = useQuery({
     queryKey: ["account-delete-batch", batchDeleteTaskId],
-    queryFn: () => api.task(batchDeleteTaskId!),
+    queryFn: ({ signal }) => api.task(batchDeleteTaskId!, signal),
     enabled: Boolean(batchDeleteTaskId),
     refetchInterval: taskPollInterval,
   });
@@ -4491,19 +3469,12 @@ function AccountsPageContent() {
   });
   const baseURLRepairTask = useQuery({
     queryKey: ["account-upstream-host-repair", baseURLRepairTaskId],
-    queryFn: () => api.task(baseURLRepairTaskId!),
+    queryFn: ({ signal }) => api.task(baseURLRepairTaskId!, signal),
     enabled: Boolean(baseURLRepairTaskId),
     refetchInterval: taskPollInterval,
   });
   const baseURLRepairPending =
     baseURLRepairMutation.isPending || taskIsPending(baseURLRepairTaskId, baseURLRepairTask);
-  useEffect(() => {
-    if (!taskStopsPolling(baseURLCheckTask.data)) return;
-    void queryClient.invalidateQueries({ queryKey: ["accounts"] });
-    void accounts.refetch().then((result) => {
-      if (!result.error) setBaseURLCheckResultsReady(true);
-    });
-  }, [baseURLCheckTask.data?.status, queryClient]);
   useEffect(() => {
     if (baseURLRepairKind === null || !taskStopsPolling(baseURLRepairTask.data)) return;
     void queryClient.invalidateQueries({ queryKey: ["accounts"] });
@@ -4536,10 +3507,9 @@ function AccountsPageContent() {
     const accountIds = [...automaticAccountIDs];
     if (accountIds.length === 0) return;
     setBaseURLCheckOpen(true);
-    if (baseURLCheckPending) return;
+    if (baseURLCheckPending || baseURLRepairPending) return;
     setBaseURLCheckAccountIds(accountIds);
     setBaseURLCheckTaskId(null);
-    setBaseURLCheckResultsReady(false);
     baseURLCheckMutation.reset();
     baseURLCheckMutation.mutate(accountIds);
   }
@@ -4571,7 +3541,7 @@ function AccountsPageContent() {
   });
   const maintenanceTask = useQuery({
     queryKey: ["account-maintenance", maintenanceTaskId],
-    queryFn: () => api.task(maintenanceTaskId!),
+    queryFn: ({ signal }) => api.task(maintenanceTaskId!, signal),
     enabled: Boolean(maintenanceTaskId),
     refetchInterval: taskPollInterval,
   });
@@ -4607,9 +3577,10 @@ function AccountsPageContent() {
     setModelSyncAccountIds([...accountIds]);
     setModelSyncOpen(true);
   }
-  const maintenanceAccountRows = rows.filter((account) =>
-    maintenanceAccountIds.includes(account.id),
-  );
+  const maintenanceAccountRows = useMemo(() => {
+    const targetIDs = new Set(maintenanceAccountIds);
+    return rows.filter((account) => targetIDs.has(account.id));
+  }, [rows, maintenanceAccountIds]);
   function changeAccountSort(value: AccountSort) {
     setAccountSort(value);
     pagination.setCurrentPage(1);
@@ -4661,6 +3632,7 @@ function AccountsPageContent() {
           <FilterMenu
             label="分组"
             options={groupOptions}
+            dictionaryKind="group"
             value={groupFilter}
             onValueChange={(value) => {
               setGroupFilter(value);
@@ -4670,27 +3642,36 @@ function AccountsPageContent() {
           <FilterMenu
             label="类型"
             options={orderedAccountTypes.map((option) => option.value)}
+            dictionaryKind="account_type"
             value={typeFilter}
             onValueChange={(value) => {
               setTypeFilter(value);
               pagination.setCurrentPage(1);
             }}
-            optionLabel={(value) => accountTypeLabel(value) ?? value}
+            optionLabel={(value) =>
+              orderedAccountTypes.find((option) => option.value === value)?.label ??
+              accountTypeLabel(value) ??
+              value
+            }
           />
           <FilterMenu
             label="平台"
-            options={platformOptions}
+            options={platformOptions.map((option) => option.value)}
+            dictionaryKind="platform"
             value={platformFilter}
             onValueChange={(value) => {
               setPlatformFilter(value);
               pagination.setCurrentPage(1);
             }}
-            optionLabel={(value) => accountPlatformLabel(value) ?? value}
+            optionLabel={(value) =>
+              platformOptions.find((option) => option.value === value)?.label ?? value
+            }
           />
           <AccountStatusFilter
             value={statusFilter}
             onValueChange={(value) => {
               setStatusFilter(value);
+              if (value === "manual_priority") setShowManualPriorityAccounts(true);
               pagination.setCurrentPage(1);
             }}
           />
@@ -4873,9 +3854,13 @@ function AccountsPageContent() {
         accountIds={modelSyncAccountIds}
         accountPlatforms={accountPlatforms}
         accountGroups={accountGroups}
+        accountUpstreams={accountUpstreams}
         onOpenChange={(open) => {
           setModelSyncOpen(open);
-          if (!open) setModelSyncAccountIds([]);
+          if (!open) {
+            setModelSyncAccountIds([]);
+            void queryClient.invalidateQueries({ queryKey: ["accounts"] });
+          }
         }}
         onCompleted={() => setSelectedAccountIds(new Set())}
       />
@@ -4944,9 +3929,10 @@ function AccountsPageContent() {
                   embedded
                 />
               )}
-            {baseURLCheckTask.data?.status === "succeeded" && !baseURLCheckResultsReady && (
-              <TaskStartupState message="正在加载校验结果" />
-            )}
+            {taskStopsPolling(baseURLCheckTask.data) &&
+              !baseURLCheckResultsReady &&
+              !baseURLCheckResults.failed && <ContentLoading label="正在加载校验结果" />}
+            {baseURLCheckResults.failed && <ContentRetry onRetry={baseURLCheckResults.retry} />}
             {baseURLCheckResultsReady ? (
               <div className="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)] gap-3">
                 <div className="grid grid-cols-2 divide-x rounded-lg border sm:grid-cols-5">
@@ -4978,6 +3964,7 @@ function AccountsPageContent() {
                   repairingAccountId={baseURLRepairAccountId}
                   onRerun={startBaseURLCheck}
                   onRepair={(accountId, kind) => {
+                    if (baseURLCheckPending || baseURLRepairPending) return;
                     setBaseURLRepairAccountId(accountId);
                     setBaseURLRepairKind(kind);
                     setBaseURLRepairTaskId(null);
@@ -5789,48 +4776,61 @@ const AccountRow = React.memo(function AccountRow(props: {
   });
   const task = useQuery({
     queryKey: ["account-scheduling", account.id, taskId],
-    queryFn: () => api.task(taskId!),
+    queryFn: ({ signal }) => api.task(taskId!, signal),
     enabled: Boolean(taskId),
     refetchInterval: taskPollInterval,
   });
+  const handledTask = React.useRef<string | null>(null);
   useEffect(() => {
+    const completedTask = task.data;
+    if (
+      !completedTask ||
+      completedTask.id !== taskId ||
+      !taskStopsPolling(completedTask) ||
+      activeAction === null ||
+      handledTask.current === completedTask.id
+    ) {
+      return;
+    }
+    handledTask.current = completedTask.id;
     let refreshScope: TaskRefreshScope = "account-scheduling";
     if (activeAction === "探活测试") refreshScope = "active-probe";
     if (activeAction === "同步账号倍率") refreshScope = "management-sync";
-    const keys = terminalRefreshKeys(refreshScope, task.data);
+    const keys = terminalRefreshKeys(refreshScope, completedTask);
     if (activeAction === "切换分组" && keys.length) {
       keys.push(["account-groups", account.id], ["group-allocation"], ["pricing"]);
     }
-    if (keys.length) {
-      const detailRefresh =
-        activeAction === "删除账号"
-          ? []
-          : [
-              queryClient.invalidateQueries({
-                queryKey: ["account-detail", account.id],
-              }),
-            ];
-      void Promise.all([
-        ...keys.map((queryKey) => queryClient.invalidateQueries({ queryKey })),
-        ...detailRefresh,
-      ]);
-    }
-  }, [account.id, activeAction, queryClient, task.data?.status]);
-  useEffect(() => {
-    const completedTask = task.data;
-    if (!completedTask || !taskStopsPolling(completedTask) || activeAction === null) return;
-    applyAccountDeletionProgress(queryClient, completedTask);
-    if (activeAction === "探活测试") {
-      notifyProbeTaskResult(completedTask, account.name);
-    } else {
-      notifyTaskResult(completedTask, `${account.name}：${activeAction}`, {
-        successMessage: `${account.name}：${activeAction}完成`,
-      });
-    }
-    if (activeAction === accountDeleteActionLabel) setDeleteOpen(false);
-    setTaskId(null);
-    setActiveAction(null);
-  }, [account.name, activeAction, task.data]);
+    const completeTask = async (): Promise<void> => {
+      let detailRefreshed = false;
+      if (
+        completedTask.status === "succeeded" &&
+        (activeAction === "设置手动控制" || activeAction === "取消手动控制")
+      ) {
+        try {
+          await refreshAccountManualPriority(queryClient, account.id);
+          detailRefreshed = true;
+        } catch (error) {
+          notifyOperationError(error, "手动控制已完成，账号状态刷新失败，请刷新列表");
+        }
+      }
+      applyAccountDeletionProgress(queryClient, completedTask);
+      if (activeAction !== "删除账号" && !detailRefreshed) {
+        keys.push(["account-detail", account.id]);
+      }
+      void Promise.all(keys.map((queryKey) => queryClient.invalidateQueries({ queryKey })));
+      if (activeAction === "探活测试") {
+        notifyProbeTaskResult(completedTask, account.name);
+      } else {
+        notifyTaskResult(completedTask, `${account.name}：${activeAction}`, {
+          successMessage: `${account.name}：${activeAction}完成`,
+        });
+      }
+      if (activeAction === accountDeleteActionLabel) setDeleteOpen(false);
+      setTaskId(null);
+      setActiveAction(null);
+    };
+    void completeTask();
+  }, [account.id, account.name, activeAction, queryClient, task.data, taskId]);
   const pending = taskIsPending(taskId, task);
   async function startTask(label: string, create: () => Promise<Task>): Promise<boolean> {
     try {
@@ -5949,6 +4949,7 @@ const AccountRow = React.memo(function AccountRow(props: {
       >
         <AccountSettingsPanel
           accountId={account.id}
+          open={detailsOpen}
           query={details}
           onCancel={() => setDetailsOpen(false)}
           onSaved={() => setDetailsOpen(false)}
@@ -6021,10 +5022,10 @@ const AccountRow = React.memo(function AccountRow(props: {
 export function GroupsPage() {
   const groups = useQuery({
     queryKey: ["groups"],
-    queryFn: api.groups,
+    queryFn: ({ signal }) => api.groups(signal),
     refetchOnMount: "always",
   });
-  const policy = useQuery({ queryKey: ["policy"], queryFn: api.policy });
+  const policy = useQuery({ queryKey: ["policy"], queryFn: ({ signal }) => api.policy(signal) });
   const policyReady = policy.data?.available === true && !policy.isError;
   const refreshGroups = () => Promise.all([groups.refetch(), policy.refetch()]);
   const queryClient = useQueryClient();
@@ -6032,22 +5033,25 @@ export function GroupsPage() {
   const [excludeTarget, setExcludeTarget] = useState<GroupStatus | null>(null);
   const allocation = useQuery({
     queryKey: ["group-allocation", allocationGroup?.id],
-    queryFn: () => api.groupAllocation(allocationGroup!.id!),
+    queryFn: ({ signal }) => api.groupAllocation(allocationGroup!.id!, signal),
     enabled: allocationGroup?.id !== null && allocationGroup?.id !== undefined,
+    staleTime: 0,
     refetchOnMount: "always",
   });
   const [editingGroup, setEditingGroup] = useState<GroupStatus | null>(null);
   const [editor, setEditor] = useState<GroupPolicyOverrideDraft | null>(null);
   const groupProbeModels = useQuery({
     queryKey: ["group-probe-models", editingGroup?.id],
-    queryFn: () => api.groupProbeModels(editingGroup!.id!),
+    queryFn: ({ signal }) => api.groupProbeModels(editingGroup!.id!, signal),
     enabled: Boolean(editingGroup?.id && editor),
+    staleTime: 0,
     refetchOnMount: "always",
   });
   const invalidate = () =>
     Promise.all([
       queryClient.invalidateQueries({ queryKey: ["groups"] }),
       queryClient.invalidateQueries({ queryKey: ["policy"] }),
+      queryClient.invalidateQueries({ queryKey: ["group-allocation"] }),
       queryClient.invalidateQueries({ queryKey: ["logs"] }),
       queryClient.invalidateQueries({ queryKey: ["overview"] }),
     ]);
@@ -6154,7 +5158,7 @@ export function GroupsPage() {
     });
     setEditingGroup(group);
   };
-  const rows = useDictionaryOrder("group", groups.data ?? [], (group) => group.id ?? "");
+  const rows = useDictionaryRecordOrder("group", groups.data ?? [], (group) => group.id ?? "");
   const [search, setSearch] = useState("");
   const filteredRows = rows.filter((group) =>
     searchable(
@@ -6407,6 +5411,9 @@ export function GroupsPage() {
             <DialogDescription>{editingGroup?.name}</DialogDescription>
           </DialogHeader>
           <DialogBody className={groupPolicyDialogLayout.body}>
+            {!policyReady && (
+              <ContentRetry onRetry={() => void policy.refetch()} pending={policy.isFetching} />
+            )}
             {editor && (
               <GroupPolicyEditorFields
                 value={editor}
@@ -6433,9 +5440,9 @@ export function GroupsPage() {
               取消
             </Button>
             <Button
-              disabled={!editingGroup?.id || !editor || updateGroup.isPending}
+              disabled={!editingGroup?.id || !editor || !policyReady || updateGroup.isPending}
               onClick={() => {
-                if (!editingGroup?.id || !editor) return;
+                if (!editingGroup?.id || !editor || !policyReady) return;
                 if (!groupPolicyValid) {
                   toast.error("分组策略参数存在空值或无效数字，请修正后再保存");
                   return;
@@ -6456,6 +5463,7 @@ export function GroupsPage() {
 }
 
 export function AlertsPage() {
+  const statusLabel = useDictionaryLabel("alert_status", alertStatusLabel);
   const [statusFilter, setStatusFilter] = useState<string | null>(null);
   const statusOptions = useDictionaryOrder(
     "alert_status",
@@ -6464,12 +5472,12 @@ export function AlertsPage() {
   );
   const alerts = useQuery({
     queryKey: ["alerts"],
-    queryFn: api.alerts,
+    queryFn: ({ signal }) => api.alerts(signal),
     refetchInterval: 15_000,
   });
   const notifications = useQuery({
     queryKey: ["notification-status"],
-    queryFn: api.notificationStatus,
+    queryFn: ({ signal }) => api.notificationStatus(signal),
     refetchInterval: 15_000,
   });
   const queryClient = useQueryClient();
@@ -6484,7 +5492,7 @@ export function AlertsPage() {
   const [clearDialogOpen, setClearDialogOpen] = useState(false);
   const task = useQuery({
     queryKey: ["alert-evaluation", taskId],
-    queryFn: () => api.task(taskId!),
+    queryFn: ({ signal }) => api.task(taskId!, signal),
     enabled: Boolean(taskId),
     refetchInterval: taskPollInterval,
   });
@@ -6563,12 +5571,13 @@ export function AlertsPage() {
                 <FilterMenu
                   label="告警状态"
                   options={statusOptions}
+                  dictionaryKind="alert_status"
                   value={statusFilter}
                   onValueChange={(value) => {
                     setStatusFilter(value);
                     pagination.setCurrentPage(1);
                   }}
-                  optionLabel={alertStatusLabel}
+                  optionLabel={statusLabel}
                 />
                 <AlertListActions
                   loading={alerts.isLoading}
@@ -6719,6 +5728,7 @@ export function onboardingProbeTarget(
   };
 }
 export function OnboardingPage() {
+  const localGroupDictionary = useDictionary("group");
   const orderedUpstreamTypes = useDictionaryOrder(
     "upstream_type",
     configurableUpstreamTypeOptions,
@@ -6808,12 +5818,12 @@ export function OnboardingPage() {
   }, [form, onboardingSearch.host, onboardingSearch.upstream_type]);
   const groups = useQuery({
     queryKey: ["groups"],
-    queryFn: api.groups,
+    queryFn: ({ signal }) => api.groups(signal),
     refetchOnMount: "always",
   });
   const accountDefaults = useQuery({
     queryKey: ["config"],
-    queryFn: api.config,
+    queryFn: ({ signal }) => api.config(signal),
   });
   useEffect(() => {
     if (!accountDefaults.data) return;
@@ -6823,7 +5833,7 @@ export function OnboardingPage() {
   }, [accountDefaults.data, form]);
   const upstreams = useQuery({
     queryKey: ["upstreams"],
-    queryFn: api.upstreams,
+    queryFn: ({ signal }) => api.upstreams(signal),
   });
   const entryConfiguration = useQuery({
     queryKey: ["upstream-configuration", entryHost],
@@ -6833,18 +5843,18 @@ export function OnboardingPage() {
   });
   const authConfig = useQuery({
     queryKey: ["auth-recovery-config"],
-    queryFn: api.authRecoveryConfig,
+    queryFn: ({ signal }) => api.authRecoveryConfig(signal),
     staleTime: 15_000,
   });
   const task = useQuery({
     queryKey: ["onboarding-task", taskId],
-    queryFn: () => api.task(taskId!),
+    queryFn: ({ signal }) => api.task(taskId!, signal),
     enabled: Boolean(taskId),
     refetchInterval: (query) => taskPollInterval(query, 300),
   });
   const balanceTask = useQuery({
     queryKey: ["onboarding-balance-task", balanceTaskId],
-    queryFn: () => api.task(balanceTaskId!),
+    queryFn: ({ signal }) => api.task(balanceTaskId!, signal),
     enabled: balanceTaskId !== null,
     refetchInterval: (query) => taskPollInterval(query, 300),
   });
@@ -6856,13 +5866,13 @@ export function OnboardingPage() {
   });
   const keyCleanupTask = useQuery({
     queryKey: ["onboarding-key-cleanup-task", keyCleanupTaskId],
-    queryFn: () => api.task(keyCleanupTaskId!),
+    queryFn: ({ signal }) => api.task(keyCleanupTaskId!, signal),
     enabled: keyCleanupTaskId !== null,
     refetchInterval: (query) => taskPollInterval(query, 300),
   });
   const onboardingMaintenanceTask = useQuery({
     queryKey: ["onboarding-account-maintenance", onboardingMaintenanceTaskId],
-    queryFn: () => api.task(onboardingMaintenanceTaskId!),
+    queryFn: ({ signal }) => api.task(onboardingMaintenanceTaskId!, signal),
     enabled: onboardingMaintenanceTaskId !== null,
     refetchInterval: (query) => taskPollInterval(query, 300),
   });
@@ -6904,7 +5914,9 @@ export function OnboardingPage() {
       return;
     }
     try {
-      const allocation = await concurrencyPreview.mutateAsync(confirmation.requests);
+      const allocation = await concurrencyPreview.mutateAsync(
+        confirmation.requests.map((request) => ({ ...request, schedulable: false })),
+      );
       if (allocation.items.length !== confirmation.requests.length) {
         throw new Error("并发预览数量不一致，请重新预览");
       }
@@ -6914,6 +5926,10 @@ export function OnboardingPage() {
           ...request,
           concurrency: allocation.items[index]!.concurrency ?? undefined,
           waiting_for_capacity: allocation.items[index]!.waiting_for_capacity || undefined,
+          schedulable:
+            (request.account_ids?.length ?? 0) > 0
+              ? false
+              : !allocation.items[index]!.waiting_for_capacity,
         })),
         previews: confirmation.previews.map((preview, index) => ({
           ...preview,
@@ -7224,7 +6240,7 @@ export function OnboardingPage() {
         ? (selectedPlatform ?? undefined)
         : undefined,
       account_ids: existingBinding ? candidateBoundAccountIDs(candidate) : undefined,
-      schedulable: false,
+      schedulable: !existingBinding,
     };
     const requests = expandOnboardingCreationRequests(request);
     const previews = existingBinding
@@ -7310,7 +6326,7 @@ export function OnboardingPage() {
           ? (selectedPlatform ?? undefined)
           : undefined,
         account_ids: existingBinding ? candidateBoundAccountIDs(candidate) : undefined,
-        schedulable: false,
+        schedulable: !existingBinding,
       } satisfies OnboardingRequest;
       const requests = expandOnboardingCreationRequests(request);
       return requests.map((expandedRequest, index) => ({
@@ -7644,7 +6660,10 @@ export function OnboardingPage() {
           action={onboardingHeadingActions}
         />
         <QueryError error={groups.error} fallback="本地分组读取失败" />
-        <ContentRetry pending={groups.isFetching} onRetry={() => void groups.refetch()} />
+        <ContentRetry
+          pending={groups.isFetching}
+          onRetry={() => void Promise.all([groups.refetch(), localGroupDictionary.refetch()])}
+        />
       </PageLayout>
     );
   const onboardingPending =
@@ -7764,11 +6783,18 @@ export function OnboardingPage() {
                       control={form.control}
                       name="upstream_type"
                       render={({ field }) => (
-                        <Select value={field.value} onValueChange={field.onChange}>
+                        <Select
+                          value={field.value}
+                          onValueChange={field.onChange}
+                          itemToStringLabel={(value) =>
+                            orderedUpstreamTypes.find((option) => option.value === value)?.label ??
+                            displayUpstreamType(value)
+                          }
+                        >
                           <SelectTrigger id={`${fieldID}-upstream-type`}>
                             <SelectValue />
                           </SelectTrigger>
-                          <SelectContent>
+                          <SelectContent dictionaryKind="upstream_type">
                             {orderedUpstreamTypes.map((option) => (
                               <SelectItem key={option.value} value={option.value}>
                                 {option.label}
@@ -8250,7 +7276,9 @@ export function OnboardingPage() {
                       <Button
                         variant="outline"
                         disabled={groups.isFetching}
-                        onClick={() => void groups.refetch()}
+                        onClick={() =>
+                          void Promise.all([groups.refetch(), localGroupDictionary.refetch()])
+                        }
                       >
                         <RefreshCw aria-hidden="true" />
                         刷新本地分组
@@ -9947,8 +8975,8 @@ type ConfigPageProps = {
 export function ConfigPage(props: ConfigPageProps = {}) {
   const activeTab = props.activeTab ?? "connection";
   const client = useQueryClient();
-  const settingsQueryKey = activeTab === "tasks" ? "task-concurrency" : "config";
-  const fetching = useIsFetching({ queryKey: [settingsQueryKey], exact: true }) > 0;
+  const settingsQueries = settingsQueryScope(activeTab);
+  const fetching = useIsFetching(settingsQueries) > 0;
   const platformTab = activeTab === "newapi" || activeTab === "monitoring";
   return (
     <PageLayout
@@ -9965,9 +8993,7 @@ export function ConfigPage(props: ConfigPageProps = {}) {
               <RefreshButton
                 pending={fetching}
                 ariaLabel="刷新系统设置"
-                onClick={() =>
-                  void client.refetchQueries({ queryKey: [settingsQueryKey], exact: true })
-                }
+                onClick={() => void client.refetchQueries(settingsQueries)}
               />
             </PageActions>
           )
@@ -9981,21 +9007,29 @@ export function ConfigPage(props: ConfigPageProps = {}) {
 function CoreConfigPage(props: ConfigPageProps) {
   const activeTab = props.activeTab ?? "connection";
   const queryClient = useQueryClient();
-  const config = useQuery({ queryKey: ["config"], queryFn: api.config });
+  const config = useQuery({
+    queryKey: ["config"],
+    queryFn: ({ signal }) => api.config(signal),
+  });
   const autoInspection = useQuery({
     queryKey: ["auto-inspection"],
-    queryFn: api.autoInspection,
+    queryFn: ({ signal }) => api.autoInspection(signal),
     enabled: activeTab === "connection",
-    refetchInterval: activeTab === "connection" ? 15_000 : false,
+    staleTime: 15_000,
+    // The authenticated shell owns the fallback poll. Keep this page as a
+    // cache observer so switching to settings cannot create a staggered timer.
+    refetchInterval: false,
   });
   const notifications = useQuery({
     queryKey: ["notification-status"],
-    queryFn: api.notificationStatus,
+    queryFn: ({ signal }) => api.notificationStatus(signal),
+    enabled: activeTab === "notifications",
     refetchInterval: 15_000,
   });
   const logCleanup = useQuery({
     queryKey: ["log-cleanup"],
-    queryFn: api.logCleanupStatus,
+    queryFn: ({ signal }) => api.logCleanupStatus(signal),
+    enabled: activeTab === "interface",
     refetchInterval: 30_000,
   });
   const logCleanupReady = logCleanup.data !== undefined && !logCleanup.error;
@@ -10011,7 +9045,6 @@ function CoreConfigPage(props: ConfigPageProps) {
   });
   const [targetEdited, setTargetEdited] = useState(false);
   const [logCleanupEdited, setLogCleanupEdited] = useState(false);
-  const [clearLogsOpen, setClearLogsOpen] = useState(false);
   const [logCleanupForm, setLogCleanupForm] = useState({
     enabled: false,
     retention_days: "30",
@@ -10019,14 +9052,14 @@ function CoreConfigPage(props: ConfigPageProps) {
   const [managementTaskId, setManagementTaskId] = useState<string | null>(null);
   const managementTask = useQuery({
     queryKey: ["task", managementTaskId],
-    queryFn: () => api.task(managementTaskId!),
+    queryFn: ({ signal }) => api.task(managementTaskId!, signal),
     enabled: managementTaskId !== null,
     refetchInterval: taskPollInterval,
   });
   const [notificationTargetTaskId, setNotificationTargetTaskId] = useState<string | null>(null);
   const notificationTargetTask = useQuery({
     queryKey: ["task", notificationTargetTaskId],
-    queryFn: () => api.task(notificationTargetTaskId!),
+    queryFn: ({ signal }) => api.task(notificationTargetTaskId!, signal),
     enabled: notificationTargetTaskId !== null,
     refetchInterval: (query) => {
       const status = query.state.data?.status;
@@ -10128,29 +9161,6 @@ function CoreConfigPage(props: ConfigPageProps) {
       toast.success(value.enabled ? "日志自动清理已开启" : "日志自动清理已关闭");
     },
     onError: (error) => notifyOperationError(error, "日志清理设置保存失败"),
-  });
-  const clearLogs = useMutation({
-    mutationFn: () => {
-      if (!logCleanupReady) {
-        throw new Error("日志清理配置尚未成功读取，请重试");
-      }
-      return api.clearLogs(Number(logCleanupForm.retention_days));
-    },
-    onSuccess: async (result) => {
-      setClearLogsOpen(false);
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["logs"] }),
-        queryClient.invalidateQueries({ queryKey: ["log-cleanup"] }),
-        queryClient.invalidateQueries({ queryKey: ["overview"] }),
-      ]);
-      const protectedText = result.protected_tasks
-        ? `，保留 ${result.protected_tasks} 个执行中任务`
-        : "";
-      toast.success(
-        `已清理 ${result.retention_days} 天以前的 ${result.total} 条日志${protectedText}`,
-      );
-    },
-    onError: (error) => notifyOperationError(error, "日志清空失败"),
   });
   const testNotification = useMutation({
     mutationFn: api.testNotification,
@@ -10807,23 +9817,11 @@ function CoreConfigPage(props: ConfigPageProps) {
                 </div>
               </CardContent>
               <SettingsFooter>
-                <Button
-                  variant="outline"
-                  data-testid="log-cleanup-clear"
-                  disabled={
-                    clearLogs.isPending ||
-                    !logCleanupReady ||
-                    !Number.isInteger(Number(logCleanupForm.retention_days)) ||
-                    Number(logCleanupForm.retention_days) < 1 ||
-                    Number(logCleanupForm.retention_days) > 3650
-                  }
-                  onClick={() => {
-                    if (logCleanupReady) setClearLogsOpen(true);
-                  }}
-                >
-                  <Trash2 size={16} />
-                  立即按期限清理
-                </Button>
+                <LogCleanupAction
+                  retentionDays={Number(logCleanupForm.retention_days)}
+                  ready={logCleanupReady}
+                  activeTaskId={logCleanup.data?.task_id}
+                />
                 <Button
                   data-testid="log-cleanup-save"
                   disabled={
@@ -10843,39 +9841,6 @@ function CoreConfigPage(props: ConfigPageProps) {
           ) : null}
         </div>
       </div>
-      <Dialog
-        open={clearLogsOpen && logCleanupReady}
-        onOpenChange={(open) => {
-          if (!clearLogs.isPending && (!open || logCleanupReady)) setClearLogsOpen(open);
-        }}
-      >
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>按保留期限清理日志</DialogTitle>
-            <DialogDescription>
-              将删除 {logCleanupForm.retention_days}{" "}
-              天以前的任务、运行、事件和变更记录。期限内日志和执行中的任务会保留；账号、分组、策略、告警、健康样本和上游使用记录不受影响。
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button
-              variant="outline"
-              disabled={clearLogs.isPending}
-              onClick={() => setClearLogsOpen(false)}
-            >
-              取消
-            </Button>
-            <Button
-              variant="destructive"
-              disabled={clearLogs.isPending || !logCleanupReady}
-              onClick={() => clearLogs.mutate()}
-            >
-              <Trash2 size={15} />
-              {clearLogs.isPending ? "清理中…" : "确认清理"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     </>
   );
 }
@@ -12220,15 +11185,17 @@ export const autoInspectionDetailDialogLayout = {
 function AutoInspectionCard() {
   const status = useQuery({
     queryKey: ["auto-inspection"],
-    queryFn: api.autoInspection,
-    refetchInterval: 15_000,
+    queryFn: ({ signal }) => api.autoInspection(signal),
+    staleTime: 15_000,
+    // SchedulerHeaderControls in the shell is the sole fallback poller.
+    refetchInterval: false,
   });
   const runningTaskID = status.data?.heartbeat_history.find(
     (record) => record.status === "running",
   )?.task_id;
   const runningTask = useQuery({
     queryKey: ["auto-inspection-heartbeat-task", runningTaskID],
-    queryFn: () => api.task(runningTaskID!),
+    queryFn: ({ signal }) => api.task(runningTaskID!, signal),
     enabled: Boolean(runningTaskID),
     retry: false,
     refetchInterval: (query) => taskPollInterval(query, 2_000),
@@ -12243,7 +11210,7 @@ function AutoInspectionCard() {
   >(null);
   const heartbeatTask = useQuery({
     queryKey: ["auto-inspection-heartbeat-task", selectedHeartbeat?.task_id],
-    queryFn: () => api.task(selectedHeartbeat!.task_id!),
+    queryFn: ({ signal }) => api.task(selectedHeartbeat!.task_id!, signal),
     enabled: Boolean(selectedHeartbeat?.task_id),
     retry: false,
     refetchInterval: taskPollInterval,
@@ -12254,27 +11221,27 @@ function AutoInspectionCard() {
     linkedTaskID(heartbeatTask.data, "upstream_sync", "account_rate_sync_task_id");
   const upstreamSyncTask = useQuery({
     queryKey: ["auto-inspection-upstream-sync-task", upstreamSyncTaskID],
-    queryFn: () => api.task(upstreamSyncTaskID!),
+    queryFn: ({ signal }) => api.task(upstreamSyncTaskID!, signal),
     enabled: Boolean(upstreamSyncTaskID),
     retry: false,
     refetchInterval: taskPollInterval,
   });
   const accountRateSyncTask = useQuery({
     queryKey: ["auto-inspection-account-rate-sync-task", accountRateSyncTaskID],
-    queryFn: () => api.task(accountRateSyncTaskID!),
+    queryFn: ({ signal }) => api.task(accountRateSyncTaskID!, signal),
     enabled: Boolean(accountRateSyncTaskID),
     retry: false,
     refetchInterval: taskPollInterval,
   });
   const heartbeatUpstreams = useQuery({
     queryKey: ["upstreams"],
-    queryFn: api.upstreams,
+    queryFn: ({ signal }) => api.upstreams(signal),
     enabled: selectedHeartbeat !== null,
     staleTime: 30_000,
   });
   const heartbeatAccounts = useQuery({
     queryKey: ["accounts"],
-    queryFn: api.accounts,
+    queryFn: ({ signal }) => api.accounts(signal),
     enabled:
       selectedHeartbeat !== null && inspectionWritebackFailures(heartbeatTask.data).length > 0,
     retry: false,
@@ -12658,6 +11625,11 @@ function PolicyPageLoading() {
   );
 }
 
+type PolicySaveAttempt = {
+  payload: PolicyUpdatePayload;
+  draftVersion: number;
+};
+
 export function PolicyPage() {
   const orderedStrategies = useDictionaryOrder(
     "scheduling_strategy",
@@ -12666,15 +11638,20 @@ export function PolicyPage() {
   );
   const policy = useQuery({
     queryKey: ["policy"],
-    queryFn: api.policy,
+    queryFn: ({ signal }) => api.policy(signal),
     refetchInterval: 30_000,
     staleTime: 30_000,
   });
-  const config = useQuery({ queryKey: ["config"], queryFn: api.config });
+  const config = useQuery({
+    queryKey: ["config"],
+    queryFn: ({ signal }) => api.config(signal),
+  });
   const queryClient = useQueryClient();
   const [draft, setDraftValue] = useState<PolicyDraft | null>(null);
   const [draftRevision, setDraftRevision] = useState<string | undefined>();
+  const draftVersion = React.useRef(0);
   function setDraft(value: React.SetStateAction<PolicyDraft | null>): void {
+    draftVersion.current += 1;
     if (draft === null && value !== null) setDraftRevision(policy.data?.revision);
     setDraftValue(value);
   }
@@ -12691,7 +11668,7 @@ export function PolicyPage() {
       ).length > 0);
   const accounts = useQuery({
     queryKey: ["accounts"],
-    queryFn: api.accounts,
+    queryFn: ({ signal }) => api.accounts(signal),
     enabled: category === "scope" || (category === "routing" && selectingAllocationAccounts),
   });
   const selectingAllocationUpstreams =
@@ -12704,27 +11681,37 @@ export function PolicyPage() {
       ).length > 0);
   const allocationUpstreams = useQuery({
     queryKey: ["upstreams"],
-    queryFn: api.upstreams,
+    queryFn: ({ signal }) => api.upstreams(signal),
     enabled: category === "routing" && selectingAllocationUpstreams,
   });
   const [dangerousSaveOpen, setDangerousSaveOpen] = useState(false);
-  const [pendingPolicySave, setPendingPolicySave] = useState<PolicyUpdatePayload | null>(null);
+  const [pendingPolicySave, setPendingPolicySave] = useState<PolicySaveAttempt | null>(null);
   const [restoreControlOpen, setRestoreControlOpen] = useState(false);
   const [saveAttempted, setSaveAttempted] = useState(false);
   const save = useMutation({
-    mutationFn: (payload: PolicyUpdatePayload) => api.updatePolicy(payload),
-    onSuccess: (value) => {
+    mutationFn: async (attempt: PolicySaveAttempt) => {
+      await queryClient.cancelQueries({ queryKey: ["policy"], exact: true });
+      return api.updatePolicy(attempt.payload);
+    },
+    onSuccess: async (value, attempt) => {
+      // Polling may have started another read while this write was in flight.
+      await queryClient.cancelQueries({ queryKey: ["policy"], exact: true });
       queryClient.setQueryData(["policy"], value);
       void queryClient.invalidateQueries({ queryKey: ["upstream-allocation"] });
-      setDraft(null);
-      setSaveAttempted(false);
+      const hasNewEdits = draftVersion.current !== attempt.draftVersion;
+      if (hasNewEdits) {
+        setDraftRevision(value.revision);
+      } else {
+        setDraft(null);
+        setSaveAttempted(false);
+      }
       void Promise.all([
         queryClient.invalidateQueries({ queryKey: ["config"] }),
         queryClient.invalidateQueries({ queryKey: ["groups"] }),
         queryClient.invalidateQueries({ queryKey: ["logs"] }),
         queryClient.invalidateQueries({ queryKey: ["overview"] }),
       ]);
-      toast.success("策略已保存，将用于下一轮调度");
+      toast.success(hasNewEdits ? "策略已保存，后续修改尚未保存" : "策略已保存，将用于下一轮调度");
     },
     onError: (error) => notifyOperationError(error, "策略保存失败"),
   });
@@ -12761,11 +11748,14 @@ export function PolicyPage() {
     onError: (error) => notifyOperationError(error, "主动探测设置失败"),
   });
   const data = policy.data;
-  const current = draft ?? (data ? policyDraft(data) : null);
-  const payload = current ? policyPayload(current) : null;
-  const relationshipError = current ? policyRelationshipError(current) : null;
+  const current = useMemo(() => draft ?? (data ? policyDraft(data) : null), [draft, data]);
+  const payload = useMemo(() => (current ? policyPayload(current) : null), [current]);
+  const relationshipError = useMemo(
+    () => (current ? policyRelationshipError(current) : null),
+    [current],
+  );
   function submitPolicy() {
-    if (policy.error) return;
+    if (policy.error || save.isPending) return;
     setSaveAttempted(true);
     const latest = queryClient.getQueryData<import("./api").PolicySnapshot>(["policy"]) ?? data;
     const value = draft ?? (latest ? policyDraft(latest) : null);
@@ -12775,6 +11765,9 @@ export function PolicyPage() {
       ...policySettingsPayload(update),
       expected_revision: draft === null ? latest?.revision : draftRevision,
     };
+    // A refresh started before this submission must not discard the submitted draft.
+    draftVersion.current += 1;
+    const attempt = { payload: savePayload, draftVersion: draftVersion.current };
     const abnormalCleanup = update.advanced_policy?.abnormal_cleanup;
     const abnormalConfig = abnormalCleanupSchema.safeParse(abnormalCleanup ?? {});
     const abnormalDelete =
@@ -12788,15 +11781,17 @@ export function PolicyPage() {
         : null;
     const destructiveCleanup = cleanupConfig?.enabled === true && cleanupConfig.action === "delete";
     if (destructiveCleanup || abnormalDelete) {
-      setPendingPolicySave(savePayload);
+      setPendingPolicySave(attempt);
       setDangerousSaveOpen(true);
       return;
     }
-    save.mutate(savePayload);
+    save.mutate(attempt);
   }
   async function refreshPolicy() {
+    if (save.isPending) return;
+    const version = draftVersion.current;
     const result = await policy.refetch();
-    if (!result.isError && result.data) {
+    if (!result.isError && result.data && draftVersion.current === version) {
       setDraft(null);
     }
   }
@@ -12811,6 +11806,7 @@ export function PolicyPage() {
             <RefreshButton
               pending={policy.isFetching}
               ariaLabel="刷新策略"
+              disabled={save.isPending}
               onClick={() => void refreshPolicy()}
             />
             <Button
@@ -12870,9 +11866,13 @@ export function PolicyPage() {
                         }
                       >
                         <SelectTrigger>
-                          <SelectValue>{displayStrategy(current.global_strategy)}</SelectValue>
+                          <SelectValue>
+                            {orderedStrategies.find(
+                              (option) => option.value === current.global_strategy,
+                            )?.label ?? displayStrategy(current.global_strategy)}
+                          </SelectValue>
                         </SelectTrigger>
-                        <SelectContent>
+                        <SelectContent dictionaryKind="scheduling_strategy">
                           {orderedStrategies.map((option) => (
                             <SelectItem key={option.value} value={option.value}>
                               {option.label}
@@ -14362,6 +13362,7 @@ export function PolicyScopeLayout(props: PolicyScopeEditorProps) {
 }
 
 export function PolicyScopeEditor(props: PolicyScopeEditorProps) {
+  const groupDictionary = useDictionary("group");
   const orderedGroups = useDictionaryOrder("group", props.groups, (item) => item.id ?? "");
   const platformDictionary = useQuery({
     queryKey: ["dictionaries", "platform"],
@@ -14374,7 +13375,7 @@ export function PolicyScopeEditor(props: PolicyScopeEditorProps) {
   const managedIDs = Array.isArray(configuredIDs) ? configuredIDs.map(String) : [];
   const selectedMode = configuredMode === "selected";
   const selectedIDs = new Set(managedIDs);
-  const stableGroupIDs = props.groups.flatMap((group) => (group.id === null ? [] : [group.id]));
+  const stableGroupIDs = orderedGroups.flatMap((group) => (group.id === null ? [] : [group.id]));
   const selectedAccountTypes = policyStringArray(
     policyAdvancedValue(props.value, "scope", "account_types"),
   ).map((value) => value.toLocaleLowerCase());
@@ -14404,49 +13405,16 @@ export function PolicyScopeEditor(props: PolicyScopeEditorProps) {
     ),
     (item) => item.value,
   );
-  const platformOptions = policyScopeValueOptions(
-    orderedDictionaryOptions(
-      platformDictionary.data?.items,
-      [
-        ...new Set([
-          ...concreteAccountPlatformOptions.map((option) => option.value),
-          ...props.accounts.flatMap((account) => {
-            const value = account.platform?.trim().toLocaleLowerCase();
-            return value ? [value] : [];
-          }),
-        ]),
-      ].map((value) => ({ value, label: accountPlatformLabel(value) ?? value })),
-    ).map((option) => option.value),
-    selectedPlatforms,
-    (value, stale) =>
-      `${accountPlatformLabel(value) ?? value}${stale ? "（当前配置，账号中未发现）" : ""}`,
-    false,
-  );
-  const excludedGroupOptions = useDictionaryOrder(
-    "group",
-    policyScopeEntityOptions(
-      props.groups.flatMap((group) =>
-        group.id === null
-          ? []
-          : [
-              {
-                value: group.id,
-                label: [
-                  `${group.name}（#${group.id}）`,
-                  group.platforms
-                    .map((platform) => accountPlatformLabel(platform) ?? platform)
-                    .join("、"),
-                  `${group.account_count} 个账号`,
-                ]
-                  .filter(Boolean)
-                  .join(" · "),
-              },
-            ],
-      ),
-      selectedExcludedGroups,
-      "分组",
-    ),
-    (item) => item.value,
+  const platformOptions = orderedDictionaryOptions(platformDictionary.data?.items);
+  const excludedGroupOptions = orderedGroups.flatMap((group) =>
+    group.id === null
+      ? []
+      : [
+          {
+            value: group.id,
+            label: `${group.name}（#${group.id}） · ${group.account_count} 个账号`,
+          },
+        ],
   );
   const accountOptions = policyScopeEntityOptions(
     props.accounts.map((account) => ({
@@ -14487,11 +13455,13 @@ export function PolicyScopeEditor(props: PolicyScopeEditorProps) {
         switchAction={{
           checked: !selectedMode,
           label: "全部分组参与守护",
+          disabled: !groupDictionary.data,
           text: "全部分组",
           onCheckedChange: (allGroups) =>
             updateManagedGroups(allGroups ? "all" : "selected", allGroups ? [] : stableGroupIDs),
         }}
       >
+        <DictionaryReadState kind="group" />
         {!selectedMode && (
           <p className="text-muted-foreground col-span-full text-sm leading-6">
             当前所有分组都参与守护。关闭上方开关可只勾选部分分组。
@@ -14552,6 +13522,8 @@ export function PolicyScopeEditor(props: PolicyScopeEditorProps) {
           <FormField label="账号类型">
             <MultiSelect
               options={accountTypeOptionsForScope}
+              selectedValueLabel={(value) => accountTypeLabel(value) ?? value}
+              dictionaryKind="account_type"
               selected={selectedAccountTypes}
               onChange={(values) => set("scope", "account_types", values)}
               title="选择账号类型"
@@ -14565,6 +13537,8 @@ export function PolicyScopeEditor(props: PolicyScopeEditorProps) {
           <FormField label="平台">
             <MultiSelect
               options={platformOptions}
+              selectedValueLabel={(value) => accountPlatformLabel(value) ?? value}
+              dictionaryKind="platform"
               selected={selectedPlatforms}
               onChange={(values) => set("scope", "platforms", values)}
               title={props.accountsPending ? "正在加载平台…" : "选择平台"}
@@ -14584,6 +13558,10 @@ export function PolicyScopeEditor(props: PolicyScopeEditorProps) {
           <FormField label="排除分组">
             <MultiSelect
               options={excludedGroupOptions}
+              selectedValueLabel={(value) =>
+                `${props.groups.find((group) => group.id === value)?.name ?? "分组"}（#${value}，当前不可选）`
+              }
+              dictionaryKind="group"
               selected={selectedExcludedGroups}
               onChange={(values) => props.onChange({ ...props.value, excluded_group_ids: values })}
               title="选择排除分组"
@@ -14773,22 +13751,6 @@ function QueryError(props: {
 }) {
   return <QueryErrorToast error={props.error} fallback={props.fallback} />;
 }
-function formatDate(value: string | null | undefined, includeSeconds = false) {
-  if (!value) return "未知时间";
-  const numeric = /^\d{10,13}$/.test(value) ? Number(value) : null;
-  let dateInput: string | number = value;
-  if (numeric !== null) dateInput = value.length === 10 ? numeric * 1000 : numeric;
-  const date = new Date(dateInput);
-  return Number.isNaN(date.getTime())
-    ? value
-    : date.toLocaleString("zh-CN", {
-        month: "2-digit",
-        day: "2-digit",
-        hour: "2-digit",
-        minute: "2-digit",
-        second: includeSeconds ? "2-digit" : undefined,
-      });
-}
 function formatBalance(value: string, unit?: string | null) {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) return value;
@@ -14809,5 +13771,3 @@ function formatBalanceNumber(value: string): string {
     maximumFractionDigits: 4,
   }).format(parsed);
 }
-
-export default App;

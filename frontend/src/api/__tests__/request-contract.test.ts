@@ -1265,7 +1265,10 @@ describe("account model sync settings contract", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     await api.accountModelSyncSettings();
-    await api.updateAccountModelSyncSettings({ blocked_patterns: ["claude-*", "*-image-*"] });
+    await api.updateAccountModelSyncSettings({
+      blocked_patterns: ["claude-*", "*-image-*"],
+      expected_patterns: ["claude-*"],
+    });
 
     expect(fetchMock.mock.calls.map((call) => call[0])).toEqual([
       "/api/config/model-sync",
@@ -1274,6 +1277,7 @@ describe("account model sync settings contract", () => {
     expect(fetchMock.mock.calls[1]?.[1]).toMatchObject({ method: "PUT" });
     expect(JSON.parse(String((fetchMock.mock.calls[1]?.[1] as RequestInit).body))).toEqual({
       blocked_patterns: ["claude-*", "*-image-*"],
+      expected_patterns: ["claude-*"],
     });
   });
 });

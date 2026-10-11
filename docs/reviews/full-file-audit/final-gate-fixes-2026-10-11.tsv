@@ -1,0 +1,16 @@
+frontend/src/features/config/components/model-sync-settings-card.tsx	3d3e82e6dfa01a547593c5894e0e264675be6e34216a15196c0d6eaabe3dda60	fixed	修复成功PUT后共享缓存仍为旧值；先取消旧GET，再写入规范响应，保留后台复核。旧实现稳定复现，修复后配置及调用方回归通过。
+frontend/src/features/config/components/__tests__/settings-save-readback.test.tsx	0bac419605351ddab37ea4c370bd6fd22426e505cc45f65ec60b323e92f30e04	fixed	分别保留保存前旧GET与保存后复核GET；校验缓存立即更新、旧请求取消及迟到响应不覆盖。
+frontend/src/components/ui/__tests__/focus-policy.test.js	0e2a96f5bc345314c852381cb2f92535eab5689c35ec2632faee03fd181d3c29	fixed	仅移除绑定具体ref写法的过期断言，保留其他全局策略；焦点功能转真实交互测试。
+frontend/src/components/ui/__tests__/dropdown-search-interaction.test.tsx	3f43ba196ace42e530ec11f7eb9face781de5f077d227d2652b838e3d2b6561b	fixed	单选、多选及筛选菜单实际打开后搜索聚焦、无焦点光环、直接键入并筛选；三场景通过，JSDOM仅mock浏览器边界。
+backend/internal/uptimekuma/__tests__/snapshot_fixture_test.go	56ffed6d12ac711ed689314cf0fb3c6a41c8bf086a9e5bb610a489620358b890	fixed	全文核对快照并发测试及真实HTTP/WebSocket夹具。服务端Flush替换为客户端实际Body.Read事件同步，保持返回前关闭响应体断言，不放宽超时、不改生产。最终独立测试包竞态与vet通过。
+backend/internal/uptimekuma/__tests__/snapshot_concurrency_test.go	2a29965d0a60015d0912f027613a900a36e2e5d0f22698e3657892a42dd3aa6b	fixed	全文核对快照并发测试及真实HTTP/WebSocket夹具。服务端Flush替换为客户端实际Body.Read事件同步，保持返回前关闭响应体断言，不放宽超时、不改生产。最终独立测试包竞态与vet通过。
+frontend/e2e/__tests__/account-live-refresh.e2e.ts	10b250295a3906e560887945329f031a9e38a86b4c9429129126b2618c820ca1	fixed	按当前同组容量3构造刷新后满额，保留最新占用禁选契约；旧单账号独占断言过期。 已核对当前差异及契约；最终10文件70场景全部通过，类型/lint/格式通过。
+frontend/e2e/__tests__/alert-policy-loading.e2e.ts	fd1a5c107c466b2a7e517375294c3d17a661694a2da0deb4458d82c2140ec666	fixed	按初读、刷新失败、重试阶段控制响应，兼容StrictMode取消重挂；保留布局、草稿7和保存禁用断言，不依赖累计请求数。 已核对当前差异及契约；最终10文件70场景全部通过，类型/lint/格式通过。
+frontend/e2e/__tests__/custom-animation.e2e.ts	bb361bebde4a61e3ddc9570e9873d637691e7acc17b1bb4a32ae3797c7d5264e	fixed	补齐字典成功响应，真实选择Anthropic并完成自定义动画；保留Key清空与长文本布局。 已核对当前差异及契约；最终10文件70场景全部通过，类型/lint/格式通过。
+frontend/e2e/__tests__/detection-account-control.e2e.ts	db4e799a1415c9264c54b62dce0341ce20119030806f779f82f2bcd3195aee22	fixed	夹具改为真实control-state公开字段及完成任务读回，熔断/恢复三个状态字段一致；保留确认操作、结果和窄屏断言。终端移除为本轮之前已有变化。 已核对当前差异及契约；最终10文件70场景全部通过，类型/lint/格式通过。
+frontend/e2e/global-styles.e2e.ts	c5c63800bb0203628944ecd90eb2db3184e8d5e3127bcd3982ef4d250fda85f8	fixed	补齐分组字典，等待真实选项加载后执行End；保留短屏滚动、键盘选中及焦点；未改日志实现。 已核对当前差异及契约；最终10文件70场景全部通过，类型/lint/格式通过。
+frontend/e2e/__tests__/pricing-minimum.e2e.ts	f26600b68910b15d83ef0fd53cbccef8c887a201e04dc4b94052b6eb35b978f1	fixed	补齐字典分组与长名称，保留高精度保存/清空、非法输入及窄屏契约。 已核对当前差异及契约；最终10文件70场景全部通过，类型/lint/格式通过。
+frontend/e2e/__tests__/request-trace-layout.e2e.ts	16ecbfb69dbbe61b588c601f662b71d14dca6b6c9e4d6f77013a9337d1c1aeda	fixed	取消场景使用真实control-state接口和公开响应，等待请求取消并验证迟到响应不能恢复处置入口；未改日志实现。 已核对当前差异及契约；最终10文件70场景全部通过，类型/lint/格式通过。
+frontend/e2e/__tests__/settings-layout.e2e.ts	86e4e9f6671263e1ea29c00416f2ccd27bbe28ce534269b0790c3e56610e3afb	fixed	补齐价格字典及长分组名称；保留价格配置排列、折叠选择和策略草稿/键盘回归。 已核对当前差异及契约；最终10文件70场景全部通过，类型/lint/格式通过。
+frontend/e2e/__tests__/shared-controls-layout.e2e.ts	59af9b99dae9e21c2109736d6ea4ce3f9f2c0420256ecb1ea9e25cc9324fa0d4	fixed	独立Bun夹具显式定义import.meta.env，解决模块挂载前脚本错误；控件换行、滚动、焦点及移除断言不变。 已核对当前差异及契约；最终10文件70场景全部通过，类型/lint/格式通过。
+frontend/e2e/__tests__/style-surfaces.e2e.ts	0a8b8272cb9c80f21966d6f51b2cd048401ff97e36154b1af93650b694c79f0d	fixed	独立Bun夹具显式定义import.meta.env；实际执行浮层、徽标、短/长弹窗、滚动、移除及加载失败布局断言。 已核对当前差异及契约；最终10文件70场景全部通过，类型/lint/格式通过。

@@ -27,7 +27,7 @@ export function PolicyCategoryNavigation(props: {
       <SegmentedControl
         role="tablist"
         aria-label="策略分类"
-        className="bg-muted/30 grid w-full grid-cols-2 items-stretch gap-1.5 rounded-xl p-1.5 sm:grid-cols-4"
+        className="bg-muted/30 grid w-full grid-cols-2 items-stretch gap-1.5 rounded-lg p-1.5 sm:grid-cols-4"
       >
         {categories.map((category) => (
           <SegmentedControlItem

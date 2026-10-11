@@ -1,5 +1,7 @@
 "use client";
 
+import type { DictionaryKind } from "@/api";
+import { DictionaryReadState } from "@/components/dictionary-read-state";
 import { Select as SelectPrimitive } from "@base-ui/react/select";
 import { Check, ChevronDown, CirclePlus, Search } from "lucide-react";
 import * as React from "react";
@@ -195,6 +197,7 @@ function SelectContent({
   alignItemWithTrigger = false,
   appearance = "classic",
   searchable = true,
+  dictionaryKind,
   ...props
 }: SelectPrimitive.Popup.Props &
   Pick<
@@ -204,11 +207,17 @@ function SelectContent({
     portalContainer?: SelectPrimitive.Portal.Props["container"];
     appearance?: "faceted" | "classic";
     searchable?: boolean;
+    dictionaryKind?: DictionaryKind;
   }) {
   const [search, setSearch] = React.useState("");
   const showSearch = shouldShowSelectSearch(children, searchable);
   const filteredChildren = filterSelectChildren(children, showSearch ? search : "");
   const hasFilteredChildren = React.Children.toArray(filteredChildren).length > 0;
+  const emptyContent = dictionaryKind ? (
+    <DictionaryReadState kind={dictionaryKind}>没有匹配的选项</DictionaryReadState>
+  ) : (
+    <div className="text-muted-foreground py-6 text-center text-sm">没有匹配的选项</div>
+  );
   const content = (
     <SelectPrimitive.Positioner
       side={side}
@@ -258,11 +267,7 @@ function SelectContent({
           </div>
         ) : null}
         <SelectPrimitive.List className="no-scrollbar min-h-0 overflow-y-auto overscroll-contain p-1">
-          {hasFilteredChildren ? (
-            filteredChildren
-          ) : (
-            <div className="text-muted-foreground py-6 text-center text-sm">没有匹配的选项</div>
-          )}
+          {hasFilteredChildren ? filteredChildren : emptyContent}
         </SelectPrimitive.List>
       </SelectPrimitive.Popup>
     </SelectPrimitive.Positioner>

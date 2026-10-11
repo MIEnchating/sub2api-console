@@ -10,6 +10,7 @@ import (
 )
 
 func TestProjectHealthSecondaryGroupUsesCanonicalPrimaryRecoveryEvidence(t *testing.T) {
+	t.Parallel()
 	store, db := healthEvidenceStore(t)
 	now := time.Now().UTC()
 	primarySince := now.Add(-5 * time.Minute).Format(time.RFC3339Nano)
@@ -57,6 +58,7 @@ func TestProjectHealthSecondaryGroupUsesCanonicalPrimaryRecoveryEvidence(t *test
 }
 
 func TestProjectHealthInapplicableAccountsHaveNoProjection(t *testing.T) {
+	t.Parallel()
 	for _, reason := range []string{"manual_priority", "account_type", "group_excluded", "group_disabled", "external_control"} {
 		t.Run(reason, func(t *testing.T) {
 			store, db := healthEvidenceStore(t)

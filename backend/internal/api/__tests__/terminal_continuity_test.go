@@ -27,7 +27,7 @@ func (s *terminalService) TerminalContinuityHistory(context.Context) ([]taskstor
 	return []taskstore.Task{}, nil
 }
 
-func TestTerminalContinuityAPIIsAuthenticatedAndIndependent(t *testing.T) {
+func TestRemovedTerminalAPIRejectsCreationAndPreservesAuthenticatedHistory(t *testing.T) {
 	for _, tc := range []struct {
 		name, method, body string
 		auth               bool
@@ -35,8 +35,8 @@ func TestTerminalContinuityAPIIsAuthenticatedAndIndependent(t *testing.T) {
 	}{
 		{"anonymous submit", "POST", `{}`, false, 401},
 		{"anonymous history", "GET", "", false, 401},
-		{"invalid JSON", "POST", `{"targets":{}}`, true, 422},
-		{"create", "POST", `{"targets":[{"account_id":"41","model":"gpt-6-astra"}],"timeout_seconds":120}`, true, 200},
+		{"invalid JSON", "POST", `{"targets":{}}`, true, 410},
+		{"create", "POST", `{"targets":[{"account_id":"41","model":"gpt-6-astra"}],"timeout_seconds":120}`, true, 410},
 		{"history", "GET", "", true, 200},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

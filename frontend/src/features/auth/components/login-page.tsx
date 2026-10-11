@@ -11,7 +11,7 @@ import {
 } from "lucide-react";
 import { useId, useState, type ReactElement } from "react";
 import { useForm } from "react-hook-form";
-import { api } from "@/api";
+import { api, type SessionStatus } from "@/api";
 import { FormField } from "@/components/form-field";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -21,7 +21,7 @@ import { loginSchema, type LoginForm } from "../lib/login-schema";
 import { LoginShell } from "./login-shell";
 
 export type LoginPageProps = {
-  onLogin: () => void;
+  onLogin: (session: SessionStatus) => void;
   reason?: string | null;
   theme?: "light" | "dark";
   onThemeChange?: () => void;
@@ -35,14 +35,24 @@ export function LoginPage(props: LoginPageProps): ReactElement {
     defaultValues: { username: "", password: "" },
   });
   const login = useMutation({
-    mutationFn: api.login,
+    mutationFn: async (values: LoginForm) => {
+      const session = await api.login(values);
+      if (
+        session?.authenticated !== true ||
+        typeof session.username !== "string" ||
+        !session.username.trim()
+      ) {
+        throw new Error("登录响应未确认有效会话，请重新登录");
+      }
+      return session;
+    },
     networkMode: "always",
     gcTime: 0,
     retry: false,
-    onSuccess: () => {
+    onSuccess: (session) => {
       setPasswordVisible(false);
       form.reset();
-      props.onLogin();
+      props.onLogin(session);
     },
     onError: (error: unknown) => notifyOperationError(error, "登录失败"),
     onSettled: (): void => login.reset(),

@@ -10,6 +10,7 @@ import (
 )
 
 func TestPersistentAbnormalCleanupObservesIndependentDuration(t *testing.T) {
+	t.Parallel()
 	for _, action := range []string{"pause", "disable", "delete"} {
 		t.Run(action, func(t *testing.T) {
 			store, db := healthEvidenceStore(t)
@@ -56,6 +57,7 @@ func TestPersistentAbnormalCleanupObservesIndependentDuration(t *testing.T) {
 }
 
 func TestPersistentAbnormalCleanupResetsIneligibleObservations(t *testing.T) {
+	t.Parallel()
 	for _, scenario := range []string{"disabled", "success", "stale", "rate-limit", "manual-fuse", "manual-pause", "excluded", "no-evidence", "intervening-success", "manual-priority"} {
 		t.Run(scenario, func(t *testing.T) {
 			store, db := healthEvidenceStore(t)
@@ -120,6 +122,7 @@ func TestPersistentAbnormalCleanupResetsIneligibleObservations(t *testing.T) {
 }
 
 func TestPersistentAbnormalCleanupHonorsBatchAndLastGroupMember(t *testing.T) {
+	t.Parallel()
 	for _, keepLast := range []bool{false, true} {
 		t.Run(fmt.Sprint(keepLast), func(t *testing.T) {
 			store, db := healthEvidenceStore(t)
@@ -168,6 +171,7 @@ func TestPersistentAbnormalCleanupHonorsBatchAndLastGroupMember(t *testing.T) {
 }
 
 func TestPersistentAbnormalCleanupIncludesRepeatedGatewayFailures(t *testing.T) {
+	t.Parallel()
 	store, db := healthEvidenceStore(t)
 	if _, err := store.UpdatePolicy(t.Context(), map[string]any{"advanced_policy": map[string]any{
 		"abnormal_cleanup": map[string]any{"enabled": true, "duration_minutes": 1, "keep_last_in_group": false},
@@ -195,6 +199,7 @@ func TestPersistentAbnormalCleanupIncludesRepeatedGatewayFailures(t *testing.T) 
 }
 
 func TestPersistentAbnormalUsesProbeFreshnessIndependentlyOfTrafficWindow(t *testing.T) {
+	t.Parallel()
 	store, db := healthEvidenceStore(t)
 	if _, err := store.UpdatePolicy(t.Context(), map[string]any{"traffic_lookback_minutes": 1, "advanced_policy": map[string]any{
 		"breaker":          map[string]any{"min_pool_size": 0},

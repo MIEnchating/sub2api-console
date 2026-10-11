@@ -4,8 +4,10 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { useForm } from "react-hook-form";
+import { isCancelledError } from "@tanstack/react-query";
 import {
   CircleDollarSign,
+  Copy,
   FileText,
   GitCompareArrows,
   RefreshCw,
@@ -47,6 +49,13 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { SegmentedControl, SegmentedControlItem } from "@/components/ui/segmented-control";
 import { useClientPagination } from "@/hooks/use-client-pagination";
 import { notifyOperationError } from "@/lib/operation-feedback";
@@ -105,6 +114,10 @@ type PriceAdjustmentRequest = {
   direction: ModelPriceAdjustmentDirection;
 };
 
+type ApplyPriceRequest = {
+  target: NewAPIModelPrice;
+};
+
 type PendingModelAction = {
   model: string;
   kind: "write" | "sync";
@@ -124,6 +137,7 @@ export function NewAPIModelPrices(props: PriceProps) {
     null,
   );
   const [adjustmentRequest, setAdjustmentRequest] = useState<PriceAdjustmentRequest | null>(null);
+  const [applyPriceRequest, setApplyPriceRequest] = useState<ApplyPriceRequest | null>(null);
   const [restorePrices, setRestorePrices] = useState<Record<string, NewAPIModelPrice>>({});
   const [pendingModelAction, setPendingModelAction] = useState<PendingModelAction | null>(null);
   const [selectedModels, setSelectedModels] = useState<Set<string>>(new Set());
@@ -145,6 +159,10 @@ export function NewAPIModelPrices(props: PriceProps) {
       .sort((left, right) => left.model.localeCompare(right.model))
       .map((model) => ({ model: model.model, configured: model }));
   }, [props.models]);
+  const sourcePrices = useMemo(
+    () => [...props.models].sort((left, right) => left.model.localeCompare(right.model)),
+    [props.models],
+  );
   const unsetRows = useMemo(
     () =>
       [...(props.unsetModels ?? [])]
@@ -216,7 +234,7 @@ export function NewAPIModelPrices(props: PriceProps) {
         }),
       );
     } catch (error) {
-      if (requestID !== batchPreviewRequest.current) return;
+      if (requestID !== batchPreviewRequest.current || isCancelledError(error)) return;
       setBatchFailed(true);
       notifyOperationError(error, "参考价格读取失败，请重试");
     } finally {
@@ -323,6 +341,16 @@ export function NewAPIModelPrices(props: PriceProps) {
     } finally {
       setPendingModelAction(null);
     }
+  }
+
+  async function applyModelPrice(
+    target: NewAPIModelPrice,
+    source: NewAPIModelPrice,
+  ): Promise<void> {
+    const applied = { ...source, model: target.model };
+    if (!(await writeModelPrice(applied, `套用 ${source.model} 价格`))) return;
+    rememberRestorePrice(target);
+    setApplyPriceRequest(null);
   }
 
   return (
@@ -476,7 +504,7 @@ export function NewAPIModelPrices(props: PriceProps) {
                   <TableHead className="w-40 text-right">缓存创建</TableHead>
                   <TableHead className="w-40 text-right">缓存读取</TableHead>
                   {tab === "models" ? <TableHead className="w-28">状态</TableHead> : null}
-                  <TableHead className="w-44 text-right">操作</TableHead>
+                  <TableHead className="w-56 text-right">操作</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -491,6 +519,9 @@ export function NewAPIModelPrices(props: PriceProps) {
                       ? newAPIPriceComparisonStatus(row.configured, props.managementPrices)
                       : null;
                   const actionPending = selectionBusy;
+                  const availableSources = sourcePrices.filter(
+                    (price) => price.model !== row.model,
+                  );
                   const syncPending =
                     pendingModelAction?.model === row.model && pendingModelAction.kind === "sync";
                   return (
@@ -595,7 +626,7 @@ export function NewAPIModelPrices(props: PriceProps) {
                           />
                         </TableCell>
                       ) : null}
-                      <TableCell className="w-44 align-top text-right" overflowTooltip={false}>
+                      <TableCell className="w-56 align-top text-right" overflowTooltip={false}>
                         {tab === "unset" ? (
                           <TableActionButton
                             label="查询远程价格"
@@ -606,7 +637,7 @@ export function NewAPIModelPrices(props: PriceProps) {
                           </TableActionButton>
                         ) : null}
                         {tab === "models" ? (
-                          <div className="flex min-w-40 items-center justify-end gap-1">
+                          <div className="flex min-w-52 items-center justify-end gap-1">
                             {comparisonStatus === "mismatched" ? (
                               <TableActionButton
                                 label="查看价格差异"
@@ -625,6 +656,16 @@ export function NewAPIModelPrices(props: PriceProps) {
                             ) : null}
                             {props.onWriteModelPrice || props.onSyncModelPrice ? (
                               <>
+                                {props.onWriteModelPrice && availableSources.length > 0 ? (
+                                  <TableActionButton
+                                    label="套用其他模型价格"
+                                    ariaLabel={`套用其他模型价格到 ${row.model}`}
+                                    disabled={actionPending}
+                                    onClick={() => setApplyPriceRequest({ target: row.configured })}
+                                  >
+                                    <Copy aria-hidden="true" />
+                                  </TableActionButton>
+                                ) : null}
                                 <TableActionButton
                                   label="上调价格"
                                   ariaLabel={`上调 ${row.model} 价格`}
@@ -676,6 +717,18 @@ export function NewAPIModelPrices(props: PriceProps) {
                               </>
                             ) : null}
                           </div>
+                        ) : null}
+                        {tab === "unset" &&
+                        props.onWriteModelPrice &&
+                        availableSources.length > 0 ? (
+                          <TableActionButton
+                            label="套用其他模型价格"
+                            ariaLabel={`套用其他模型价格到 ${row.model}`}
+                            disabled={actionPending}
+                            onClick={() => setApplyPriceRequest({ target: row.configured })}
+                          >
+                            <Copy aria-hidden="true" />
+                          </TableActionButton>
                         ) : null}
                       </TableCell>
                     </TableRow>
@@ -760,7 +813,93 @@ export function NewAPIModelPrices(props: PriceProps) {
           onSubmit={(values) => void submitAdjustment(adjustmentRequest, values)}
         />
       ) : null}
+      {applyPriceRequest ? (
+        <ApplyModelPriceDialog
+          key={applyPriceRequest.target.model}
+          target={applyPriceRequest.target}
+          sources={sourcePrices.filter((price) => price.model !== applyPriceRequest.target.model)}
+          pending={pendingModelAction?.model === applyPriceRequest.target.model}
+          onOpenChange={(open) => {
+            if (!open && pendingModelAction?.model !== applyPriceRequest.target.model) {
+              setApplyPriceRequest(null);
+            }
+          }}
+          onSubmit={(source) => void applyModelPrice(applyPriceRequest.target, source)}
+        />
+      ) : null}
     </div>
+  );
+}
+
+function ApplyModelPriceDialog(props: {
+  target: NewAPIModelPrice;
+  sources: NewAPIModelPrice[];
+  pending: boolean;
+  onOpenChange: (open: boolean) => void;
+  onSubmit: (source: NewAPIModelPrice) => void;
+}) {
+  const [sourceModel, setSourceModel] = useState(props.sources[0]?.model ?? "");
+  const source = props.sources.find((price) => price.model === sourceModel) ?? null;
+
+  return (
+    <Dialog open onOpenChange={props.onOpenChange}>
+      <DialogContent showCloseButton={!props.pending}>
+        <DialogHeader>
+          <DialogTitle>{`${props.target.model} 套用其他模型价格`}</DialogTitle>
+          <DialogDescription>
+            选择一个已有价格的模型，完整复制计费配置到当前模型，目标模型名称保持不变。
+          </DialogDescription>
+        </DialogHeader>
+        <DialogBody className="grid gap-4">
+          <div className="grid gap-1.5">
+            <label htmlFor="apply-model-price-source" className="text-sm font-medium">
+              来源模型
+            </label>
+            <Select
+              value={sourceModel || null}
+              onValueChange={(value) => setSourceModel(String(value ?? ""))}
+              disabled={props.pending || props.sources.length === 0}
+            >
+              <SelectTrigger id="apply-model-price-source" aria-label="来源模型">
+                <SelectValue placeholder="选择来源模型" />
+              </SelectTrigger>
+              <SelectContent>
+                {props.sources.map((price) => (
+                  <SelectItem key={price.model} value={price.model}>
+                    {price.model}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          {source ? (
+            <div className="rounded-md border bg-muted/20 p-3 text-xs">
+              将复制：{billingModeLabel(source)}、输入 {inputPriceValue(source)}、输出{" "}
+              {outputPriceValue(source)}
+            </div>
+          ) : null}
+        </DialogBody>
+        <DialogFooter>
+          <Button
+            type="button"
+            variant="outline"
+            disabled={props.pending}
+            onClick={() => props.onOpenChange(false)}
+          >
+            取消
+          </Button>
+          <Button
+            type="button"
+            disabled={props.pending || source === null}
+            onClick={() => {
+              if (source) props.onSubmit(source);
+            }}
+          >
+            {props.pending ? "正在写入" : "确认套用"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -1121,8 +1260,8 @@ function RemotePriceWriteAction(props: {
 }
 
 function remotePriceBillingExpression(price: Sub2APIModelPrice): string {
-  if (price.billing_expr) return price.billing_expr;
   if (price.time_pricing) return timePricingExpression(price);
+  if (price.billing_expr) return price.billing_expr;
   if (price.long_context_threshold) {
     const standard = remotePriceTierExpression(price, false);
     const longContext = remotePriceTierExpression(price, true);

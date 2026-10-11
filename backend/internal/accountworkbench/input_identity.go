@@ -1,6 +1,7 @@
 package accountworkbench
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"strings"
@@ -71,7 +72,7 @@ func enrichInputIdentity(credentials map[string]any) string {
 			continue
 		}
 		var claims map[string]any
-		decoder := json.NewDecoder(strings.NewReader(string(payload)))
+		decoder := json.NewDecoder(bytes.NewReader(payload))
 		decoder.UseNumber()
 		if decoder.Decode(&claims) != nil {
 			continue

@@ -13,6 +13,29 @@ const result: AnimationResult = {
   completed_at: "2026-09-13T00:00:00Z",
 };
 
+it("历史动画读取手动结论，重测的新结果不继承旧标记", () => {
+  const marked = {
+    ...result,
+    manual_verdict: {
+      verdict: "not_passed" as const,
+      updated_at: "2026-10-08T01:00:00Z",
+      updated_by: "operator",
+    },
+  };
+  const previous = task([marked]);
+  expect(collectAnimationTasks([previous], new Set()).results.get("41")?.manual_verdict).toEqual(
+    marked.manual_verdict,
+  );
+  const next = {
+    ...task([{ ...result, request_id: "retest-result", completed_at: "2026-10-08T02:00:00Z" }]),
+    id: "retest",
+    created_at: "2026-10-08T01:59:00Z",
+  };
+  const latest = collectAnimationTasks([previous, next], new Set()).results.get("41");
+  expect(latest?.source_task_id).toBe("retest");
+  expect(latest?.manual_verdict).toBeUndefined();
+});
+
 it("前置历史结果保留推理用量及长回答的截断标记", () => {
   const precheck = {
     ...result,
@@ -36,6 +59,65 @@ it("前置历史结果保留推理用量及长回答的截断标记", () => {
   expect(collectAnimationTasks([history], new Set()).precheckResults.get("41")).toEqual(precheck);
 });
 
+it("组合任务的旧结果缺少 mode 时仍按前置报告归类", () => {
+  const precheck = {
+    ...result,
+    precheck: {
+      verdict: "passed" as const,
+      profile_version: "astra-v1",
+      questions: [],
+    },
+    request_id: "precheck-41",
+  };
+  const animation = {
+    ...result,
+    svg: "<svg />",
+    request_id: "animation-41",
+  };
+  const combined: Task = {
+    ...task([precheck, animation]),
+    operation: "managed-model-detection",
+    result: {
+      mode: "both",
+      account_ids: ["41"],
+      animations: [precheck, animation],
+    },
+  };
+
+  const state = collectAnimationTasks([combined], new Set());
+
+  expect(state.precheckResults.get("41")?.request_id).toBe("precheck-41");
+  expect(state.results.get("41")?.request_id).toBe("animation-41");
+});
+
+it("终态任务中的旧 running 阶段结果仍展示为已记录", () => {
+  const legacy: Task = {
+    ...task([]),
+    operation: "managed-model-detection",
+    status: "partial",
+    result: {
+      mode: "precheck",
+      account_ids: ["41"],
+      animations: [
+        {
+          ...result,
+          mode: "precheck",
+          phase: "running",
+          precheck: {
+            verdict: "not_passed",
+            profile_version: "astra-v2",
+            questions: [{ id: "candy", verdict: "not_passed", request_id: "request-candy" }],
+          },
+        },
+      ],
+    },
+  };
+
+  expect(collectAnimationTasks([legacy], new Set()).precheckResults.get("41")?.phase).toBe(
+    "running",
+  );
+});
+
 function task(animations: unknown[]): Task {
   return {
     id: "animation-1",
@@ -49,6 +131,49 @@ function task(animations: unknown[]): Task {
     updated_at: "2026-09-13T00:01:00Z",
   };
 }
+
+it.each([
+  ["2026-09-13T00:02:00.123456790Z", "2026-09-13T00:02:00.123456789Z"],
+  ["2026-09-13T00:02:00.120000001Z", "2026-09-13T00:02:00.12Z"],
+  ["2026-09-13T01:02:00.123456790+01:00", "2026-09-13T00:02:00.123456789Z"],
+])("结果在同一毫秒内完成时选择纳秒时间较新的 %s", (newer, older) => {
+  const latest = { ...result, request_id: "latest", completed_at: newer };
+  const previous = { ...result, request_id: "older", completed_at: older };
+  expect(
+    collectAnimationTasks([task([latest, previous])], new Set()).results.get("41")?.request_id,
+  ).toBe("latest");
+  const first = { ...task([latest]), id: "first" };
+  const second = { ...task([previous]), id: "second", created_at: "2026-09-13T00:01:00Z" };
+  expect(collectAnimationTasks([first, second], new Set()).results.get("41")?.request_id).toBe(
+    "latest",
+  );
+});
+
+it("同毫秒启动的新前置尝试无结果时仍清除旧通过结论", () => {
+  const previous: Task = {
+    ...task([{ ...result, mode: "precheck" }]),
+    id: "z-previous",
+    operation: "account-model-precheck",
+    created_at: "2026-09-13T00:02:00.123456789Z",
+  };
+  const latest: Task = {
+    ...task([]),
+    id: "a-latest",
+    operation: "account-model-precheck",
+    status: "cancelled",
+    created_at: "2026-09-13T00:02:00.123456790Z",
+    result: { account_ids: ["41"] },
+  };
+  const state = collectAnimationTasks([latest, previous], new Set());
+  expect(state.precheckResults.has("41")).toBe(false);
+  expect(state.precheckStatuses.get("41")).toBe("cancelled");
+});
+
+it("完成与启动时间相同时按稳定任务ID选择结果而不依赖响应顺序", () => {
+  const first = { ...task([{ ...result, request_id: "a" }]), id: "a-task" };
+  const second = { ...task([{ ...result, request_id: "z" }]), id: "z-task" };
+  expect(collectAnimationTasks([second, first], new Set()).results.get("41")?.request_id).toBe("z");
+});
 
 it.each([
   { completed_at: "invalid" },
@@ -65,13 +190,21 @@ it.each([
     [task([result, { ...result, ...invalid, request_id: "invalid-result" }])],
     new Set(),
   );
-  expect(state.results.get("41")).toEqual({ ...result, source_task_id: "animation-1" });
+  expect(state.results.get("41")).toEqual({
+    ...result,
+    source_task_id: "animation-1",
+    source_task_status: "succeeded",
+  });
 });
 
 it("同一账号返回更新的有效动画时展示最新结果", () => {
   const latest = { ...result, request_id: "request-2", completed_at: "2026-09-13T00:02:00Z" };
   const state = collectAnimationTasks([task([latest, result])], new Set());
-  expect(state.results.get("41")).toEqual({ ...latest, source_task_id: "animation-1" });
+  expect(state.results.get("41")).toEqual({
+    ...latest,
+    source_task_id: "animation-1",
+    source_task_status: "succeeded",
+  });
 });
 
 it("动画结果返回自动重试次数时保留到详情数据", () => {
@@ -79,6 +212,7 @@ it("动画结果返回自动重试次数时保留到详情数据", () => {
   expect(collectAnimationTasks([task([retried])], new Set()).results.get("41")).toEqual({
     ...retried,
     source_task_id: "animation-1",
+    source_task_status: "succeeded",
   });
 });
 
@@ -96,6 +230,7 @@ it("HTML 历史结果保留代码、实际提示词、思考等级和用量", ()
   expect(collectAnimationTasks([task([htmlResult])], new Set()).results.get("41")).toEqual({
     ...htmlResult,
     source_task_id: "animation-1",
+    source_task_status: "succeeded",
   });
 });
 
@@ -187,3 +322,18 @@ it.each(["succeeded", "failed"] as const)(
     expect(state.busyIDs).toEqual(new Set(["41", "42"]));
   },
 );
+
+it("失败动画历史记录保留被拒绝的原文和截断标记供详情展示", () => {
+  const failed = {
+    ...result,
+    status: "failed",
+    source: "<svg>未完成的生成内容",
+    source_truncated: true,
+    error: "生成的 SVG 超过 128 KB，请重试",
+  };
+  expect(collectAnimationTasks([task([failed])], new Set()).results.get("41")).toMatchObject({
+    status: "failed",
+    source: "<svg>未完成的生成内容",
+    source_truncated: true,
+  });
+});

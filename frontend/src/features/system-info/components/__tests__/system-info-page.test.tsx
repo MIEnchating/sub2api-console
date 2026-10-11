@@ -1,3 +1,4 @@
+import { seedDictionaries } from "@/test/dictionary-fixtures";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -63,6 +64,7 @@ function renderPage(
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false, staleTime: Number.POSITIVE_INFINITY } },
   });
+  seedDictionaries(queryClient);
   queryClient.setQueryData(["tasks"], taskRows);
   queryClient.setQueryData(["accounts"], []);
   queryClient.setQueryData(["groups"], []);
@@ -95,8 +97,8 @@ function renderPage(
   });
   queryClient.setQueryData(["dictionaries", "task_status"], {
     items: [
-      { value: "queued", enabled: true },
-      { value: "running", enabled: true },
+      { value: "queued", name: "排队中", enabled: true },
+      { value: "running", name: "进行中", enabled: true },
     ],
   });
   return render(
@@ -117,7 +119,6 @@ describe("系统信息任务页面", () => {
     expect(screen.getAllByRole("option").map((node) => node.textContent)).toEqual([
       "排队中",
       "进行中",
-      "等待输入",
     ]);
     await user.click(screen.getByRole("option", { name: "排队中" }));
     expect(screen.getByText("等待执行")).toBeVisible();

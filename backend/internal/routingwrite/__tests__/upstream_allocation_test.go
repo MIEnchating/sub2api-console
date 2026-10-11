@@ -9,6 +9,7 @@ import (
 )
 
 func TestSharedAllocationWritesGrowthWithGenericSwitchesDisabled(t *testing.T) {
+	t.Parallel()
 	service, fixture := newUpstreamCapacityWriteFixture(t, writeCapacityPointer(10), 1, 1, true)
 	setReductionWritePolicy(t, fixture, true)
 	target := reductionWriteTarget(t, fixture, "41", 5)
@@ -24,6 +25,7 @@ func TestSharedAllocationWritesGrowthWithGenericSwitchesDisabled(t *testing.T) {
 }
 
 func TestSharedAllocationRecoversOnlyConfirmedCapacityPause(t *testing.T) {
+	t.Parallel()
 	service, fixture := newUpstreamCapacityWriteFixture(t, writeCapacityPointer(10), 1, 1, true)
 	result, err := service.Apply(t.Context(), map[string]business.AccountRoutingTarget{"41": {AccountID: "41", GroupNames: []string{"capacity-group"}, Schedulable: writeEnabledPointer(false), DesiredHealth: business.AccountStateConcurrencyLimited}}, "test")
 	if err != nil || result.Changed != 1 {
@@ -44,6 +46,7 @@ func TestSharedAllocationRecoversOnlyConfirmedCapacityPause(t *testing.T) {
 }
 
 func TestSharedAllocationRejectsUnsafeOrStaleWrites(t *testing.T) {
+	t.Parallel()
 	for _, scenario := range []string{"manual pause", "global full", "upstream full", "stale quota", "changed limit", "scope excluded", "disabled", "snapshot failure", "zero", "unconfirmed sibling reduction"} {
 		t.Run(scenario, func(t *testing.T) {
 			service, fixture := newUpstreamCapacityWriteFixture(t, writeCapacityPointer(10), 1, 1, scenario != "manual pause")
@@ -94,6 +97,7 @@ func TestSharedAllocationRejectsUnsafeOrStaleWrites(t *testing.T) {
 }
 
 func TestNewWaitingAccountReclaimsAndSharesExistingAccountCapacity(t *testing.T) {
+	t.Parallel()
 	service, fixture := newUpstreamCapacityWriteFixture(t, writeCapacityPointer(10), 1, 10, false)
 	for _, state := range fixture.states {
 		state["rate_multiplier"] = "0.1"
@@ -153,6 +157,7 @@ func TestNewWaitingAccountReclaimsAndSharesExistingAccountCapacity(t *testing.T)
 }
 
 func TestSharedAllocationUnlimitedUpstreamStillUsesGlobalBudgetForRecovery(t *testing.T) {
+	t.Parallel()
 	service, fixture := newUpstreamCapacityWriteFixture(t, writeCapacityPointer(10), 1, 1, true)
 	result, err := service.Apply(t.Context(), map[string]business.AccountRoutingTarget{"41": {AccountID: "41", GroupNames: []string{"capacity-group"}, Schedulable: writeEnabledPointer(false), DesiredHealth: business.AccountStateConcurrencyLimited}}, "test")
 	if err != nil || result.Changed != 1 {
@@ -169,6 +174,7 @@ func TestSharedAllocationUnlimitedUpstreamStillUsesGlobalBudgetForRecovery(t *te
 }
 
 func TestSharedAllocationWriteIgnoresDisabledGlobalLimit(t *testing.T) {
+	t.Parallel()
 	service, fixture := newGlobalCapacityFixture(t, 1, 1000, true)
 	setReductionWritePolicy(t, fixture, true)
 	if _, err := fixture.store.UpdatePolicy(t.Context(), map[string]any{"advanced_policy": map[string]any{"scaling": map[string]any{"enabled": false, "global_max_concurrency": 2}}}, "test"); err != nil {
@@ -183,6 +189,7 @@ func TestSharedAllocationWriteIgnoresDisabledGlobalLimit(t *testing.T) {
 }
 
 func TestSharedAllocationWriteUsesConfirmedCostStopButRechecksRemoteState(t *testing.T) {
+	t.Parallel()
 	for _, scenario := range []string{"confirmed", "remote active", "excluded"} {
 		t.Run(scenario, func(t *testing.T) {
 			service, fixture := newUpstreamCapacityWriteFixture(t, writeCapacityPointer(10), 1, 10, true)
@@ -219,6 +226,7 @@ func TestSharedAllocationWriteUsesConfirmedCostStopButRechecksRemoteState(t *tes
 }
 
 func TestSharedAllocationWriterRechecksSelectedAccountScope(t *testing.T) {
+	t.Parallel()
 	for _, selected := range []string{"41", "42"} {
 		t.Run(selected, func(t *testing.T) {
 			service, fixture := newUpstreamCapacityWriteFixture(t, writeCapacityPointer(10), 1, 1, true)
@@ -242,6 +250,7 @@ func TestSharedAllocationWriterRechecksSelectedAccountScope(t *testing.T) {
 }
 
 func TestSharedAllocationWriterRechecksSelectedUpstreamScope(t *testing.T) {
+	t.Parallel()
 	for _, selected := range []bool{true, false} {
 		t.Run(map[bool]string{true: "selected", false: "removed"}[selected], func(t *testing.T) {
 			service, fixture := newUpstreamCapacityWriteFixture(t, writeCapacityPointer(10), 1, 1, true)

@@ -10,6 +10,7 @@ import (
 )
 
 func TestPendingFailureKeepsPreviouslyZeroRoutingHealthAtZeroWeight(t *testing.T) {
+	t.Parallel()
 	store, db := healthEvidenceStore(t)
 	_, err := db.Exec(`UPDATE accounts SET routing_state='survivor' WHERE id='41';
 		INSERT INTO accounts(id,name,multiplier,schedulable,metadata_json,updated_at) VALUES('42','healthy','1',1,'{}','now');

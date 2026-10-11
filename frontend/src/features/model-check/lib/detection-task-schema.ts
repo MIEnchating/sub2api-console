@@ -2,9 +2,6 @@ import { z } from "zod";
 import { animationScheduleSchema } from "./animation-schema";
 import { detectionTaskStages } from "./detection-task-stages";
 
-export const terminalRoundsSchema = z.object({
-  rounds: z.number().int().min(1, "至少检测 1 轮").max(20, "最多检测 20 轮"),
-});
 export const detectionTaskSchema = z
   .object({
     id: z.string(),
@@ -20,6 +17,7 @@ export const detectionTaskSchema = z
       .min(1, "请选择至少一个分组")
       .max(100, "最多选择 100 个分组"),
     model: z.string(),
+    prompt: z.string().max(10000, "提示词不能超过 10000 个字符").optional(),
     animation: z.boolean(),
     precheck: z.boolean(),
     precheck_questions: z.array(z.enum(["candy"])),
@@ -37,17 +35,8 @@ export const detectionTaskSchema = z
       .max(16, "最多同时检测 16 个账号"),
   })
   .superRefine((value, ctx) => {
-    if (!value.animation && !value.precheck && !value.terminal)
+    if (!value.animation && !value.precheck)
       ctx.addIssue({ code: "custom", path: ["animation"], message: "请至少选择一项检测内容" });
-    if (value.terminal) {
-      const rounds = terminalRoundsSchema.safeParse({ rounds: value.terminal_rounds });
-      if (!rounds.success)
-        ctx.addIssue({
-          code: "custom",
-          path: ["terminal_rounds"],
-          message: "终端检测轮数必须在 1 到 20 之间",
-        });
-    }
     const check = animationScheduleSchema.safeParse({
       ...value,
       account_id: "1",
@@ -61,9 +50,8 @@ export const detectionTaskSchema = z
   })
   .transform((value) => ({
     ...value,
-    terminal_rounds: terminalRoundsSchema.shape.rounds.safeParse(value.terminal_rounds).success
-      ? value.terminal_rounds
-      : 3,
+    terminal: false,
+    terminal_rounds: 0,
   }));
 export type DetectionTaskForm = z.infer<typeof detectionTaskSchema>;
 

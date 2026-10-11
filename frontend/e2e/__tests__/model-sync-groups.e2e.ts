@@ -1,3 +1,4 @@
+import { dictionaryResponse } from "./fixtures/dictionaries";
 import { expect, test } from "@playwright/test";
 import { account } from "../../src/features/accounts/__tests__/fixtures";
 import { pageFixtures } from "./fixtures/page-shell";
@@ -29,7 +30,11 @@ test("选择多个分组后才开始发现模型，未选分组不参与同步",
     if (path === "/api/setup/status") body = { initialized: true, configuration_errors: [] };
     else if (path === "/api/auth/session") body = { authenticated: true, username: "测试" };
     else if (path === "/api/accounts") body = accounts;
-    else if (path.includes("dictionaries")) body = { items: [] };
+    else if (path.includes("dictionaries"))
+      body = dictionaryResponse(
+        route.request().url(),
+        groups.map((name, index) => ({ value: String(index + 1), name })),
+      );
     else if (path.endsWith("/models/discover")) {
       discoveries.push(route.request().postDataJSON());
       body = discovery;
@@ -68,6 +73,7 @@ test("选择多个分组后才开始发现模型，未选分组不参与同步",
   await expect(page.getByRole("button", { name: "开始同步" })).toBeDisabled();
   expect(discoveries).toEqual([]);
   await page.getByRole("combobox", { name: "同步分组" }).click();
+  await expect(page.getByRole("option", { name: /不参与分组/ })).toHaveCount(0);
   for (const group of groups) await page.getByRole("option", { name: `${group} · 2` }).click();
   await page.keyboard.press("Escape");
   await expect(page.getByText("已选 2 个分组，共 3 个账号")).toBeVisible();

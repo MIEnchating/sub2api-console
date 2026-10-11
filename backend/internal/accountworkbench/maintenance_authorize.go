@@ -9,57 +9,41 @@ import (
 	"github.com/MIEnchating/sub2api-console/backend/internal/adminclient"
 )
 
-func (s *Service) savedMaintenanceLogin(ctx context.Context, value *privateMaintenance, account map[string]any) (storedInput, string, int64, time.Time, error) {
-	records, err := s.private.WorkbenchDocuments(ctx, "run:"+value.Owner+":", 501)
+func (s *Service) savedMaintenanceLogin(ctx context.Context, value *privateMaintenance, account map[string]any) (storedInput, string, string, int64, error) {
+	id := rememberedAccountID(value.Target, text(account["id"]))
+	saved, err := s.readRememberedAccount(ctx, value.Target, id)
 	if err != nil {
-		return storedInput{}, "", 0, time.Time{}, err
+		return storedInput{}, "", "", 0, err
 	}
-	for _, record := range records {
-		run, err := decodeRun(record.Payload)
-		if err != nil {
-			return storedInput{}, "", 0, time.Time{}, err
-		}
-		if run.Public.Action != "import" || targetKey(run.Target) != targetKey(value.Target) || !run.Public.ExpiresAt.After(time.Now().UTC()) {
-			continue
-		}
-		for i, row := range run.Public.Items {
-			if i >= len(run.Items) || row.AccountID != text(account["id"]) || row.Status != "completed" || run.Items[i].LoginSource == "" {
-				continue
-			}
-			input := run.Items[i]
-			if !sameAccountIdentity(account, input.Credentials) {
-				continue
-			}
-			return input, run.Public.ID, record.Revision, run.Public.ExpiresAt, nil
-		}
+	if saved.Input.LoginSource == "" || !sameAccountIdentity(account, saved.Input.Credentials) {
+		return storedInput{}, "", "", 0, errors.New("没有匹配的已保存登录资料，请重新导入账号")
 	}
-	return storedInput{}, "", 0, time.Time{}, errors.New("没有当前会话授权使用的有效登录资料，请重新导入账号")
+	return saved.Input, saved.SourceRunID, rememberedAccountKey(value.Target, id), saved.Public.Revision, nil
 }
 func (s *Service) reauthorizeMaintenance(ctx context.Context, value *privateMaintenance, account map[string]any, attempt *maintenanceAttempt) error {
-	input, sourceID, sourceRevision, expires, err := s.savedMaintenanceLogin(ctx, value, account)
+	input, sourceID, sourceKey, sourceRevision, err := s.savedMaintenanceLogin(ctx, value, account)
 	if err != nil {
 		return err
 	}
-	if expires.Before(attempt.ExpiresAt) {
-		attempt.ExpiresAt = expires
-	}
 	attempt.Phase = "reauthorizing"
 	attempt.SourceRunID = sourceID
+	attempt.SourceDocumentKey = sourceKey
 	attempt.SourceRevision = sourceRevision
 	attempt.ProxyURL = input.ProxyURL
 	attempt.AccountVersion = accountVersion(account)
 	if err = s.persistMaintenance(value); err != nil {
 		return err
 	}
-	library, err := s.readTemplates(ctx, value.Target)
+	revision, err := s.templateRevision(ctx, value.Target)
 	if err != nil {
 		return err
 	}
 	input.Item.Kind = "login"
 	input.Credentials = map[string]any{}
 	now := time.Now().UTC()
-	login := privateRun{Owner: value.Owner, Target: value.Target, Automatic: true, TemplateRevision: library.Revision, Settings: PreviewInput{Model: "gpt-5.6-sol"}, Items: []storedInput{input}, Exports: make([]map[string]any, 1), AccountVersions: map[string]string{}, Phases: map[string]string{}, Public: Run{ID: newID(), Action: "maintenance", Status: "running", CreatedAt: now, ExpiresAt: attempt.ExpiresAt, Items: []RunItem{{InputItem: input.Item, Status: "authorizing", AccountID: text(account["id"])}}}}
+	login := privateRun{Owner: value.Owner, Target: value.Target, Automatic: true, TemplateRevision: revision, Settings: PreviewInput{Model: "gpt-5.6-sol"}, Items: []storedInput{input}, Exports: make([]map[string]any, 1), AccountVersions: map[string]string{}, Phases: map[string]string{}, Public: Run{ID: newID(), Action: "maintenance", Status: "running", CreatedAt: now, ExpiresAt: attempt.ExpiresAt, Items: []RunItem{{InputItem: input.Item, Status: "authorizing", AccountID: text(account["id"])}}}}
 	login.Scope = "managed"
+	login.RememberedSource = &rememberedSource{ID: rememberedAccountID(value.Target, text(account["id"])), Revision: sourceRevision}
 	if err = s.persistRun(&login); err != nil {
 		return err
 	}
@@ -71,6 +55,10 @@ func (s *Service) reauthorizeMaintenance(ctx context.Context, value *privateMain
 	authorizeCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 	credentials, err := s.authorizeItem(authorizeCtx, &login, 0, active, input.ProxyURL)
+	attempt.SourceRevision = login.RememberedSource.Revision
+	if saveErr := s.persistMaintenance(value); saveErr != nil {
+		return saveErr
+	}
 	if len(credentials) > 0 {
 		login.Items[0].Credentials = credentials
 		login.Phases[input.Item.ID] = "materialized"
@@ -140,7 +128,11 @@ func (s *Service) uploadMaintenanceAuthorization(ctx context.Context, value *pri
 		if accountVersion(current) != attempt.AccountVersion {
 			return nil, errors.New("授权期间账号已被修改，未上传")
 		}
-		_, revision, err := s.private.WorkbenchDocument(ctx, runKey(value.Owner, attempt.SourceRunID))
+		sourceKey := attempt.SourceDocumentKey
+		if sourceKey == "" {
+			sourceKey = runKey(value.Owner, attempt.SourceRunID)
+		}
+		revision, err := s.private.WorkbenchDocumentRevision(ctx, sourceKey)
 		if err != nil || revision != attempt.SourceRevision {
 			return nil, errors.New("登录资料已变化，未上传")
 		}

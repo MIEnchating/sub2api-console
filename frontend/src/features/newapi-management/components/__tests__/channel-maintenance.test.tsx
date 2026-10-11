@@ -1,9 +1,10 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { NewAPIChannel } from "@/api";
 import { ExistingChannels } from "../existing-channels";
+import { renderWithRouter } from "./render-with-router";
 
 const channel: NewAPIChannel = {
   id: "42",
@@ -18,7 +19,7 @@ beforeEach(() => vi.stubGlobal("PointerEvent", MouseEvent));
 let client: QueryClient;
 function mount(): void {
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  render(
+  renderWithRouter(
     <QueryClientProvider client={client}>
       <ExistingChannels platformId="primary" />
     </QueryClientProvider>,
@@ -164,7 +165,7 @@ it("首次读取使用骨架，后台刷新时保留已有渠道并暂时禁用�
     vi.fn(() => pending),
   );
   mount();
-  expect(screen.getByRole("status", { name: "正在读取现有渠道" })).toHaveAttribute(
+  expect(await screen.findByRole("status", { name: "正在读取现有渠道" })).toHaveAttribute(
     "aria-busy",
     "true",
   );

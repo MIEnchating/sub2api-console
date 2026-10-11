@@ -1,3 +1,4 @@
+import { seedDictionaries } from "@/test/dictionary-fixtures";
 import { useState } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor } from "@testing-library/react";
@@ -45,7 +46,7 @@ function setup(options: { ungrouped?: boolean; empty?: boolean; ordered?: boolea
     "fetch",
     vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const path = String(input);
-      if (path.includes("dictionaries"))
+      if (path.includes("dictionaries") && !path.includes("kind=platform"))
         return Response.json({
           items: options.ordered
             ? [
@@ -53,7 +54,11 @@ function setup(options: { ungrouped?: boolean; empty?: boolean; ordered?: boolea
                 { value: "2", name: "B", enabled: true },
                 { value: "1", name: "A", enabled: true },
               ]
-            : [],
+            : [
+                { value: "1", name: "A", enabled: true },
+                { value: "2", name: "B", enabled: true },
+                { value: "3", name: "C", enabled: true },
+              ],
         });
       if (path.endsWith("/models/discover")) {
         selectedIds = (JSON.parse(String(init?.body)) as { account_ids: string[] }).account_ids;
@@ -91,6 +96,7 @@ function setup(options: { ungrouped?: boolean; empty?: boolean; ordered?: boolea
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
+  seedDictionaries(client);
   render(
     <QueryClientProvider client={client}>
       <AccountModelSyncDialog
@@ -210,6 +216,7 @@ it("分组选择关闭后重新打开时清空上次选择，仍需明确开始�
     );
   }
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  seedDictionaries(client, { group: [{ value: "1", name: "A" }] });
   render(
     <QueryClientProvider client={client}>
       <Host />

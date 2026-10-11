@@ -33,15 +33,42 @@ export function MonitorWorkspace(props: {
   const [groupFilter, setGroupFilter] = useState("all");
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
   const tree = useMemo(() => buildMonitorTree(props.monitors), [props.monitors]);
-  const groups = tree.filter((row) => row.monitor.type === "group" || row.hasChildren);
-  const filtering = !!search.trim() || filter !== "all" || groupFilter !== "all";
-  const visible = filterMonitorTree(tree, {
-    search,
-    status: filter,
-    group: groupFilter,
-    management: props.management,
-    collapsed,
-  });
+  const { groups, detailByKey, healthy, down } = useMemo(() => {
+    const nextGroups = [] as typeof tree;
+    const nextDetailByKey = new Map<string, KumaMonitor>();
+    let nextHealthy = 0;
+    let nextDown = 0;
+    for (const row of tree) {
+      if (row.monitor.type === "group" || row.hasChildren) nextGroups.push(row);
+      nextDetailByKey.set(row.monitor.key, row.monitor);
+    }
+    for (const monitor of props.monitors) {
+      const status = monitorStatus(monitor, props.management);
+      if (status === "正常") nextHealthy += 1;
+      else if (status === "故障") nextDown += 1;
+    }
+    return {
+      groups: nextGroups,
+      detailByKey: nextDetailByKey,
+      healthy: nextHealthy,
+      down: nextDown,
+    };
+  }, [props.management, props.monitors, tree]);
+  const filtering = useMemo(
+    () => !!search.trim() || filter !== "all" || groupFilter !== "all",
+    [filter, groupFilter, search],
+  );
+  const visible = useMemo(
+    () =>
+      filterMonitorTree(tree, {
+        search,
+        status: filter,
+        group: groupFilter,
+        management: props.management,
+        collapsed,
+      }),
+    [collapsed, filter, groupFilter, props.management, search, tree],
+  );
   const pagination = useClientPagination(visible);
   const toggleGroup = (key: string): void => {
     setCollapsed((current) => {
@@ -52,13 +79,7 @@ export function MonitorWorkspace(props: {
     });
     pagination.setCurrentPage(1);
   };
-  const detail = props.monitors.find((monitor) => monitor.key === detailKey);
-  const healthy = props.monitors.filter(
-    (monitor) => monitorStatus(monitor, props.management) === "正常",
-  ).length;
-  const down = props.monitors.filter(
-    (monitor) => monitorStatus(monitor, props.management) === "故障",
-  ).length;
+  const detail = detailKey === null ? undefined : detailByKey.get(detailKey);
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-3">
       <TableFilterToolbar aria-label="监控筛选">

@@ -20,6 +20,7 @@ import (
 
 	"github.com/MIEnchating/sub2api-console/backend/internal/business"
 	"github.com/MIEnchating/sub2api-console/backend/internal/configstore"
+	"github.com/MIEnchating/sub2api-console/backend/internal/modelcheck"
 	"github.com/MIEnchating/sub2api-console/backend/internal/mutationguard"
 	"github.com/MIEnchating/sub2api-console/backend/internal/redact"
 	"github.com/MIEnchating/sub2api-console/backend/internal/upstreamsync"
@@ -33,15 +34,16 @@ const (
 )
 
 type ProbeResult struct {
-	Status       string `json:"status"`
-	Message      string `json:"message"`
-	RequestModel string `json:"request_model"`
-	ActualModel  string `json:"actual_model"`
-	ResponseText string `json:"response_text,omitempty"`
-	ResponseJSON string `json:"response_json,omitempty"`
-	LatencyMS    int64  `json:"latency_ms"`
-	HTTPStatus   int    `json:"http_status"`
-	TemporaryKey bool   `json:"temporary_key"`
+	Animation    *modelcheck.AnimationResult `json:"animation,omitempty"`
+	Status       string                      `json:"status"`
+	Message      string                      `json:"message"`
+	RequestModel string                      `json:"request_model"`
+	ActualModel  string                      `json:"actual_model"`
+	ResponseText string                      `json:"response_text,omitempty"`
+	ResponseJSON string                      `json:"response_json,omitempty"`
+	LatencyMS    int64                       `json:"latency_ms"`
+	HTTPStatus   int                         `json:"http_status"`
+	TemporaryKey bool                        `json:"temporary_key"`
 }
 
 type probeKeyDeleter interface {
@@ -155,7 +157,13 @@ func (s *Service) Probe(ctx context.Context, host, groupID, model string, modes 
 		return ProbeResult{}, err
 	}
 	finishRequest := probeStep(ctx, "request")
-	result, requestErr := runGatewayProbe(guardedCtx, credential.auth.BaseURL, credential.key.Secret, model, credential.candidate.Platform, modes...)
+	var result ProbeResult
+	var requestErr error
+	if len(modes) > 0 && modes[0] == "animation" {
+		result, requestErr = s.runProbeAnimation(guardedCtx, credential, model)
+	} else {
+		result, requestErr = runGatewayProbe(guardedCtx, credential.auth.BaseURL, credential.key.Secret, model, credential.candidate.Platform, modes...)
+	}
 	if requestErr == nil && result.Status != "passed" {
 		finishRequest(errors.New(result.Message))
 	} else {
@@ -504,13 +512,13 @@ func fetchProbeModels(ctx context.Context, baseURL, secret string) ([]string, er
 		return nil, err
 	}
 	if status < 200 || status >= 300 {
-		return nil, gatewayStatusError(status, body)
+		return nil, gatewayStatusError(status, body, secret)
 	}
 	payload, err := decodeGatewayJSON(body, "上游模型接口")
 	if err != nil {
 		return nil, err
 	}
-	if err := gatewayBusinessError(payload); err != nil {
+	if err := gatewayBusinessError(payload, secret); err != nil {
 		return nil, err
 	}
 	seen := map[string]struct{}{}
@@ -521,7 +529,7 @@ func fetchProbeModels(ctx context.Context, baseURL, secret string) ([]string, er
 		case map[string]any:
 			for _, key := range []string{"id", "model_id", "slug"} {
 				if text, ok := item[key].(string); ok && strings.TrimSpace(text) != "" {
-					model := strings.TrimSpace(text)
+					model := probeCredentialText(strings.TrimSpace(text), secret)
 					if _, exists := seen[model]; !exists {
 						seen[model] = struct{}{}
 						models = append(models, model)
@@ -545,7 +553,18 @@ func fetchProbeModels(ctx context.Context, baseURL, secret string) ([]string, er
 	return models, nil
 }
 
-func runGatewayProbe(ctx context.Context, baseURL, secret, model string, platform *string, modes ...string) (ProbeResult, error) {
+func runGatewayProbe(ctx context.Context, baseURL, secret, model string, platform *string, modes ...string) (result ProbeResult, returnErr error) {
+	defer func() {
+		result.Message = probeCredentialText(result.Message, secret)
+		result.RequestModel = probeCredentialText(result.RequestModel, secret)
+		result.ActualModel = probeCredentialText(result.ActualModel, secret)
+		result.ResponseText = probeCredentialText(result.ResponseText, secret)
+		if returnErr != nil {
+			if message := probeCredentialText(returnErr.Error(), secret); message != returnErr.Error() {
+				returnErr = errors.New(message)
+			}
+		}
+	}()
 	started := time.Now()
 	stream := probeStreamMode(modes...)
 	path := "/v1/responses"
@@ -569,15 +588,23 @@ func runGatewayProbe(ctx context.Context, baseURL, secret, model string, platfor
 		}
 	}
 	raw, status, err := gatewayRequest(ctx, baseURL, secret, http.MethodPost, path, body, headers)
-	// Retry only a confirmed rejection before generation, retaining the same
-	// endpoint, model and credential. Never replay network or generation failures.
-	if err == nil && !stream && body["stream"] == false && gatewayRequiresStream(status, raw) {
-		stream = true
-		body["stream"] = true
-		headers["Accept"] = "text/event-stream"
+	// Each compatibility change is allowed once, only after a confirmed
+	// pre-generation rejection. Keep the same host, model, prompt and credential.
+	for err == nil {
+		if gatewayRequiresChat(path, status, raw) {
+			path = "/v1/chat/completions"
+			body = map[string]any{"model": model, "max_tokens": 16, "messages": []map[string]string{{"role": "user", "content": "hi"}}, "stream": stream}
+			delete(headers, "anthropic-version")
+		} else if !stream && body["stream"] == false && gatewayRequiresStream(status, raw) {
+			stream = true
+			body["stream"] = true
+			headers["Accept"] = "text/event-stream"
+		} else {
+			break
+		}
 		raw, status, err = gatewayRequest(ctx, baseURL, secret, http.MethodPost, path, body, headers)
 	}
-	result := ProbeResult{Status: "failed", Message: "探活请求失败", RequestModel: model, LatencyMS: time.Since(started).Milliseconds(), HTTPStatus: status}
+	result = ProbeResult{Status: "failed", Message: "探活请求失败", RequestModel: model, LatencyMS: time.Since(started).Milliseconds(), HTTPStatus: status}
 	if err != nil {
 		result.Message = err.Error()
 		return result, err
@@ -585,16 +612,16 @@ func runGatewayProbe(ctx context.Context, baseURL, secret, model string, platfor
 	if status < 200 || status >= 300 {
 		payload, decodeErr := decodeGatewayJSON(raw, "上游探活接口")
 		if decodeErr == nil {
-			result.ResponseJSON = probeResponseJSON(payload)
+			result.ResponseJSON = probeResponseJSON(payload, secret)
 			result.ActualModel = responseModelFromPayload(payload)
 		} else {
 			result.ActualModel = responseModel(raw)
 		}
-		err := gatewayStatusError(status, raw)
+		err := gatewayStatusError(status, raw, secret)
 		result.Message = err.Error()
 		return result, err
 	}
-	payload, actualModel, responseText, responseJSON, err := decodeGatewayProbeResponse(raw, stream)
+	payload, actualModel, responseText, responseJSON, err := decodeGatewayProbeResponse(raw, stream, secret)
 	result.ResponseJSON = responseJSON
 	if err != nil {
 		result.Message = err.Error()
@@ -605,7 +632,7 @@ func runGatewayProbe(ctx context.Context, baseURL, secret, model string, platfor
 	}
 	result.ActualModel = actualModel
 	result.ResponseText = responseText
-	if err := gatewayBusinessError(payload); err != nil {
+	if err := gatewayBusinessError(payload, secret); err != nil {
 		result.Message = err.Error()
 		return result, err
 	}
@@ -638,15 +665,15 @@ func gatewayRequiresStream(status int, raw []byte) bool {
 	return json.Unmarshal(raw, &response) == nil && response.Error.Code == "non_stream_not_allowed"
 }
 
-func decodeGatewayProbeResponse(raw []byte, stream bool) (any, string, string, string, error) {
+func decodeGatewayProbeResponse(raw []byte, stream bool, secret string) (any, string, string, string, error) {
 	if !stream {
 		payload, err := decodeGatewayJSON(raw, "上游探活接口")
-		return payload, "", probeResponseText(payload), probeResponseJSON(payload), err
+		return payload, "", probeResponseText(payload, secret), probeResponseJSON(payload, secret), err
 	}
 	trimmed := strings.TrimSpace(string(raw))
 	if !strings.HasPrefix(trimmed, "data:") && !strings.Contains(trimmed, "\ndata:") && !strings.Contains(trimmed, "\nevent:") {
 		payload, err := decodeGatewayJSON(raw, "上游探活接口")
-		return payload, responseModelFromPayload(payload), probeResponseText(payload), probeResponseJSON(payload), err
+		return payload, responseModelFromPayload(payload), probeResponseText(payload, secret), probeResponseJSON(payload, secret), err
 	}
 
 	var lastPayload any
@@ -666,68 +693,77 @@ func decodeGatewayProbeResponse(raw []byte, stream bool) (any, string, string, s
 		}
 		event, err := decodeGatewayJSON([]byte(data), "上游探活流")
 		if err != nil {
-			return nil, actualModel, "", probeResponseJSON(events), err
+			return nil, actualModel, "", probeResponseJSON(events, secret), err
 		}
 		events = append(events, event)
 		lastPayload = event
 		if actualModel == "" {
 			actualModel = responseModelFromPayload(event)
 		}
-		if err := gatewayBusinessError(event); err != nil {
-			return event, actualModel, probeResponseText(event), probeResponseJSON(events), err
+		if err := gatewayBusinessError(event, secret); err != nil {
+			return event, actualModel, probeResponseText(event, secret), probeResponseJSON(events, secret), err
 		}
 		if contentPayload == nil && eventHasProbeContent(event) {
 			contentPayload = event
 		}
 	}
 	if err := scanner.Err(); err != nil {
-		return nil, actualModel, "", probeResponseJSON(events), errors.New("上游探活流读取失败")
+		return nil, actualModel, "", probeResponseJSON(events, secret), errors.New("上游探活流读取失败")
 	}
 	if contentPayload != nil {
-		return contentPayload, actualModel, probeResponseText(contentPayload), probeResponseJSON(events), nil
+		return contentPayload, actualModel, probeResponseText(contentPayload, secret), probeResponseJSON(events, secret), nil
 	}
 	if lastPayload != nil {
-		return lastPayload, actualModel, probeResponseText(lastPayload), probeResponseJSON(events), errors.New("上游探活流未返回有效文本")
+		return lastPayload, actualModel, probeResponseText(lastPayload, secret), probeResponseJSON(events, secret), errors.New("上游探活流未返回有效文本")
 	}
 	// A few compatible gateways ignore stream=true and still return one JSON object.
 	payload, err := decodeGatewayJSON(raw, "上游探活接口")
-	return payload, responseModelFromPayload(payload), probeResponseText(payload), probeResponseJSON(payload), err
+	return payload, responseModelFromPayload(payload), probeResponseText(payload, secret), probeResponseJSON(payload, secret), err
 }
 
-func probeResponseJSON(value any) string {
+func probeResponseJSON(value any, secret string) string {
 	if value == nil {
 		return ""
 	}
-	encoded, err := json.MarshalIndent(redactProbeResponse(value), "", "  ")
+	encoded, err := json.MarshalIndent(redactProbeResponse(value, secret), "", "  ")
 	if err != nil {
 		return ""
 	}
 	return string(encoded)
 }
 
-func redactProbeResponse(value any) any {
+func redactProbeResponse(value any, secret string) any {
 	switch item := value.(type) {
 	case map[string]any:
 		redacted := make(map[string]any, len(item))
 		for key, child := range item {
 			if probeSecretField(key) {
-				redacted[key] = "[已隐藏]"
+				redacted[probeCredentialText(key, secret)] = "[已隐藏]"
 				continue
 			}
-			redacted[key] = redactProbeResponse(child)
+			redacted[probeCredentialText(key, secret)] = redactProbeResponse(child, secret)
 		}
 		return redacted
 	case []any:
 		redacted := make([]any, len(item))
 		for index, child := range item {
-			redacted[index] = redactProbeResponse(child)
+			redacted[index] = redactProbeResponse(child, secret)
 		}
 		return redacted
 	case string:
-		return redact.Secrets(item)
+		return redact.Secrets(probeCredentialText(item, secret))
 	default:
 		return value
 	}
+}
+
+// Remove the exact credential before diagnostics are truncated or serialized.
+// Pattern-based redaction alone cannot recognize a key echoed as ordinary text.
+func probeCredentialText(value, secret string) string {
+	if secret = strings.TrimSpace(secret); secret != "" {
+		return strings.ReplaceAll(value, secret, "[已隐藏]")
+	}
+	return value
 }
 
 func probeSecretField(key string) bool {
@@ -740,12 +776,12 @@ func probeSecretField(key string) bool {
 	return false
 }
 
-func probeResponseText(value any) string {
+func probeResponseText(value any, secret string) string {
 	var find func(any) string
 	find = func(item any) string {
 		switch typed := item.(type) {
 		case string:
-			text := strings.TrimSpace(typed)
+			text := strings.TrimSpace(probeCredentialText(typed, secret))
 			if text == "" {
 				return ""
 			}
@@ -857,8 +893,12 @@ func gatewayRequest(ctx context.Context, baseURL, secret, method, path string, p
 	return raw, response.StatusCode, nil
 }
 
-func gatewayStatusError(status int, raw []byte) error {
-	detail := strings.TrimSpace(redact.Secrets(string(raw)))
+func gatewayStatusError(status int, raw []byte, secret string) error {
+	detail := probeCredentialText(string(raw), secret)
+	if payload, err := decodeGatewayJSON(raw, "上游错误"); err == nil {
+		detail = probeResponseJSON(payload, secret)
+	}
+	detail = strings.TrimSpace(redact.Secrets(detail))
 	if len(detail) > 300 {
 		detail = detail[:300]
 	}
@@ -882,13 +922,13 @@ func decodeGatewayJSON(raw []byte, label string) (any, error) {
 	return payload, nil
 }
 
-func gatewayBusinessError(payload any) error {
+func gatewayBusinessError(payload any, secret string) error {
 	object, ok := payload.(map[string]any)
 	if !ok {
 		return nil
 	}
 	if response, ok := object["response"].(map[string]any); ok {
-		if err := gatewayBusinessError(response); err != nil {
+		if err := gatewayBusinessError(response, secret); err != nil {
 			return err
 		}
 	}
@@ -915,7 +955,7 @@ func gatewayBusinessError(payload any) error {
 	if !failed {
 		return nil
 	}
-	detail := gatewayFailureDetail(object)
+	detail := gatewayFailureDetail(object, secret)
 	if detail == "" {
 		return errors.New("上游探活响应明确表示业务失败")
 	}
@@ -975,7 +1015,7 @@ func gatewaySuccessEvidence(payload any) bool {
 	return false
 }
 
-func gatewayFailureDetail(object map[string]any) string {
+func gatewayFailureDetail(object map[string]any, secret string) string {
 	sources := []map[string]any{object}
 	for _, key := range []string{"error", "data"} {
 		if nested, ok := object[key].(map[string]any); ok {
@@ -988,7 +1028,7 @@ func gatewayFailureDetail(object map[string]any) string {
 			if !ok {
 				continue
 			}
-			value = strings.TrimSpace(strings.ReplaceAll(redact.Secrets(value), "\n", " "))
+			value = strings.TrimSpace(strings.ReplaceAll(redact.Secrets(probeCredentialText(value, secret)), "\n", " "))
 			if value == "" {
 				continue
 			}

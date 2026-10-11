@@ -93,7 +93,7 @@ export function TaskTable(props: {
           {!props.loading && !props.unavailable && props.tasks.length === 0 && (
             <TableEmptyState columns={5}>
               <div className="grid justify-items-center gap-2">
-                <span className="bg-muted flex size-10 items-center justify-center rounded-xl">
+                <span className="bg-muted flex size-10 items-center justify-center rounded-lg">
                   <EmptyIcon className="size-5" aria-hidden="true" />
                 </span>
                 <span className="text-foreground font-medium">{emptyMessage}</span>

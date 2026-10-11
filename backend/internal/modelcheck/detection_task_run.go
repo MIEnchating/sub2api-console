@@ -24,6 +24,10 @@ func (s *Service) enqueueDetectionTask(ctx context.Context, id string, version i
 		state.mu.Unlock()
 		return taskstore.Task{}, errors.New("检测任务已变化，请刷新后重试")
 	}
+	if err := validateDetectionTask(value); err != nil {
+		state.mu.Unlock()
+		return taskstore.Task{}, err
+	}
 	if automatic && (!value.Automatic || state.next[id].After(now)) {
 		state.mu.Unlock()
 		return taskstore.Task{}, nil
@@ -38,6 +42,7 @@ func (s *Service) enqueueDetectionTask(ctx context.Context, id string, version i
 		return taskstore.Task{}, err
 	}
 	value = cloneDetectionTask(value)
+	value.Prompt = s.AnimationPromptSettings().Prompt
 	state.active[id] = taskID
 	if automatic {
 		state.next[id] = nextAnimationTime(detectionTiming(value), now)
@@ -104,7 +109,7 @@ func (s *Service) prepareDetectionTask(ctx context.Context, value DetectionTask,
 	if len(ids) == 0 {
 		return AnimationRequest{}, nil, errors.New("所选分组当前没有账号，请同步目录或调整分组")
 	}
-	request := AnimationRequest{TimeoutSeconds: value.TimeoutSeconds, Targets: make([]AnimationTarget, 0, len(ids))}
+	request := AnimationRequest{Prompt: value.Prompt, TimeoutSeconds: value.TimeoutSeconds, Targets: make([]AnimationTarget, 0, len(ids))}
 	for _, id := range ids {
 		request.Targets = append(request.Targets, AnimationTarget{AccountID: id, Model: value.Model})
 	}
@@ -205,9 +210,6 @@ func (s *Service) executeDetectionTask(parent context.Context, task taskstore.Ta
 	if value.Precheck {
 		stages = append(stages, precheckMode)
 	}
-	if value.Terminal {
-		stages = append(stages, "terminal")
-	}
 	if value.Animation == nil || *value.Animation {
 		stages = append(stages, "animation")
 	}
@@ -215,8 +217,7 @@ func (s *Service) executeDetectionTask(parent context.Context, task taskstore.Ta
 	animations := previousResults[AnimationResult](task, "animations")
 	checks := previousResults[TerminalContinuityResult](task, "checks")
 	done := map[string]bool{}
-	terminalCompleted, terminalSuccess := terminalCounts(checks)
-	completed, success := len(animations)+terminalCompleted, terminalSuccess
+	completed, success := len(animations), 0
 	for _, result := range animations {
 		done[animationResultKey(result.AccountID, result.Mode)] = true
 		if result.Status == "succeeded" {
@@ -225,9 +226,6 @@ func (s *Service) executeDetectionTask(parent context.Context, task taskstore.Ta
 	}
 	if err := s.persistAnimationEvidence(ctx, task.ID, animations); err != nil {
 		slog.Error("保存分组动画检测证据失败", "task_id", task.ID, "error", err)
-	}
-	for _, result := range checks {
-		done[animationResultKey(result.AccountID, "terminal")] = !result.Incomplete
 	}
 	publish := func(message string) {
 		result := map[string]any{"detection_task_id": value.ID, "detection_task_name": value.Name, "configuration": value, "automatic": task.Result["automatic"], "account_ids": ids, "targets": request.Targets, "group_ids_by_account": scope.GroupIDsByAccount, "group_names_by_id": scope.GroupNamesByID, "account_names_by_id": accountNames, "total": total, "completed": completed, "animations": slices.Clone(animations), "checks": slices.Clone(checks), "remote_write": false, "started_at": begin.UTC().Format(time.RFC3339Nano)}
@@ -242,12 +240,6 @@ func (s *Service) executeDetectionTask(parent context.Context, task taskstore.Ta
 	publish(fmt.Sprintf("正在并发检测 %d 个账号，同时检测上限 %d", len(accounts), value.Concurrency))
 	type stageEvent struct {
 		animation *AnimationResult
-		terminal  *TerminalContinuityResult
-		final     bool
-	}
-	priorChecks := make(map[string]TerminalContinuityResult, len(checks))
-	for _, check := range checks {
-		priorChecks[check.AccountID] = check
 	}
 	jobs := make(chan selectedAccount)
 	events := make(chan stageEvent)
@@ -264,18 +256,7 @@ func (s *Service) executeDetectionTask(parent context.Context, task taskstore.Ta
 					if done[animationResultKey(account.ID, mode)] {
 						continue
 					}
-					if mode == "terminal" {
-						result := s.runTerminalCheckpoint(ctx, account, value.TimeoutSeconds, value.Model, task.ID+"-"+account.ID+"-terminal", value.TerminalRounds, priorChecks[account.ID], func(snapshot TerminalContinuityResult) {
-							snapshot.Incomplete = true
-							events <- stageEvent{terminal: &snapshot}
-						})
-						if taskstore.Interrupted(ctx) {
-							return
-						}
-						events <- stageEvent{terminal: &result, final: true}
-						continue
-					}
-					result := AnimationResult{AccountID: account.ID, AccountName: account.Name, Model: value.Model, RequestID: task.ID + "-" + account.ID + "-" + mode, Mode: mode, Status: "failed"}
+					result := AnimationResult{Prompt: request.Prompt, AccountID: account.ID, AccountName: account.Name, Model: value.Model, RequestID: task.ID + "-" + account.ID + "-" + mode, Mode: mode, Status: "failed"}
 					if err := s.runAnimationWithRetry(ctx, account, value.TimeoutSeconds, nil, questions, &result); err != nil {
 						if taskstore.Interrupted(ctx) {
 							return
@@ -284,8 +265,9 @@ func (s *Service) executeDetectionTask(parent context.Context, task taskstore.Ta
 					} else {
 						result.Status = "succeeded"
 					}
+					result.Phase = "completed"
 					result.CompletedAt = time.Now().UTC().Format(time.RFC3339Nano)
-					events <- stageEvent{animation: &result, final: true}
+					events <- stageEvent{animation: &result}
 				}
 			}
 		}()
@@ -302,15 +284,7 @@ func (s *Service) executeDetectionTask(parent context.Context, task taskstore.Ta
 	}()
 	go func() { workers.Wait(); close(events) }()
 	for event := range events {
-		if event.terminal != nil {
-			checks = upsertTerminal(checks, *event.terminal)
-			if event.final {
-				completed++
-				if event.terminal.Verdict != "error" {
-					success++
-				}
-			}
-		} else if event.animation != nil {
+		if event.animation != nil {
 			animations = append(animations, *event.animation)
 			if event.animation.Status == "succeeded" {
 				success++
@@ -341,9 +315,6 @@ func detectionTaskTimeout(value DetectionTask, accountCount int, minimum time.Du
 	perAccount := time.Duration(0)
 	if value.Precheck {
 		perAccount += requestBudget
-	}
-	if value.Terminal {
-		perAccount += time.Duration(value.TerminalRounds) * requestBudget
 	}
 	if value.Animation == nil || *value.Animation {
 		perAccount += animationMaximumAttempts * requestBudget

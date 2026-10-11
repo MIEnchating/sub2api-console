@@ -12,6 +12,7 @@ import (
 )
 
 func TestCreateUpstreamConfigurationWaitsForIdentityCatalogLease(t *testing.T) {
+	t.Parallel()
 	store, err := Open(filepath.Join(t.TempDir(), "create-catalog-lease.sqlite3"))
 	if err != nil {
 		t.Fatal(err)
@@ -43,6 +44,7 @@ func TestCreateUpstreamConfigurationWaitsForIdentityCatalogLease(t *testing.T) {
 }
 
 func TestRenameUpstreamHostMovesBusinessReferencesAndKeepsIdentity(t *testing.T) {
+	t.Parallel()
 	store, err := Open(filepath.Join(t.TempDir(), "rename-host.sqlite3"))
 	if err != nil {
 		t.Fatal(err)
@@ -91,6 +93,7 @@ func TestRenameUpstreamHostMovesBusinessReferencesAndKeepsIdentity(t *testing.T)
 }
 
 func TestUpstreamConfigurationCreateAndRateRecalculationUseDecimalText(t *testing.T) {
+	t.Parallel()
 	store, err := Open(filepath.Join(t.TempDir(), "business.sqlite3"))
 	if err != nil {
 		t.Fatal(err)
@@ -135,6 +138,7 @@ func TestUpstreamConfigurationCreateAndRateRecalculationUseDecimalText(t *testin
 }
 
 func TestUpstreamConfigurationPersistsIndependentAccountBaseURL(t *testing.T) {
+	t.Parallel()
 	store, err := Open(filepath.Join(t.TempDir(), "business.sqlite3"))
 	if err != nil {
 		t.Fatal(err)
@@ -175,6 +179,7 @@ func TestUpstreamConfigurationPersistsIndependentAccountBaseURL(t *testing.T) {
 }
 
 func TestUpstreamConfigurationUpdateAppliesRechargeRateToEveryStableHost(t *testing.T) {
+	t.Parallel()
 	store, err := Open(filepath.Join(t.TempDir(), "business.sqlite3"))
 	if err != nil {
 		t.Fatal(err)
@@ -225,6 +230,7 @@ func TestUpstreamConfigurationUpdateAppliesRechargeRateToEveryStableHost(t *test
 }
 
 func TestUpstreamGroupsRoundsPreviouslyStoredConvertedMultiplier(t *testing.T) {
+	t.Parallel()
 	store, err := Open(filepath.Join(t.TempDir(), "business.sqlite3"))
 	if err != nil {
 		t.Fatal(err)
@@ -257,6 +263,7 @@ func TestUpstreamGroupsRoundsPreviouslyStoredConvertedMultiplier(t *testing.T) {
 }
 
 func TestConvertMultiplierRoundsHalfUpToSixDecimalPlaces(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		name     string
 		raw      string
@@ -277,6 +284,7 @@ func TestConvertMultiplierRoundsHalfUpToSixDecimalPlaces(t *testing.T) {
 }
 
 func TestUpstreamConfigurationCreateAdoptsExistingOrphanRechargeRate(t *testing.T) {
+	t.Parallel()
 	store, err := Open(filepath.Join(t.TempDir(), "business.sqlite3"))
 	if err != nil {
 		t.Fatal(err)
@@ -310,6 +318,7 @@ func TestUpstreamConfigurationCreateAdoptsExistingOrphanRechargeRate(t *testing.
 }
 
 func TestUpdateUpstreamClassificationPreservesConfiguration(t *testing.T) {
+	t.Parallel()
 	store, err := Open(filepath.Join(t.TempDir(), "business.sqlite3"))
 	if err != nil {
 		t.Fatal(err)
@@ -346,6 +355,7 @@ func TestUpdateUpstreamClassificationPreservesConfiguration(t *testing.T) {
 }
 
 func TestUpstreamConfigurationUpdateRollsBackInvalidMetadata(t *testing.T) {
+	t.Parallel()
 	store, err := Open(filepath.Join(t.TempDir(), "business.sqlite3"))
 	if err != nil {
 		t.Fatal(err)

@@ -2,6 +2,7 @@ import { Dialog as DialogPrimitive } from "@base-ui/react/dialog";
 import { ArchiveRestore, History } from "lucide-react";
 import { useState, type ReactElement } from "react";
 import type { ModelCheckConfiguration } from "@/api";
+import { formatDateTime } from "@/lib/date-format";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -13,8 +14,7 @@ import {
 
 function displayTime(value: string | null): string {
   if (!value) return "-";
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? value : date.toLocaleString("zh-CN", { hour12: false });
+  return formatDateTime(value);
 }
 
 export function ModelCheckVersionHistoryDialog(props: {

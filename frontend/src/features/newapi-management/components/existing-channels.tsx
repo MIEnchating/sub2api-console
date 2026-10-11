@@ -1,6 +1,13 @@
-import { useCallback, useState } from "react";
-import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Folder, ListChecks, ListMinus, ListPlus, Plus } from "lucide-react";
+import { useCallback, useEffect, useId, useState } from "react";
+import {
+  isCancelledError,
+  keepPreviousData,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
+import { Link } from "@tanstack/react-router";
+import { CheckSquare, Folder, ListChecks, ListMinus, ListPlus, Plus } from "lucide-react";
 import { toast } from "sonner";
 import { api, type NewAPIChannel, type NewAPIChannelGroups } from "@/api";
 import { ContentRetry } from "@/components/content-retry";
@@ -47,21 +54,31 @@ export function ExistingChannels(props: { platformId: string; onCreate?: () => v
   const [groupOpen, setGroupOpen] = useState(false);
   const [selectingGroup, setSelectingGroup] = useState(false);
   const queryClient = useQueryClient();
+  const selectionScope = useId();
+  useEffect(() => {
+    const platformId = props.platformId;
+    return () => {
+      void queryClient.cancelQueries({
+        queryKey: ["newapi-channels", platformId, "group-selection", selectionScope],
+      });
+    };
+  }, [queryClient, props.platformId, selectionScope]);
   const channels = useQuery({
     queryKey: ["newapi-channels", props.platformId, page, pageSize, groupFilter],
-    queryFn: () =>
+    queryFn: ({ signal }) =>
       api.newAPIChannels(
         props.platformId,
         page,
         pageSize,
         groupFilter === "all" ? "" : groupFilter,
+        signal,
       ),
     placeholderData: (previous, previousQuery) =>
       previousQuery?.queryKey[4] === groupFilter ? keepPreviousData(previous) : undefined,
   });
   const channelGroups = useQuery({
     queryKey: ["newapi-channel-groups", props.platformId],
-    queryFn: () => api.newAPIChannelGroups(props.platformId),
+    queryFn: ({ signal }) => api.newAPIChannelGroups(props.platformId, signal),
   });
   const saveGroups = useMutation({
     mutationFn: (payload: NewAPIChannelGroups) =>
@@ -121,15 +138,22 @@ export function ExistingChannels(props: { platformId: string; onCreate?: () => v
     setSelectingGroup(true);
     try {
       const result = await queryClient.fetchQuery({
-        queryKey: ["newapi-channels", props.platformId, 0, 100, group.id],
-        queryFn: () => api.newAPIChannels(props.platformId, 0, 100, group.id),
+        queryKey: [
+          "newapi-channels",
+          props.platformId,
+          "group-selection",
+          selectionScope,
+          group.id,
+        ],
+        queryFn: ({ signal }) => api.newAPIChannels(props.platformId, 0, 100, group.id, signal),
         staleTime: 0,
+        gcTime: 0,
       });
       if (result.total > 50 || result.items.length > 50)
         throw new Error("分组已超过 50 个渠道，请分页选择");
       setSelected(new Map(result.items.map((channel) => [channel.id, channel])));
     } catch (error) {
-      notifyOperationError(error, "选择渠道分组失败");
+      if (!isCancelledError(error)) notifyOperationError(error, "选择渠道分组失败");
     } finally {
       setSelectingGroup(false);
     }
@@ -177,6 +201,10 @@ export function ExistingChannels(props: { platformId: string; onCreate?: () => v
               查看批量任务
             </Button>
           )}
+          <Button variant="outline" render={<Link to="/newapi/account-model-automation" />}>
+            <CheckSquare aria-hidden="true" />
+            账号模型
+          </Button>
           <RefreshButton
             pending={channels.isFetching || channelGroups.isFetching}
             ariaLabel="刷新渠道列表"

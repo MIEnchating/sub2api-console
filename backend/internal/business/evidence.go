@@ -279,6 +279,7 @@ func (s *Store) PersistTrafficSamples(ctx context.Context, samples []TrafficSamp
 	if err := tx.Commit(); err != nil {
 		return 0, err
 	}
+	s.invalidateAccountStabilityCache()
 	return inserted, nil
 }
 

@@ -7,6 +7,7 @@ import (
 )
 
 func TestCalculatedTargetsAreSkippedWhenGroupIsExcludedBeforeApply(t *testing.T) {
+	t.Parallel()
 	service, fixture := newUpstreamCapacityWriteFixture(t, writeCapacityPointer(20), 4, 4, true)
 	calculated, err := routing.NewService(fixture.store).Calculate(t.Context(), routing.Scope{}, true)
 	if err != nil {

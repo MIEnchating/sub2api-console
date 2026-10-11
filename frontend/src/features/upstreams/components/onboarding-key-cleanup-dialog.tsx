@@ -1,11 +1,10 @@
 import { Check, Trash2, XCircle } from "lucide-react";
+import { useMemo } from "react";
 
 import type { KeyCleanupPreview, Task } from "@/api";
-import { DataTablePanel } from "@/components/data-table/table-panel";
 import { ContentLoading } from "@/components/content-loading";
 import { RefreshButton } from "@/components/refresh-button";
 import { TaskProgressState, TaskStartupState } from "@/components/task-startup-state";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -16,43 +15,33 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
 import { QueryErrorToast } from "@/components/query-error-toast";
+import { KeyCleanupPreviewTable, KeyCleanupResultsTable } from "./onboarding-key-cleanup-tables";
 
-type CleanupResultItem = {
+export type CleanupResultItem = {
   keyId: string;
   name: string;
   status: "deleted" | "skipped" | "failed";
   reason: string | null;
 };
 
+function isCleanupResultItem(raw: unknown): raw is Record<string, unknown> {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return false;
+  const status = String((raw as Record<string, unknown>).status ?? "");
+  return status === "deleted" || status === "skipped" || status === "failed";
+}
+
 export function keyCleanupResultItems(task: Task): CleanupResultItem[] {
   if (!Array.isArray(task.result.items)) return [];
   return task.result.items.flatMap((raw) => {
-    if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return [];
-    const item = raw as Record<string, unknown>;
-    const rawStatus = String(item.status ?? "");
-    if (
-      !(["deleted", "skipped", "failed"] as const).includes(
-        rawStatus as CleanupResultItem["status"],
-      )
-    ) {
-      return [];
-    }
+    if (!isCleanupResultItem(raw)) return [];
     return [
       {
-        keyId: String(item.key_id ?? ""),
-        name: String(item.name ?? ""),
-        status: rawStatus as CleanupResultItem["status"],
+        keyId: String(raw.key_id ?? ""),
+        name: String(raw.name ?? ""),
+        status: String(raw.status) as CleanupResultItem["status"],
         reason:
-          typeof item.reason === "string" && item.reason.trim() !== "" ? item.reason.trim() : null,
+          typeof raw.reason === "string" && raw.reason.trim() !== "" ? raw.reason.trim() : null,
       },
     ];
   });
@@ -61,20 +50,6 @@ export function keyCleanupResultItems(task: Task): CleanupResultItem[] {
 function resultCount(value: unknown): number {
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
-}
-
-function cleanupStatusLabel(status: CleanupResultItem["status"]): string {
-  if (status === "deleted") return "已删除";
-  if (status === "skipped") return "已跳过";
-  return "失败";
-}
-
-function cleanupStatusVariant(
-  status: CleanupResultItem["status"],
-): "outline" | "warning" | "destructive" {
-  if (status === "deleted") return "outline";
-  if (status === "skipped") return "warning";
-  return "destructive";
 }
 
 export type OnboardingKeyCleanupDialogProps = {
@@ -105,7 +80,8 @@ export function keyCleanupDialogWidth(
   task: Task | null,
 ): "medium" | "wide" {
   const hasPreviewRows = (preview?.keys.length ?? 0) > 0;
-  const hasResultRows = task ? keyCleanupResultItems(task).length > 0 : false;
+  const hasResultRows =
+    Array.isArray(task?.result.items) && task.result.items.some(isCleanupResultItem);
   return hasPreviewRows || hasResultRows ? "wide" : "medium";
 }
 
@@ -113,7 +89,10 @@ export function OnboardingKeyCleanupDialogContent(props: OnboardingKeyCleanupDia
   const keys = props.preview?.keys ?? [];
   const taskRunning = keyCleanupTaskRunning(props.task);
   const taskFinished = Boolean(props.task && !taskRunning);
-  const resultItems = props.task ? keyCleanupResultItems(props.task) : [];
+  const resultItems = useMemo(
+    () => (props.task ? keyCleanupResultItems(props.task) : []),
+    [props.task],
+  );
   const controlsDisabled = props.previewPending || props.taskPending || taskRunning;
   const closeButtonLabel = keys.length > 0 ? "取消" : "关闭";
 
@@ -136,7 +115,7 @@ export function OnboardingKeyCleanupDialogContent(props: OnboardingKeyCleanupDia
           <div className="grid gap-4">
             {keys.length > 0 ? (
               <div className="border-destructive/40 bg-destructive/5 rounded-lg border px-4 py-3 text-sm leading-6">
-                将永久删除下列 {keys.length} 个上游
+                将永久删除全部 {keys.length} 个上游
                 Key。执行前后端会再次复核绑定关系，已建立绑定或进入开户待续的 Key 会自动跳过。
               </div>
             ) : (
@@ -145,33 +124,7 @@ export function OnboardingKeyCleanupDialogContent(props: OnboardingKeyCleanupDia
               </div>
             )}
             {keys.length > 0 ? (
-              <DataTablePanel>
-                <Table
-                  className="min-w-[680px] table-fixed"
-                  containerClassName="max-h-[24rem] overflow-auto"
-                >
-                  <TableHeader className="sticky top-0 z-10">
-                    <TableRow>
-                      <TableHead className="w-[30%]">Key 名称</TableHead>
-                      <TableHead className="w-[28%]">Key ID</TableHead>
-                      <TableHead className="w-[24%]">上游分组</TableHead>
-                      <TableHead className="w-[18%]">状态</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {keys.map((key) => (
-                      <TableRow key={key.key_id}>
-                        <TableCell className="font-medium">
-                          {key.name || `Key ${key.key_id}`}
-                        </TableCell>
-                        <TableCell>{key.key_id}</TableCell>
-                        <TableCell>{key.group_id || "未返回"}</TableCell>
-                        <TableCell>{key.status || "未返回"}</TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </DataTablePanel>
+              <KeyCleanupPreviewTable key={props.preview.host} keys={keys} />
             ) : null}
           </div>
         ) : null}
@@ -188,9 +141,13 @@ export function OnboardingKeyCleanupDialogContent(props: OnboardingKeyCleanupDia
             taskId={props.task.id}
           />
         ) : null}
-        {props.task && taskFinished ? (
+        {props.task && (taskFinished || resultItems.length > 0) ? (
           <div className="grid gap-4">
-            <div className="grid grid-cols-3 divide-x rounded-lg border text-center">
+            <div
+              role="group"
+              aria-label="Key 清理统计"
+              className="grid grid-cols-3 divide-x rounded-lg border text-center"
+            >
               <div className="px-3 py-3">
                 <strong className="block tabular-nums">
                   {resultCount(props.task.result.deleted)}
@@ -210,41 +167,15 @@ export function OnboardingKeyCleanupDialogContent(props: OnboardingKeyCleanupDia
                 <span className="text-muted-foreground text-xs">失败</span>
               </div>
             </div>
-            <p className={props.task.status === "failed" ? "text-destructive text-sm" : "text-sm"}>
-              {props.task.message}
-            </p>
+            {taskFinished ? (
+              <p
+                className={props.task.status === "failed" ? "text-destructive text-sm" : "text-sm"}
+              >
+                {props.task.message}
+              </p>
+            ) : null}
             {resultItems.length > 0 ? (
-              <DataTablePanel>
-                <Table
-                  className="min-w-[680px] table-fixed"
-                  containerClassName="max-h-[22rem] overflow-auto"
-                >
-                  <TableHeader className="sticky top-0 z-10">
-                    <TableRow>
-                      <TableHead className="w-[30%]">Key 名称</TableHead>
-                      <TableHead className="w-[28%]">Key ID</TableHead>
-                      <TableHead className="w-[16%]">结果</TableHead>
-                      <TableHead className="w-[26%]">说明</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {resultItems.map((item) => (
-                      <TableRow key={item.keyId}>
-                        <TableCell className="font-medium">
-                          {item.name || `Key ${item.keyId}`}
-                        </TableCell>
-                        <TableCell>{item.keyId}</TableCell>
-                        <TableCell>
-                          <Badge variant={cleanupStatusVariant(item.status)}>
-                            {cleanupStatusLabel(item.status)}
-                          </Badge>
-                        </TableCell>
-                        <TableCell>{item.reason || "—"}</TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </DataTablePanel>
+              <KeyCleanupResultsTable key={props.task.id} items={resultItems} />
             ) : null}
           </div>
         ) : null}

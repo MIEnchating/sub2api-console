@@ -7,6 +7,7 @@ import (
 )
 
 func TestCostWallPolicyDisabledRestoresSchedulingAndWeight(t *testing.T) {
+	t.Parallel()
 	for _, paused := range []bool{false, true} {
 		t.Run(map[bool]string{false: "cost blocked", true: "manually paused"}[paused], func(t *testing.T) {
 			store, db := costWallStore(t, "1.25")
@@ -35,6 +36,7 @@ func TestCostWallPolicyDisabledRestoresSchedulingAndWeight(t *testing.T) {
 }
 
 func TestCostWallPolicyDisablingFallbackClosesPreviouslyEnabledSurvivor(t *testing.T) {
+	t.Parallel()
 	store, db := costWallStore(t, "1")
 	if _, err := db.Exec(`UPDATE accounts SET paused=1,schedulable=0 WHERE id='42'; UPDATE accounts SET routing_state='survivor' WHERE id='41'`); err != nil {
 		t.Fatal(err)
@@ -54,6 +56,7 @@ func TestCostWallPolicyDisablingFallbackClosesPreviouslyEnabledSurvivor(t *testi
 }
 
 func TestCostWallPolicyDisabledDoesNotReopenAccountWithUnknownSchedulingStatus(t *testing.T) {
+	t.Parallel()
 	store, db := costWallStore(t, "1.25")
 	if _, err := db.Exec(`UPDATE accounts SET schedulable=NULL,routing_state='cost_blocked' WHERE id='41'`); err != nil {
 		t.Fatal(err)
@@ -73,6 +76,7 @@ func TestCostWallPolicyDisabledDoesNotReopenAccountWithUnknownSchedulingStatus(t
 }
 
 func TestCostWallPolicyProbeSwitchesApplyBeforeScheduling(t *testing.T) {
+	t.Parallel()
 	for _, field := range []string{"enabled", "stop_auto_probe"} {
 		t.Run(field, func(t *testing.T) {
 			store, _ := costWallStore(t, "1")

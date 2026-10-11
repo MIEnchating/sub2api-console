@@ -1,3 +1,4 @@
+import { seedDictionaries } from "@/test/dictionary-fixtures";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -39,6 +40,12 @@ function renderConfig(groups?: PricingSnapshot["groups"]): void {
     generated_at: "2026-09-15T00:00:00Z",
   };
   client = new QueryClient({ defaultOptions: { queries: { enabled: false } } });
+  seedDictionaries(client, {
+    group: snapshot.groups.map((group) => ({ value: group.id, name: group.name })),
+  });
+  seedDictionaries(client, {
+    group: snapshot.groups.map((group) => ({ value: group.id, name: group.name })),
+  });
   client.setQueryData(["pricing"], snapshot);
   client.setQueryData(["dictionaries", "group"], {
     items: ["8", "7", "6"].map((value) => ({ value, enabled: true })),
@@ -75,7 +82,7 @@ describe("价格配置互换范围布局", () => {
     expect(header).toContainElement(screen.getByRole("textbox", { name: "互换组 1 规则名称" }));
     expect(header).toContainElement(screen.getByRole("button", { name: "收起互换组 1" }));
     expect(summary).toHaveTextContent("2 个分组");
-    expect(summary).toHaveTextContent("openai");
+    expect(summary).toHaveTextContent("OpenAI");
   });
 
   it("分组展示稳定 ID 和售价，停用分组仍可读取原因", () => {

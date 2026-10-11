@@ -33,6 +33,7 @@ type AccountRecentResult struct {
 }
 
 type AccountStatus struct {
+	ManualFused                 bool                       `json:"manual_fused"`
 	GroupsLocked                bool                       `json:"groups_locked"`
 	IgnoreCostWall              bool                       `json:"ignore_cost_wall"`
 	Stability                   *accountquality.Statistics `json:"stability,omitempty"`
@@ -164,6 +165,7 @@ type accountProjectionOptions struct {
 	includeRecentEvidence bool
 	includeApplyState     bool
 	accountID             string
+	groupName             *string
 }
 
 func (s *Store) Accounts(ctx context.Context) ([]AccountStatus, error) {
@@ -176,6 +178,54 @@ func (s *Store) Accounts(ctx context.Context) ([]AccountStatus, error) {
 		result[index] = projections[index].AccountStatus
 	}
 	return result, nil
+}
+
+// AccountIDsByGroups resolves the current local group membership without using
+// account names. It accepts both the authoritative remote group ID and the
+// legacy name-only membership kept for older synchronized records.
+func (s *Store) AccountIDsByGroups(ctx context.Context, groupIDs []string) ([]string, error) {
+	if len(groupIDs) == 0 {
+		return []string{}, nil
+	}
+	uniqueGroupIDs := make([]string, 0, len(groupIDs))
+	seen := make(map[string]struct{}, len(groupIDs))
+	for _, groupID := range groupIDs {
+		groupID = strings.TrimSpace(groupID)
+		if _, exists := seen[groupID]; exists {
+			continue
+		}
+		seen[groupID] = struct{}{}
+		uniqueGroupIDs = append(uniqueGroupIDs, groupID)
+	}
+	values := make([]string, len(uniqueGroupIDs))
+	for index := range values {
+		values[index] = "(?)"
+	}
+	query := `WITH selected_group_ids(id) AS (VALUES ` + strings.Join(values, ",") + `)
+	SELECT DISTINCT ag.account_id
+		FROM account_groups ag
+		LEFT JOIN local_groups lg ON lg.name=ag.group_name
+		WHERE ag.group_id IN (SELECT id FROM selected_group_ids)
+		   OR (ag.group_id IS NULL AND lg.remote_id IN (SELECT id FROM selected_group_ids))
+		ORDER BY CASE WHEN ag.account_id GLOB '[0-9]*' THEN CAST(ag.account_id AS INTEGER) ELSE 0 END, ag.account_id`
+	args := make([]any, len(uniqueGroupIDs))
+	for index, groupID := range uniqueGroupIDs {
+		args[index] = groupID
+	}
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := make([]string, 0)
+	for rows.Next() {
+		var accountID string
+		if err := rows.Scan(&accountID); err != nil {
+			return nil, err
+		}
+		result = append(result, accountID)
+	}
+	return result, rows.Err()
 }
 
 func (s *Store) Account(ctx context.Context, accountID string) (*AccountDetail, error) {
@@ -273,7 +323,22 @@ func (s *Store) groupAccountProjections(ctx context.Context) ([]accountProjectio
 	return s.accountProjectionsWithOptions(ctx, accountProjectionOptions{})
 }
 
+func (s *Store) groupAccountProjectionsForGroup(ctx context.Context, groupName string) ([]accountProjection, error) {
+	return s.accountProjectionsWithOptions(ctx, accountProjectionOptions{groupName: &groupName})
+}
+
 func (s *Store) accountProjectionsWithOptions(ctx context.Context, options accountProjectionOptions) ([]accountProjection, error) {
+	ownershipFilter := ""
+	arguments := []any{}
+	if options.groupName != nil {
+		ownershipFilter = " AND " + groupProjectionPredicate("b.local_account_id")
+		arguments = append(arguments, *options.groupName)
+	} else if options.accountID != "" {
+		// Restrict the grouped binding directory before joining a single account.
+		// Filtering only a.id still materializes ownership for unrelated accounts.
+		ownershipFilter = " AND b.local_account_id=?"
+		arguments = append(arguments, options.accountID)
+	}
 	query := `SELECT a.id,a.name,COALESCE(ownership.upstream_host,a.upstream_host),a.upstream_host,
 		ownership.upstream_host,ownership.upstream_id,COALESCE(ownership.identity_count,0),COALESCE(u.upstream_type,a.upstream_type),u.base_url,a.schedulable,a.priority,
 		a.load_factor,a.concurrency,a.multiplier,a.balance,a.paused,a.paused_reason,a.routing_state,a.health_status,
@@ -285,12 +350,14 @@ func (s *Store) accountProjectionsWithOptions(ctx context.Context, options accou
 				COUNT(DISTINCT bi.upstream_id) AS identity_count
 			FROM bindings b JOIN binding_identities bi ON bi.binding_id=b.id
 			LEFT JOIN upstream_identity_hosts primary_host ON primary_host.upstream_id=bi.upstream_id AND primary_host.is_primary=1
-			WHERE TRIM(b.upstream_host)<>'' GROUP BY b.local_account_id
+			WHERE TRIM(b.upstream_host)<>''` + ownershipFilter + ` GROUP BY b.local_account_id
 		) ownership ON ownership.local_account_id=a.id
 		LEFT JOIN upstreams u ON u.host=COALESCE(ownership.upstream_host,a.upstream_host)
 		LEFT JOIN manual_priority_accounts m ON m.account_id=a.id`
-	arguments := []any{}
-	if options.accountID != "" {
+	if options.groupName != nil {
+		query += " WHERE " + groupProjectionPredicate("a.id")
+		arguments = append(arguments, *options.groupName)
+	} else if options.accountID != "" {
 		query += ` WHERE a.id=?`
 		arguments = append(arguments, options.accountID)
 	}
@@ -383,17 +450,17 @@ func (s *Store) accountProjectionsWithOptions(ctx context.Context, options accou
 	for index := range projections {
 		byID[projections[index].ID] = &projections[index]
 	}
-	if err := s.loadAccountGroups(ctx, byID); err != nil {
+	if err := s.loadAccountGroups(ctx, byID, options.groupName); err != nil {
 		return nil, err
 	}
-	if err := s.loadAccountKeyStatuses(ctx, byID); err != nil {
+	if err := s.loadAccountKeyStatuses(ctx, byID, options.groupName); err != nil {
 		return nil, err
 	}
-	decisions, err := s.loadAccountDecisions(ctx, byID)
+	decisions, err := s.loadAccountDecisions(ctx, byID, options.groupName)
 	if err != nil {
 		return nil, err
 	}
-	evaluations, err := s.loadAccountEvaluations(ctx, byID)
+	evaluations, err := s.loadAccountEvaluations(ctx, byID, options.groupName)
 	if err != nil {
 		return nil, err
 	}
@@ -453,6 +520,7 @@ func (s *Store) accountProjectionsWithOptions(ctx context.Context, options accou
 		item.IgnoreCostWall = containsControlID(ignoreCostWallIDs, item.ID)
 		item.GroupsLocked = containsControlID(groupLockedIDs, item.ID)
 		item.manualFused = containsControlID(manualFusedIDs, item.ID)
+		item.ManualFused = item.manualFused
 		applyAccountCalculations(item, decisions[item.ID], evaluations[item.ID], applyErrors[item.ID], applyView)
 		if mode == runtimepolicy.Monitoring {
 			applyMonitoringHealth(item, excludedIDs, degradeThreshold)
@@ -461,16 +529,13 @@ func (s *Store) accountProjectionsWithOptions(ctx context.Context, options accou
 	return projections, nil
 }
 
-func (s *Store) loadAccountKeyStatuses(ctx context.Context, accounts map[string]*accountProjection) error {
+func (s *Store) loadAccountKeyStatuses(ctx context.Context, accounts map[string]*accountProjection, groupNames ...*string) error {
 	for _, account := range accounts {
 		status, reason := "unbound", "账号没有上游 Key 绑定记录"
 		account.KeyStatus, account.KeyStatusReason = &status, &reason
 	}
-	var selectedAccountID *string
-	if id, single := soleProjectionAccountID(accounts); single {
-		selectedAccountID = &id
-	}
-	states, err := s.accountCatalogBindingStatesForAccount(ctx, selectedAccountID)
+	filter, arguments := projectionAccountFilter(accounts, "b.local_account_id", groupNames...)
+	states, err := s.accountCatalogBindingStatesFiltered(ctx, filter, arguments)
 	if err != nil {
 		return err
 	}
@@ -613,12 +678,11 @@ func (s *Store) routingApplyView(ctx context.Context, mode string) (routingApply
 	return result, nil
 }
 
-func (s *Store) loadAccountGroups(ctx context.Context, accounts map[string]*accountProjection) error {
+func (s *Store) loadAccountGroups(ctx context.Context, accounts map[string]*accountProjection, groupNames ...*string) error {
 	query := `SELECT account_id,group_name,group_id,group_rate FROM account_groups`
-	arguments := []any{}
-	if accountID, ok := soleProjectionAccountID(accounts); ok {
-		query += ` WHERE account_id=?`
-		arguments = append(arguments, accountID)
+	filter, arguments := projectionAccountFilter(accounts, "account_id", groupNames...)
+	if filter != "" {
+		query += " WHERE " + filter
 	}
 	query += ` ORDER BY account_id,group_name`
 	rows, err := s.db.QueryContext(ctx, query, arguments...)
@@ -641,7 +705,7 @@ func (s *Store) loadAccountGroups(ctx context.Context, accounts map[string]*acco
 	return rows.Err()
 }
 
-func (s *Store) loadAccountDecisions(ctx context.Context, accounts map[string]*accountProjection) (map[string][]decisionProjection, error) {
+func (s *Store) loadAccountDecisions(ctx context.Context, accounts map[string]*accountProjection, groupNames ...*string) (map[string][]decisionProjection, error) {
 	query := `SELECT account_id,group_name,routing_state,role,reason,updated_at,payload_json FROM routing_decisions`
 	args := []any{}
 	clauses := []string{}
@@ -654,9 +718,10 @@ func (s *Store) loadAccountDecisions(ctx context.Context, accounts map[string]*a
 		clauses = append(clauses, `updated_at>=?`)
 		args = append(args, epoch)
 	}
-	if accountID, ok := soleProjectionAccountID(accounts); ok {
-		clauses = append(clauses, `account_id=?`)
-		args = append(args, accountID)
+	filter, arguments := projectionAccountFilter(accounts, "account_id", groupNames...)
+	if filter != "" {
+		clauses = append(clauses, filter)
+		args = append(args, arguments...)
 	}
 	if len(clauses) > 0 {
 		query += ` WHERE ` + strings.Join(clauses, ` AND `)
@@ -711,7 +776,7 @@ func (s *Store) loadAccountDecisions(ctx context.Context, accounts map[string]*a
 	return result, rows.Err()
 }
 
-func (s *Store) loadAccountEvaluations(ctx context.Context, accounts map[string]*accountProjection) (map[string][]evaluationProjection, error) {
+func (s *Store) loadAccountEvaluations(ctx context.Context, accounts map[string]*accountProjection, groupNames ...*string) (map[string][]evaluationProjection, error) {
 	// Sample counts must come from the same round as the displayed scores.
 	// Old or calculation-only evaluations may not have a matching decision.
 	query := `SELECT e.account_id,e.group_name,e.health_score,e.short_score,e.long_score,
@@ -719,10 +784,9 @@ func (s *Store) loadAccountEvaluations(ctx context.Context, accounts map[string]
 		CASE WHEN json_valid(d.payload_json) THEN json_extract(d.payload_json,'$.short_sample_count') END
 		FROM account_health_evaluations e LEFT JOIN routing_decisions d
 		ON d.account_id=e.account_id AND d.group_name=e.group_name AND d.updated_at=e.evaluated_at`
-	arguments := []any{}
-	if accountID, ok := soleProjectionAccountID(accounts); ok {
-		query += ` WHERE e.account_id=?`
-		arguments = append(arguments, accountID)
+	filter, arguments := projectionAccountFilter(accounts, "e.account_id", groupNames...)
+	if filter != "" {
+		query += " WHERE " + filter
 	}
 	query += ` ORDER BY e.evaluated_at DESC`
 	rows, err := s.db.QueryContext(ctx, query, arguments...)
@@ -909,6 +973,22 @@ func soleProjectionAccountID(accounts map[string]*accountProjection) (string, bo
 		return accountID, true
 	}
 	return "", false
+}
+
+// Preserve the exact membership names used by Groups. The caller resolves
+// the local group by stable ID before constructing this scope.
+func groupProjectionPredicate(column string) string {
+	return column + ` IN (SELECT account_id FROM account_groups WHERE group_name=?)`
+}
+
+func projectionAccountFilter(accounts map[string]*accountProjection, column string, groupNames ...*string) (string, []any) {
+	if len(groupNames) > 0 && groupNames[0] != nil {
+		return groupProjectionPredicate(column), []any{*groupNames[0]}
+	}
+	if accountID, ok := soleProjectionAccountID(accounts); ok {
+		return column + "=?", []any{accountID}
+	}
+	return "", nil
 }
 
 func (s *Store) monitorPolicy(ctx context.Context, mode string) (map[string]struct{}, float64, error) {

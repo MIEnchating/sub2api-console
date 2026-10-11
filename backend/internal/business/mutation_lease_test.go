@@ -14,6 +14,7 @@ import (
 )
 
 func TestMutationLeaseAcquiresAllResourcesAtomicallyAndFencesOwners(t *testing.T) {
+	t.Parallel()
 	store, err := Open(filepath.Join(t.TempDir(), "mutation-lease.sqlite3"))
 	if err != nil {
 		t.Fatal(err)
@@ -44,6 +45,7 @@ func TestMutationLeaseAcquiresAllResourcesAtomicallyAndFencesOwners(t *testing.T
 }
 
 func TestMutationLeaseExpirationAndOwnerCheckedRenewal(t *testing.T) {
+	t.Parallel()
 	store, err := Open(filepath.Join(t.TempDir(), "mutation-expiry.sqlite3"))
 	if err != nil {
 		t.Fatal(err)
@@ -67,6 +69,7 @@ func TestMutationLeaseExpirationAndOwnerCheckedRenewal(t *testing.T) {
 }
 
 func TestMutationLeaseCannotBeRenewedAfterItsExpiry(t *testing.T) {
+	t.Parallel()
 	store, err := Open(filepath.Join(t.TempDir(), "mutation-late-renewal.sqlite3"))
 	if err != nil {
 		t.Fatal(err)
@@ -84,6 +87,7 @@ func TestMutationLeaseCannotBeRenewedAfterItsExpiry(t *testing.T) {
 }
 
 func TestMutationLeaseSupportsResourceSetsBeyondSQLiteParameterLimit(t *testing.T) {
+	t.Parallel()
 	store, err := Open(filepath.Join(t.TempDir(), "mutation-large.sqlite3"))
 	if err != nil {
 		t.Fatal(err)
@@ -110,6 +114,7 @@ func TestMutationLeaseSupportsResourceSetsBeyondSQLiteParameterLimit(t *testing.
 }
 
 func TestUpstreamIdentityMutationAccountIDsSupportsLargeComponents(t *testing.T) {
+	t.Parallel()
 	store, err := Open(filepath.Join(t.TempDir(), "mutation-identity-large.sqlite3"))
 	if err != nil {
 		t.Fatal(err)
@@ -147,6 +152,7 @@ func TestUpstreamIdentityMutationAccountIDsSupportsLargeComponents(t *testing.T)
 }
 
 func TestResolveMutationResourcesIndexesLargeMultiHostComponent(t *testing.T) {
+	t.Parallel()
 	store, err := Open(filepath.Join(t.TempDir(), "mutation-resolver-large.sqlite3"))
 	if err != nil {
 		t.Fatal(err)
@@ -214,6 +220,7 @@ func TestResolveMutationResourcesIndexesLargeMultiHostComponent(t *testing.T) {
 }
 
 func TestMutationLeaseResolvesKnownUpstreamAliasesToStableIdentity(t *testing.T) {
+	t.Parallel()
 	store, err := Open(filepath.Join(t.TempDir(), "mutation-alias.sqlite3"))
 	if err != nil {
 		t.Fatal(err)
@@ -252,6 +259,7 @@ func TestMutationLeaseResolvesKnownUpstreamAliasesToStableIdentity(t *testing.T)
 }
 
 func TestMutationLeaseCatalogRequestLocksAccountsAcrossPersistedIdentityHosts(t *testing.T) {
+	t.Parallel()
 	store, err := Open(filepath.Join(t.TempDir(), "mutation-persisted-alias.sqlite3"))
 	if err != nil {
 		t.Fatal(err)
@@ -287,6 +295,7 @@ func TestMutationLeaseCatalogRequestLocksAccountsAcrossPersistedIdentityHosts(t 
 }
 
 func TestMutationLeaseKeepsRawHostLockAcrossIdentityNamespaceTransition(t *testing.T) {
+	t.Parallel()
 	store, err := Open(filepath.Join(t.TempDir(), "mutation-transition.sqlite3"))
 	if err != nil {
 		t.Fatal(err)
@@ -325,6 +334,7 @@ func TestMutationLeaseKeepsRawHostLockAcrossIdentityNamespaceTransition(t *testi
 }
 
 func TestMutationLeaseSerializesProspectiveAliasesBeforeIdentityMerge(t *testing.T) {
+	t.Parallel()
 	store, err := Open(filepath.Join(t.TempDir(), "mutation-alias-merge.sqlite3"))
 	if err != nil {
 		t.Fatal(err)

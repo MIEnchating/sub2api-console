@@ -1,3 +1,4 @@
+import { seedDictionaries } from "@/test/dictionary-fixtures";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render as renderComponent } from "@testing-library/react";
 import { renderToStaticMarkup as renderMarkup } from "react-dom/server";
@@ -5,7 +6,7 @@ import type { ReactElement } from "react";
 
 function withDictionary(element: ReactElement): ReactElement {
   const client = new QueryClient({ defaultOptions: { queries: { staleTime: Infinity } } });
-  client.setQueryData(["dictionaries", "scheduling_strategy"], { items: [] });
+  seedDictionaries(client);
   return <QueryClientProvider client={client}>{element}</QueryClientProvider>;
 }
 

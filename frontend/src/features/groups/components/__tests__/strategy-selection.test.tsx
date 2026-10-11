@@ -1,3 +1,4 @@
+import { seedDictionaries } from "@/test/dictionary-fixtures";
 import { act, render as renderComponent, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render } from "./dictionary-render";
@@ -55,6 +56,7 @@ it("通过键盘选择策略后可回到全局默认且保留探活模型", asyn
 
 it("字典排序变化立即调整策略选项，全局默认固定首位且保留当前选择", async () => {
   const client = new QueryClient({ defaultOptions: { queries: { staleTime: Infinity } } });
+  seedDictionaries(client);
   client.setQueryData(["dictionaries", "scheduling_strategy"], {
     items: [{ value: "price_first", enabled: true }],
   });

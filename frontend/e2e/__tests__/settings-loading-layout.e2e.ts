@@ -145,7 +145,7 @@ for (const scenario of layouts) {
       configPending = false;
       releaseConfig();
       if (scenario.tab !== "connection") {
-        await expect(page.getByRole("button", { name: "刷新系统设置" })).toBeEnabled();
+        await expect(page.getByRole("button", { name: "刷新系统设置" })).toBeDisabled();
         await expect(cards).toHaveCount(scenario.count);
         await expect(panel.locator('[data-slot="skeleton"]').first()).toBeVisible();
       }
@@ -218,6 +218,7 @@ test("告警刷新失败后保留告警列表及分页并禁止清理", async ({
 });
 
 test("连接页概要刷新失败后保留已读取统计", async ({ page }) => {
+  await page.clock.install();
   await mockSettings(page);
   let failed = false;
   const summary = {
@@ -248,8 +249,9 @@ test("连接页概要刷新失败后保留已读取统计", async ({ page }) => 
   const values = page.getByTestId("inspection-summary-grid");
   await expect(values).toContainText("受管账号7");
   failed = true;
-  // Returning to the connection tab starts its enabled query again without discarding cache.
+  // Expire the shared cache before returning to the connection tab.
   await page.getByRole("tab", { name: "通知设置", exact: true }).click();
+  await page.clock.fastForward(16_000);
   await page.getByRole("tab", { name: "连接设置", exact: true }).click();
   await expect(
     page.locator("[data-sonner-toast]").filter({ hasText: "概要刷新暂不可用" }),

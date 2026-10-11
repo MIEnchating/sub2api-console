@@ -1,5 +1,6 @@
+import { seedDictionaries } from "@/test/dictionary-fixtures";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -11,6 +12,7 @@ import { rankingFixture } from "./fixtures";
 const clients: QueryClient[] = [];
 
 afterEach(() => {
+  cleanup();
   clients.forEach((client) => client.clear());
   clients.length = 0;
 });
@@ -19,11 +21,12 @@ function renderRanking(data?: TrafficRanking): QueryClient {
   const client = new QueryClient({
     defaultOptions: { queries: { staleTime: Infinity, retry: false } },
   });
+  seedDictionaries(client);
   clients.push(client);
   client.setQueryData(["groups"], []);
   client.setQueryData(["dictionaries", "group"], { items: [] });
-  client.setQueryData(["dictionaries", "platform"], { items: [] });
-  if (data) client.setQueryData(["traffic-ranking", "24h", "all", "traffic"], data);
+
+  if (data) client.setQueryData(["traffic-ranking", "24h", null, "traffic"], data);
   render(
     <QueryClientProvider client={client}>
       <TrafficRankingPage />
@@ -61,7 +64,7 @@ describe("流量排行筛选", () => {
   it("切换为延迟排行时在延迟列展示升序状态", async () => {
     const user = userEvent.setup();
     const client = renderRanking(rankingFixture);
-    client.setQueryData(["traffic-ranking", "24h", "all", "latency"], {
+    client.setQueryData(["traffic-ranking", "24h", null, "latency"], {
       ...rankingFixture,
       sort_by: "latency",
     });
@@ -79,7 +82,7 @@ describe("流量排行筛选", () => {
   it("切换到按天统计的时间范围时活跃时段使用天数单位", async () => {
     const user = userEvent.setup();
     const client = renderRanking(rankingFixture);
-    client.setQueryData(["traffic-ranking", "7d", "all", "traffic"], {
+    client.setQueryData(["traffic-ranking", "7d", null, "traffic"], {
       ...rankingFixture,
       bucket: "day",
       accounts: [{ ...rankingFixture.accounts[0], active_buckets: 5, total_buckets: 7 }],
@@ -108,6 +111,64 @@ describe("流量排行筛选", () => {
 });
 
 describe("流量排行读取状态", () => {
+  it("切换时间范围时取消旧范围读取，迟到数据不覆盖当前范围", async () => {
+    const user = userEvent.setup();
+    let oldSignal: AbortSignal | null | undefined;
+    let releaseOld!: (response: Response) => void;
+    const oldResponse = new Promise<Response>((resolve) => {
+      releaseOld = resolve;
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = new URL(String(input), "http://localhost");
+        if (url.searchParams.get("time_range") === "24h") {
+          oldSignal = init?.signal;
+          return oldResponse;
+        }
+        return Promise.resolve(
+          Response.json({
+            ...rankingFixture,
+            accounts: [{ ...rankingFixture.accounts[0], account_name: "七天范围账号" }],
+          }),
+        );
+      }),
+    );
+    renderRanking();
+    try {
+      await user.click(screen.getByRole("button", { name: "时间范围筛选" }));
+      await user.click(screen.getByRole("option", { name: "最近 7 天" }));
+      await user.keyboard("{Escape}");
+      expect(await screen.findByText("七天范围账号")).toBeInTheDocument();
+      expect(oldSignal?.aborted).toBe(true);
+    } finally {
+      await act(async () => releaseOld(Response.json(rankingFixture)));
+    }
+    expect(screen.queryByText("稳定主账号")).not.toBeInTheDocument();
+    expect(screen.getByText("七天范围账号")).toBeInTheDocument();
+  });
+
+  it("离开排行页时取消仍在执行的排行读取", async () => {
+    let signal: AbortSignal | null | undefined;
+    let release!: (response: Response) => void;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((_input: RequestInfo | URL, init?: RequestInit) => {
+        signal = init?.signal;
+        return new Promise<Response>((resolve) => {
+          release = resolve;
+        });
+      }),
+    );
+    renderRanking();
+    try {
+      cleanup();
+      expect(signal?.aborted).toBe(true);
+    } finally {
+      await act(async () => release(Response.json(rankingFixture)));
+    }
+  });
+
   it("首次请求未完成时展示骨架且禁用刷新，完成后展示排行", async () => {
     let releaseResponse: (response: Response) => void = () => {};
     const response = new Promise<Response>((resolve) => {

@@ -55,7 +55,7 @@ export function LogsTable(props: {
           {!props.loading && !props.unavailable && props.items.length === 0 && (
             <TableEmptyState columns={6}>
               <div className="grid justify-items-center gap-2 py-6">
-                <span className="bg-muted flex size-10 items-center justify-center rounded-xl">
+                <span className="bg-muted flex size-10 items-center justify-center rounded-lg">
                   <EmptyIcon className="size-5" aria-hidden="true" />
                 </span>
                 <span className="text-foreground font-medium">

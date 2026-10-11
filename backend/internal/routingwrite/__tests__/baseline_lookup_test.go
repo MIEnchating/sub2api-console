@@ -24,6 +24,7 @@ func (store *countedBaselineStore) RoutingBaselines(ctx context.Context) ([]busi
 }
 
 func TestBatchReleaseRestoresEachAccountWithoutFullBaselineScans(t *testing.T) {
+	t.Parallel()
 	store, err := business.Open(filepath.Join(t.TempDir(), "baselines.sqlite3"))
 	if err != nil {
 		t.Fatal(err)

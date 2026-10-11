@@ -42,10 +42,13 @@ export function TemplateEditor(props: {
   });
   const sourceID = form.watch("source_id");
   const [readID, setReadID] = useState(props.template?.source_id ?? "");
-  const accounts = useQuery({ queryKey: workbenchKeys.accounts, queryFn: api.workbenchAccounts });
+  const accounts = useQuery({
+    queryKey: workbenchKeys.accounts,
+    queryFn: ({ signal }) => api.workbenchAccounts(signal),
+  });
   const source = useQuery({
     queryKey: ["account-workbench", "template-source", readID],
-    queryFn: () => api.workbenchTemplateSource(readID),
+    queryFn: ({ signal }) => api.workbenchTemplateSource(readID, signal),
     enabled: !!readID,
     staleTime: 0,
     gcTime: 0,

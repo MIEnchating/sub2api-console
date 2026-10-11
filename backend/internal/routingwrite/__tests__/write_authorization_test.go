@@ -13,6 +13,7 @@ import (
 )
 
 func TestAutomaticWriteRechecksAuthorizationAfterReadingRemoteAccount(t *testing.T) {
+	t.Parallel()
 	for _, scenario := range []struct {
 		name       string
 		monitoring bool

@@ -1,5 +1,5 @@
 import { Controller, type FieldPath, type UseFormReturn } from "react-hook-form";
-import { FormField } from "@/App";
+import { FormField } from "@/components/form-field";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";

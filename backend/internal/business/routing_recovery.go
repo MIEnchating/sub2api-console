@@ -12,22 +12,29 @@ import (
 // observation even when high traffic has rotated the bounded health cache.
 func (s *Store) RoutingRecoveryTraffic(ctx context.Context, accountID string, since, before time.Time) ([]RoutingSample, error) {
 	query := `WITH recent AS (
-		SELECT id,request_id,group_name,is_error,error_reason,first_token_ms,observed_at,payload_json
+		SELECT id,request_id,console_recovery_time_v1(observed_at) observed_time
 		FROM usage_records WHERE LOWER(REPLACE(source,'_','-'))='traffic' AND account_id=?
-		AND COALESCE(observed_at,'')>=? AND COALESCE(observed_at,'')<=?
+		AND console_recovery_time_v1(observed_at)>=? AND console_recovery_time_v1(observed_at)<=?
 	), boundary AS (
-		SELECT id,request_id,group_name,is_error,error_reason,first_token_ms,observed_at,payload_json
+		SELECT id,request_id,console_recovery_time_v1(observed_at) observed_time
 		FROM usage_records WHERE LOWER(REPLACE(source,'_','-'))='traffic' AND account_id=?
-		AND COALESCE(observed_at,'')<? ORDER BY COALESCE(observed_at,'') DESC,id DESC LIMIT 1
+		AND console_recovery_time_v1(observed_at)<?
+		ORDER BY console_recovery_time_v1(observed_at) DESC,id DESC LIMIT 1
+	), ranked AS (
+		SELECT id,observed_time,ROW_NUMBER() OVER (
+			PARTITION BY request_id ORDER BY observed_time DESC,id DESC
+		) request_rank FROM (SELECT * FROM recent UNION ALL SELECT * FROM boundary)
 	)
-	SELECT * FROM recent UNION ALL SELECT * FROM boundary ORDER BY observed_at DESC,id DESC`
-	rows, err := s.db.QueryContext(ctx, query, accountID, since.UTC().Format(healthSampleTimeLayout), before.UTC().Format(healthSampleTimeLayout), accountID, since.UTC().Format(healthSampleTimeLayout))
+	SELECT u.id,u.request_id,u.group_name,u.is_error,u.error_reason,u.first_token_ms,u.observed_at,u.payload_json
+	FROM ranked r JOIN usage_records u ON u.id=r.id
+	WHERE r.request_rank=1 ORDER BY r.observed_time DESC,r.id DESC`
+	start, end := routingRecoveryTimeKey(since), routingRecoveryTimeKey(before)
+	rows, err := s.db.QueryContext(ctx, query, accountID, start, end, accountID, start)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	result := []RoutingSample{}
-	seen := map[string]struct{}{}
 	for rows.Next() {
 		var id int64
 		var requestID, raw string
@@ -36,10 +43,6 @@ func (s *Store) RoutingRecoveryTraffic(ctx context.Context, accountID string, si
 		if err := rows.Scan(&id, &requestID, &group, &failed, &reason, &firstToken, &observed, &raw); err != nil {
 			return nil, err
 		}
-		if _, exists := seen[requestID]; exists {
-			continue
-		}
-		seen[requestID] = struct{}{}
 		item := RoutingSample{AccountID: accountID, GroupName: group.String, Source: "traffic", Result: "通过", FailureReason: reason.String, ObservedAt: observed.String}
 		if !failed.Valid || failed.Int64 != 0 {
 			item.Result = "失败"

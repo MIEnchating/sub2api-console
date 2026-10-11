@@ -7,6 +7,7 @@ import (
 )
 
 func TestScopedIndependentReductionReservesOutsideAccountsWithoutDedicatedCapacityReader(t *testing.T) {
+	t.Parallel()
 	repository := reductionFixture(t, upstreamCapacityAccount("41", 4, 10), upstreamCapacityAccount("42", 9, 10))
 	// The base repository contract remains valid without the optional inventory reader.
 	baseOnly := struct{ routing.Repository }{Repository: repository}

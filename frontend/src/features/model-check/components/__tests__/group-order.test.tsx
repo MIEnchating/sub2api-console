@@ -3,7 +3,7 @@ import { expect, it, vi } from "vitest";
 import { render as renderWithDictionaries } from "@/test/dictionary";
 import { ModelCheckSelection } from "../model-check-selection";
 
-it("常规模型检测的分组筛选按名称字典排序并保留未登记项", async () => {
+it("常规模型检测的分组筛选按名称字典排序且不补入未登记项", async () => {
   renderWithDictionaries(
     <ModelCheckSelection
       accounts={[]}
@@ -44,6 +44,6 @@ it("常规模型检测的分组筛选按名称字典排序并保留未登记项"
   );
   fireEvent.click(screen.getByRole("button", { name: "分组筛选" }));
   const options = await screen.findAllByRole("option");
-  expect(options.map((item) => item.textContent)).toEqual(["B", "A", "新分组"]);
+  expect(options.map((item) => item.textContent)).toEqual(["B", "A"]);
   expect(options[1]).toHaveAttribute("aria-selected", "true");
 });

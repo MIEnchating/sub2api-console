@@ -71,6 +71,10 @@ type classificationStore interface {
 	UpdateUpstreamClassification(context.Context, string, string, string) error
 }
 
+type configurationHostStore interface {
+	UpstreamConfigurationHost(context.Context, string) (*business.UpstreamHost, error)
+}
+
 type hostRenamer interface {
 	RenameUpstreamHost(context.Context, string, string) error
 }
@@ -145,17 +149,9 @@ func (s *Service) Get(ctx context.Context, host string) (Configuration, error) {
 	if host == "" {
 		return Configuration{}, errors.New("上游 Host 不能为空")
 	}
-	summary, err := s.business.Upstreams(ctx)
+	public, err := s.configurationHost(ctx, host)
 	if err != nil {
 		return Configuration{}, err
-	}
-	var public *business.UpstreamHost
-	for index := range summary.Hosts {
-		if summary.Hosts[index].Host == host {
-			item := summary.Hosts[index]
-			public = &item
-			break
-		}
 	}
 	if public == nil {
 		return Configuration{}, ErrNotFound
@@ -193,10 +189,29 @@ func (s *Service) Get(ctx context.Context, host string) (Configuration, error) {
 	return result, nil
 }
 
+func (s *Service) configurationHost(ctx context.Context, host string) (*business.UpstreamHost, error) {
+	if store, ok := s.business.(configurationHostStore); ok {
+		return store.UpstreamConfigurationHost(ctx, host)
+	}
+	summary, err := s.business.Upstreams(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for index := range summary.Hosts {
+		if summary.Hosts[index].Host == host {
+			return &summary.Hosts[index], nil
+		}
+	}
+	return nil, nil
+}
+
 func (s *Service) Create(ctx context.Context, input Input, actor string) (Configuration, error) {
 	host := configstore.CanonicalHost(input.Host)
 	if host == "" || input.Name == nil || strings.TrimSpace(*input.Name) == "" {
 		return Configuration{}, inputError(errors.New("上游 Host 和名称不能为空"))
+	}
+	if err := validateAccountBaseURL(input); err != nil {
+		return Configuration{}, inputError(err)
 	}
 	resources := []string{mutationguard.UpstreamCatalog()}
 	if vault := vaultMutationResource(host, input, true); vault != "" {
@@ -257,8 +272,11 @@ func (s *Service) Update(ctx context.Context, host string, input Input, actor st
 	if err != nil {
 		return Configuration{}, inputError(err)
 	}
-	// The edit form submits one upstream address. Derive its Host here so
-	// address changes use the same identity-preserving rename as explicit edits.
+	if err := validateAccountBaseURL(input); err != nil {
+		return Configuration{}, inputError(err)
+	}
+	// Reserve the submitted address before resolving whether it changes the
+	// canonical Host or selects an existing alias of the same stable identity.
 	targetHost := configstore.CanonicalHost(baseURL)
 	if strings.TrimSpace(input.Host) != "" {
 		targetHost = configstore.CanonicalHost(input.Host)
@@ -270,8 +288,13 @@ func (s *Service) Update(ctx context.Context, host string, input Input, actor st
 	if targetHost != host {
 		resources = append(resources, mutationguard.Upstream(targetHost))
 	}
-	if vault := vaultMutationResource(targetHost, input, false); vault != "" {
+	if vault := vaultMutationResource(host, input, false); vault != "" {
 		resources = append(resources, vault)
+	}
+	if targetHost != host {
+		if vault := vaultMutationResource(targetHost, input, false); vault != "" {
+			resources = append(resources, vault)
+		}
 	}
 	guarded, release, err := s.acquireHostMutation(ctx, host, resources...)
 	if err != nil {
@@ -289,6 +312,10 @@ func (s *Service) Update(ctx context.Context, host string, input Input, actor st
 	}
 	if !exists {
 		return Configuration{}, ErrNotFound
+	}
+	targetHost, err = s.resolveUpdateHost(ctx, previous, targetHost, strings.TrimSpace(input.Host) == "")
+	if err != nil {
+		return Configuration{}, err
 	}
 	existing, err := s.private.AuthRecord(ctx, host)
 	if err != nil {
@@ -664,6 +691,13 @@ func (s *Service) commitPrivateAndPublic(
 	}
 	rollbackErrors = append(rollbackErrors, rollbackFailure("密码箱", s.restoreVault(rollbackCtx, change)))
 	return business.UpstreamConfigurationWriteResult{}, errors.Join(rollbackErrors...)
+}
+
+func validateAccountBaseURL(input Input) error {
+	if strings.TrimSpace(input.AccountBaseURL) == "" {
+		return nil
+	}
+	return normalizeAccountBaseURL(&input, input.BaseURL)
 }
 
 func normalizeAccountBaseURL(input *Input, fallback string) error {

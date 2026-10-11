@@ -1,6 +1,6 @@
 import { useDictionaryOrder } from "@/hooks/use-dictionary-order";
 import { notifyOperationError } from "@/lib/operation-feedback";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Controller, useForm } from "react-hook-form";
 
@@ -35,11 +35,10 @@ type Props = {
   creatingKey: boolean;
   fetchingModels: boolean;
   onCreateKey: (payload: NewAPIChannelKeyRequest) => Promise<NewAPIChannelKey>;
-  onFetchModels: (payload: {
-    sub2api_group_id: string;
-    key_id: string;
-    base_url: string;
-  }) => Promise<string[]>;
+  onFetchModels: (
+    payload: { sub2api_group_id: string; key_id: string; base_url: string },
+    signal?: AbortSignal,
+  ) => Promise<string[]>;
   onSubmit: (payload: {
     sub2api_group_id: string;
     key_id: string;
@@ -61,6 +60,7 @@ export function NewAPIChannelForm(props: Props) {
   const [fetchedModels, setFetchedModels] = useState<string[]>([]);
   const [draftModels, setDraftModels] = useState<string[]>([]);
   const [modelError, setModelError] = useState("");
+  const modelRequest = useRef<AbortController | null>(null);
   const [customBaseURL, setCustomBaseURL] = useState(false);
   const groupNames = useMemo(
     () => new Map(props.groups.map((group) => [group.id, group.name])),
@@ -103,6 +103,13 @@ export function NewAPIChannelForm(props: Props) {
   const selectedGroupID = keyForm.watch("sub2api_group_id");
   const selectedGroupName = groupNames.get(selectedGroupID) ?? "";
 
+  useEffect(() => () => modelRequest.current?.abort(), []);
+
+  function closeModelDialog() {
+    modelRequest.current?.abort();
+    setModelDialogOpen(false);
+  }
+
   useEffect(() => {
     if (selectedVaultEntry && vaultOptions.some((item) => item.entry === selectedVaultEntry)) {
       return;
@@ -111,6 +118,7 @@ export function NewAPIChannelForm(props: Props) {
   }, [keyForm, props.sub2APIBaseURL, selectedVaultEntry, vaultOptions]);
 
   function clearModels() {
+    modelRequest.current?.abort();
     setModelError("");
     channelForm.setValue("models", [], { shouldDirty: true });
     setFetchedModels([]);
@@ -161,12 +169,18 @@ export function NewAPIChannelForm(props: Props) {
     if (!valid || !createdKey) return;
     setModelError("");
     setModelDialogOpen(true);
+    const controller = new AbortController();
+    modelRequest.current = controller;
     try {
-      const models = await props.onFetchModels({
-        sub2api_group_id: selectedGroupID,
-        key_id: createdKey.key_id,
-        base_url: selectedBaseURL,
-      });
+      const models = await props.onFetchModels(
+        {
+          sub2api_group_id: selectedGroupID,
+          key_id: createdKey.key_id,
+          base_url: selectedBaseURL,
+        },
+        controller.signal,
+      );
+      if (controller.signal.aborted) return;
       setFetchedModels(models);
       setDraftModels(
         fetchedModels.length > 0 ? draftModels.filter((model) => models.includes(model)) : models,
@@ -177,8 +191,11 @@ export function NewAPIChannelForm(props: Props) {
         { shouldValidate: true },
       );
     } catch (error) {
+      if (controller.signal.aborted) return;
       notifyOperationError(error, "从上游获取模型失败");
       setModelError(requestErrorMessage(error));
+    } finally {
+      if (modelRequest.current === controller) modelRequest.current = null;
     }
   }
 
@@ -272,7 +289,9 @@ export function NewAPIChannelForm(props: Props) {
         selected={draftModels}
         pending={props.fetchingModels}
         error={modelError}
-        onOpenChange={setModelDialogOpen}
+        onOpenChange={(open) => {
+          if (!open) closeModelDialog();
+        }}
         onRetry={() => void fetchModels()}
         onSelectedChange={setDraftModels}
         onConfirm={() => {

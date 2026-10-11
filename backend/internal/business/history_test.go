@@ -10,6 +10,7 @@ import (
 )
 
 func TestHistoryReadModelsPreserveNullabilityAndSurfaceDamagedJSON(t *testing.T) {
+	t.Parallel()
 	store, err := Open(filepath.Join(t.TempDir(), "history.sqlite3"))
 	if err != nil {
 		t.Fatal(err)
@@ -65,6 +66,7 @@ func TestHistoryReadModelsPreserveNullabilityAndSurfaceDamagedJSON(t *testing.T)
 }
 
 func TestLogSearchFiltersBeforeDecodingPayloads(t *testing.T) {
+	t.Parallel()
 	store := openPolicyStore(t)
 	ctx := context.Background()
 	now := "2026-08-30T16:00:00Z"
@@ -99,6 +101,7 @@ func TestLogSearchFiltersBeforeDecodingPayloads(t *testing.T) {
 }
 
 func TestAuditEventsRemainReadableAfterLogFilterIndexChanges(t *testing.T) {
+	t.Parallel()
 	path := filepath.Join(t.TempDir(), "history-legacy-index.sqlite3")
 	store, err := Open(path)
 	if err != nil {
@@ -148,6 +151,7 @@ func TestAuditEventsRemainReadableAfterLogFilterIndexChanges(t *testing.T) {
 }
 
 func TestHistorySearchAndUnfilteredReadersDecodeRowsIdentically(t *testing.T) {
+	t.Parallel()
 	store := openPolicyStore(t)
 	ctx := context.Background()
 	if _, err := store.db.ExecContext(ctx, `INSERT INTO accounts(id,name,metadata_json,updated_at)
@@ -196,6 +200,7 @@ func TestHistorySearchAndUnfilteredReadersDecodeRowsIdentically(t *testing.T) {
 }
 
 func TestHistoryOrdersMixedSourcesByActualTimeAndSourceSequence(t *testing.T) {
+	t.Parallel()
 	store, err := Open(filepath.Join(t.TempDir(), "history-order.sqlite3"))
 	if err != nil {
 		t.Fatal(err)
@@ -247,6 +252,7 @@ func TestHistoryOrdersMixedSourcesByActualTimeAndSourceSequence(t *testing.T) {
 }
 
 func TestAuditEventsIncludesConfirmedNoopRemoteReadback(t *testing.T) {
+	t.Parallel()
 	store, err := Open(filepath.Join(t.TempDir(), "history-readback.sqlite3"))
 	if err != nil {
 		t.Fatal(err)
@@ -274,6 +280,7 @@ func TestAuditEventsIncludesConfirmedNoopRemoteReadback(t *testing.T) {
 }
 
 func TestAuditEventsIncludesFailedAccountDeleteWithoutRemoteWrite(t *testing.T) {
+	t.Parallel()
 	store, err := Open(filepath.Join(t.TempDir(), "history-account-delete.sqlite3"))
 	if err != nil {
 		t.Fatal(err)
@@ -302,6 +309,7 @@ func TestAuditEventsIncludesFailedAccountDeleteWithoutRemoteWrite(t *testing.T) 
 }
 
 func TestClearAlertsKeepsFiringIncidentDeduplicationAndDeletesEndedAlerts(t *testing.T) {
+	t.Parallel()
 	store, err := Open(filepath.Join(t.TempDir(), "alerts.sqlite3"))
 	if err != nil {
 		t.Fatal(err)
@@ -340,6 +348,7 @@ func TestClearAlertsKeepsFiringIncidentDeduplicationAndDeletesEndedAlerts(t *tes
 }
 
 func TestAlertsIncludeNotificationAttemptMetadata(t *testing.T) {
+	t.Parallel()
 	store, err := Open(filepath.Join(t.TempDir(), "alert-list.sqlite3"))
 	if err != nil {
 		t.Fatal(err)
@@ -365,6 +374,7 @@ func TestAlertsIncludeNotificationAttemptMetadata(t *testing.T) {
 }
 
 func TestClearLogRecordsHonorsCutoffAndProtectsRunningRuns(t *testing.T) {
+	t.Parallel()
 	store, err := Open(filepath.Join(t.TempDir(), "logs.sqlite3"))
 	if err != nil {
 		t.Fatal(err)

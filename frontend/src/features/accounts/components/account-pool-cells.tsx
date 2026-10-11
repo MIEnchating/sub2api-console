@@ -381,6 +381,7 @@ function accountStateReasonLabel(state: ReturnType<typeof accountPoolState>["val
     cost_blocked: "拦截原因",
     concurrency_limited: "等待原因",
     fused: "熔断原因",
+    manual_fused: "熔断原因",
     survivor: "保底原因",
     paused: "暂停原因",
     disabled: "停用原因",
@@ -402,7 +403,8 @@ function accountStateReason(
     }
     return accountConcurrencyLimitedReason;
   }
-  if (account.decision_state !== state) return null;
+  const decisionState = state === "manual_fused" ? "fused" : state;
+  if (account.decision_state !== decisionState) return null;
   return account.decision_reason?.trim() || null;
 }
 

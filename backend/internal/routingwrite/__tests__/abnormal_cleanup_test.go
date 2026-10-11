@@ -6,6 +6,7 @@ import (
 )
 
 func TestLongAbnormalPausePreservesReasonWhenAlreadyUnschedulable(t *testing.T) {
+	t.Parallel()
 	service, fixture := newUpstreamCapacityWriteFixture(t, writeCapacityPointer(10), 2, 2, false)
 	action, schedulable := "pause", false
 	result, err := service.Apply(t.Context(), map[string]business.AccountRoutingTarget{"41": {

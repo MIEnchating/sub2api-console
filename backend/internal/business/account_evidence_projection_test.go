@@ -7,6 +7,7 @@ import (
 )
 
 func TestAccountReadModelExposesPendingEvidenceWithoutChangingRoutingState(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name    string
 		payload string
@@ -51,6 +52,7 @@ func TestAccountReadModelExposesPendingEvidenceWithoutChangingRoutingState(t *te
 }
 
 func TestDegradedAccountReadModelRetainsPendingEvidence(t *testing.T) {
+	t.Parallel()
 	store := openPolicyStore(t)
 	ctx := context.Background()
 	if _, err := store.db.ExecContext(ctx, `INSERT INTO accounts(id,name,schedulable,routing_state,metadata_json,updated_at) VALUES('41','channel-41',1,'degraded','{"status":"active"}','now')`); err != nil {

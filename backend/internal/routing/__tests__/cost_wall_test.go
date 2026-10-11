@@ -25,6 +25,7 @@ func costWallStore(t *testing.T, rate string) (*business.Store, *sql.DB) {
 }
 
 func TestCostWallClosesEqualAndAboveAccountsWhileAffordableAccountIsAvailable(t *testing.T) {
+	t.Parallel()
 	for _, rate := range []string{"1", "1.25"} {
 		t.Run(rate, func(t *testing.T) {
 			store, _ := costWallStore(t, rate)
@@ -42,6 +43,7 @@ func TestCostWallClosesEqualAndAboveAccountsWhileAffordableAccountIsAvailable(t 
 }
 
 func TestCostWallEnablesOnlyOneFallbackAndClosesItWhenAffordableAccountReturns(t *testing.T) {
+	t.Parallel()
 	store, db := costWallStore(t, "1")
 	if _, err := db.Exec(`UPDATE accounts SET paused=1,schedulable=0 WHERE id='42';
 		INSERT INTO accounts(id,name,multiplier,schedulable,metadata_json,updated_at) VALUES('43','expensive','2',1,'{}','now');
@@ -73,6 +75,7 @@ func TestCostWallEnablesOnlyOneFallbackAndClosesItWhenAffordableAccountReturns(t
 }
 
 func TestCostWallFallbackDoesNotEnableManuallyPausedAccounts(t *testing.T) {
+	t.Parallel()
 	store, db := costWallStore(t, "1.25")
 	if _, err := db.Exec(`UPDATE accounts SET paused=1,schedulable=0`); err != nil {
 		t.Fatal(err)
@@ -87,6 +90,7 @@ func TestCostWallFallbackDoesNotEnableManuallyPausedAccounts(t *testing.T) {
 }
 
 func TestCostWallReopensPreviouslyClosedAboveWallAccountOnlyAsFallback(t *testing.T) {
+	t.Parallel()
 	store, db := costWallStore(t, "1.25")
 	if _, err := db.Exec(`UPDATE accounts SET schedulable=0,routing_state='cost_blocked' WHERE id='41';
 		UPDATE accounts SET paused=1,schedulable=0 WHERE id='42'`); err != nil {
@@ -103,6 +107,7 @@ func TestCostWallReopensPreviouslyClosedAboveWallAccountOnlyAsFallback(t *testin
 }
 
 func TestCostWallKeepsAccountAvailableWhenAnotherManagedMembershipIsBelowWall(t *testing.T) {
+	t.Parallel()
 	store, db := costWallStore(t, "1")
 	if _, err := db.Exec(`INSERT INTO local_groups(name,remote_id,rate_multiplier,updated_at) VALUES('premium','8','2','now');
 		INSERT INTO account_groups(account_id,group_name,group_id) VALUES('41','premium','8')`); err != nil {
@@ -118,6 +123,7 @@ func TestCostWallKeepsAccountAvailableWhenAnotherManagedMembershipIsBelowWall(t 
 }
 
 func TestCostWallProfitAdjustedEqualityClosesAccount(t *testing.T) {
+	t.Parallel()
 	store, db := costWallStore(t, "0.8")
 	if _, err := db.Exec(`UPDATE local_groups SET profit_control_enabled=1,profit_min_margin='0.1',profit_safety_buffer='0.1'`); err != nil {
 		t.Fatal(err)
@@ -132,6 +138,7 @@ func TestCostWallProfitAdjustedEqualityClosesAccount(t *testing.T) {
 }
 
 func TestCostWallFallbackDoesNotReopenAccountWithFatalCredentialEvidence(t *testing.T) {
+	t.Parallel()
 	store, db := costWallStore(t, "1.25")
 	if _, err := db.Exec(`UPDATE accounts SET paused=1,schedulable=0 WHERE id='42'`); err != nil {
 		t.Fatal(err)

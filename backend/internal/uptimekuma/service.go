@@ -25,13 +25,31 @@ func New(store *configstore.Store, client *http.Client) *Service {
 	return &Service{store: store, client: &copyClient, gate: make(chan struct{}, 1)}
 }
 func (s *Service) enter(ctx context.Context) (context.Context, func(), error) {
+	if err := ctx.Err(); err != nil {
+		return nil, nil, err
+	}
+	caller := ctx
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	waitError := func() error {
+		if err := caller.Err(); err != nil {
+			return err
+		}
+		return failure("kuma_busy", "Uptime Kuma 操作正在处理中，请稍后重试", 409)
+	}
 	select {
 	case s.gate <- struct{}{}:
+		// Cancellation and an available slot can become ready together.
+		if ctx.Err() != nil {
+			<-s.gate
+			err := waitError()
+			cancel()
+			return nil, nil, err
+		}
 		return ctx, func() { <-s.gate; cancel() }, nil
 	case <-ctx.Done():
+		err := waitError()
 		cancel()
-		return nil, nil, failure("kuma_busy", "Uptime Kuma 操作正在处理中，请稍后重试", 409)
+		return nil, nil, err
 	}
 }
 func (s *Service) Config(ctx context.Context) (Config, error) {
@@ -138,73 +156,6 @@ func (s *Service) Disconnect(ctx context.Context, revision int64) error {
 	}
 	defer release()
 	return s.store.SaveUptimeKuma(ctx, configstore.UptimeKumaConfig{Revision: revision})
-}
-func (s *Service) Snapshot(ctx context.Context) (Snapshot, error) {
-	ctx, release, err := s.enter(ctx)
-	if err != nil {
-		return Snapshot{}, err
-	}
-	defer release()
-	c, err := s.store.UptimeKuma(ctx)
-	if err != nil {
-		return Snapshot{}, err
-	}
-	result := Snapshot{Config: summary(c), Monitors: []Monitor{}}
-	if c.BaseURL == "" {
-		return result, nil
-	}
-	metrics, metricsErr := s.metrics(ctx, c)
-	if c.Token == "" {
-		result.Monitors = metrics
-		return result, metricsErr
-	}
-	conn, err := s.connect(ctx, c)
-	if err != nil {
-		return result, err
-	}
-	defer conn.conn.CloseNow()
-	if _, err = conn.call(ctx, "getMonitorList"); err != nil {
-		return result, err
-	}
-	if conn.monitors == nil {
-		return result, protocolError()
-	}
-	result.Monitors, err = decodeMonitors(conn.monitors, conn.statuses)
-	if err != nil {
-		return result, err
-	}
-	links, err := s.store.KumaMonitorTemplates(ctx, c.BaseURL)
-	if err != nil {
-		return result, err
-	}
-	for i := range result.Monitors {
-		link := links[result.Monitors[i].ID]
-		result.Monitors[i].TemplateID = link.TemplateID
-		result.Monitors[i].TemplateRevision = link.Revision
-		result.Monitors[i].TemplateName = link.Name
-		result.Monitors[i].TemplateModel = link.Model
-		result.Monitors[i].TemplateBodyEncoding = link.BodyEncoding
-	}
-	if metricsErr != nil {
-		result.Warning = "指标读取失败，当前仅显示管理接口数据；请检查 API 密钥或重新保存接入配置"
-		return result, nil
-	}
-	byID := map[int64]Monitor{}
-	for _, m := range metrics {
-		if m.ID > 0 {
-			byID[m.ID] = m
-		}
-	}
-	for i := range result.Monitors {
-		m := &result.Monitors[i]
-		if metric, ok := byID[m.ID]; ok {
-			m.Status = metric.Status
-			m.ResponseTime = metric.ResponseTime
-			m.CertificateDays = metric.CertificateDays
-			m.Uptime = metric.Uptime
-		}
-	}
-	return result, nil
 }
 func (s *Service) connect(ctx context.Context, c configstore.UptimeKumaConfig) (*socket, error) {
 	if c.Token == "" {

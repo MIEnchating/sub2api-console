@@ -33,7 +33,7 @@ export function AccountBatchProbeDialog(props: {
   const skipped = props.accounts.length - eligible.length;
   const task = useQuery({
     queryKey: ["account-batch-probe", taskId],
-    queryFn: () => api.task(taskId!),
+    queryFn: ({ signal }) => api.task(taskId!, signal),
     enabled: taskId !== null,
     refetchInterval: taskPollInterval,
   });

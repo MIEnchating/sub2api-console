@@ -19,7 +19,7 @@ func TestAccountsFollowsExplicitTotalWhenServerCapsPageSize(t *testing.T) {
 	var pages []string
 	client, server := testClient(t, 1, func(w http.ResponseWriter, request *http.Request) {
 		pages = append(pages, request.URL.Query().Get("page"))
-		if request.URL.Query().Get("page_size") != "1000" {
+		if request.URL.Query().Get("page_size") != "50" {
 			t.Fatalf("page_size=%q", request.URL.Query().Get("page_size"))
 		}
 		if request.URL.Query().Get("page") == "1" {
@@ -166,7 +166,7 @@ func TestHTTP200BusinessFailureIsRejected(t *testing.T) {
 }
 
 func TestHTTP200ResponseRejectsTrailingJSONData(t *testing.T) {
-	_, err, retry := decodeResponse(response(http.StatusOK, `{"success":true,"data":{}} garbage`))
+	_, err, retry := decodeResponse(response(http.StatusOK, `{"success":true,"data":{}} garbage`), "")
 	if err == nil || !strings.Contains(err.Error(), "尾随数据") || retry {
 		t.Fatalf("err=%v retry=%t", err, retry)
 	}
@@ -174,7 +174,7 @@ func TestHTTP200ResponseRejectsTrailingJSONData(t *testing.T) {
 
 func TestHTTPResponseRejectsBodyBeyondSafetyLimit(t *testing.T) {
 	oversized := `{"success":true,"data":{}}` + strings.Repeat(" ", maximumResponseBytes)
-	_, err, retry := decodeResponse(response(http.StatusOK, oversized))
+	_, err, retry := decodeResponse(response(http.StatusOK, oversized), "")
 	if err == nil || !strings.Contains(err.Error(), "4 MiB") || retry {
 		t.Fatalf("err=%v retry=%t", err, retry)
 	}
@@ -182,13 +182,13 @@ func TestHTTPResponseRejectsBodyBeyondSafetyLimit(t *testing.T) {
 
 func TestDecodeResponseRetryClassification(t *testing.T) {
 	for _, status := range []int{408, 425, 429, 500, 503} {
-		_, _, retry := decodeResponse(response(status, `{"message":"retry"}`))
+		_, _, retry := decodeResponse(response(status, `{"message":"retry"}`), "")
 		if !retry {
 			t.Fatalf("status %d must retry", status)
 		}
 	}
 	for _, status := range []int{300, 302, 307, 308, 400, 401, 403, 404, 409, 422} {
-		_, _, retry := decodeResponse(response(status, `{"message":"stop"}`))
+		_, _, retry := decodeResponse(response(status, `{"message":"stop"}`), "")
 		if retry {
 			t.Fatalf("status %d must not retry", status)
 		}

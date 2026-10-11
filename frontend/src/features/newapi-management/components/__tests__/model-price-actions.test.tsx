@@ -54,6 +54,9 @@ describe("模型价格行操作", () => {
     expect(screen.getByRole("button", { name: "下调 gpt-5 价格" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "还原 gpt-5 价格" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "同步 gpt-5 远程模型价格" })).toBeEnabled();
+    expect(
+      screen.queryByRole("button", { name: "套用其他模型价格到 gpt-5" }),
+    ).not.toBeInTheDocument();
   });
 
   it("输入百分比上调并可还原首次调价前的价格", async () => {
@@ -135,5 +138,110 @@ describe("模型价格行操作", () => {
     fireEvent.click(screen.getByRole("button", { name: "同步 claude 远程模型价格" }));
     await waitFor(() => expect(sync).toHaveBeenCalledWith("claude"));
     expect(screen.getByRole("button", { name: "还原 claude 价格" })).toBeEnabled();
+  });
+
+  it("确认套用其他模型价格时复制全部计费字段并保留目标模型名", async () => {
+    const user = userEvent.setup();
+    const write = vi.fn().mockResolvedValue(true);
+    const source = {
+      model: "gpt-5",
+      model_price: "0.00002",
+      input_ratio: "1.25",
+      completion_ratio: "9.5",
+      input_price: "0.00000125",
+      completion_price: "0.0000095",
+      cache_create_price: "0.000002",
+      cache_read_price: "0.0000001",
+      billing_mode: "expression",
+      billing_expr: "input * 1.25 + output * 9.5",
+      cache_ratio: "0.1",
+      create_cache_ratio: "1.2",
+      create_cache_1h_ratio: "2.4",
+      image_ratio: "3",
+      audio_ratio: "4",
+      audio_completion_ratio: "5",
+    };
+    const otherSource = {
+      model: "claude",
+      input_ratio: "0.5",
+      completion_ratio: "4",
+    };
+    render(
+      <NewAPIModelPrices
+        models={[
+          source,
+          otherSource,
+          { model: "gpt-5-custom", input_ratio: "2", completion_ratio: "7" },
+        ]}
+        onWriteModelPrice={write}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "套用其他模型价格到 gpt-5-custom" }));
+    expect(screen.getByRole("dialog", { name: "gpt-5-custom 套用其他模型价格" })).toBeVisible();
+    await user.click(screen.getByRole("combobox", { name: "来源模型" }));
+    await user.click(await screen.findByRole("option", { name: "gpt-5" }));
+    await user.click(screen.getByRole("button", { name: "确认套用" }));
+
+    await waitFor(() =>
+      expect(write).toHaveBeenCalledWith({ ...source, model: "gpt-5-custom" }, "套用 gpt-5 价格"),
+    );
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "还原 gpt-5-custom 价格" })).toBeEnabled();
+  });
+
+  it("未设置价格的模型确认套用后使用已有模型价格", async () => {
+    const user = userEvent.setup();
+    const write = vi.fn().mockResolvedValue(true);
+    render(
+      <NewAPIModelPrices
+        models={[{ model: "source", input_ratio: "1", completion_ratio: "8" }]}
+        unsetModels={[{ model: "target", input_ratio: "", completion_ratio: "" }]}
+        onWriteModelPrice={write}
+      />,
+    );
+
+    await user.click(screen.getByRole("tab", { name: "未设置模型价格" }));
+    await user.click(screen.getByRole("button", { name: "套用其他模型价格到 target" }));
+    await user.click(screen.getByRole("button", { name: "确认套用" }));
+
+    await waitFor(() =>
+      expect(write).toHaveBeenCalledWith(
+        { model: "target", input_ratio: "1", completion_ratio: "8" },
+        "套用 source 价格",
+      ),
+    );
+  });
+
+  it("套用等待期间禁止重复提交且写入失败后保留来源供重试", async () => {
+    const user = userEvent.setup();
+    let finishWrite!: (success: boolean) => void;
+    const write = vi.fn(
+      () =>
+        new Promise<boolean>((resolve) => {
+          finishWrite = resolve;
+        }),
+    );
+    render(
+      <NewAPIModelPrices
+        models={[
+          { model: "source", input_ratio: "1", completion_ratio: "8" },
+          { model: "target", input_ratio: "2", completion_ratio: "7" },
+        ]}
+        onWriteModelPrice={write}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "套用其他模型价格到 target" }));
+    await user.click(screen.getByRole("button", { name: "确认套用" }));
+    expect(screen.getByRole("button", { name: "正在写入" })).toBeDisabled();
+    expect(screen.getByRole("combobox", { name: "来源模型" })).toBeDisabled();
+    finishWrite(false);
+
+    await waitFor(() => expect(screen.getByRole("button", { name: "确认套用" })).toBeEnabled());
+    expect(screen.getByRole("combobox", { name: "来源模型" })).toHaveTextContent("source");
+    await user.click(screen.getByRole("button", { name: "取消" }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "还原 target 价格" })).toBeDisabled();
   });
 });

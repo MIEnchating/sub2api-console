@@ -17,11 +17,16 @@ func TestStreamCapacityFailureUsesSemanticStatusAndConfiguredRetry(t *testing.T)
 		event      string
 		retry      bool
 		wantStatus int
+		prefix     string
 	}{
 		{name: "nested status is preserved", event: `{"response":{"error":{"code":"server_error","message":"Our servers are currently overloaded. Please try again later.","status_code":503,"type":"server_error"},"id":"resp_overloaded","status":"failed"},"sequence_number":2,"type":"response.failed"}`},
 		{name: "busy without status uses 503", event: `{"request_id":"busy-request","response":{"error":{"code":"server_error","message":"The service is busy. Please retry later.","type":"server_error"},"model":"gpt-5.6-sol","status":"failed"},"sequence_number":3,"type":"response.failed"}`},
 		{name: "nested status permits configured retry", event: `{"type":"response.failed","response":{"error":{"status_code":503,"message":"Upstream temporarily unavailable"},"status":"failed"}}`, retry: true},
 		{name: "busy without status permits configured retry", event: `{"type":"response.failed","response":{"error":{"code":"server_error","message":"The service is busy. Please retry later."},"status":"failed"}}`, retry: true},
+		{name: "escaped busy message permits configured retry", event: `{"type":"response.failed","response":{"error":{"code":"server_error","message":"The service\nis busy. Please retry later."},"status":"failed"}}`, retry: true},
+		{name: "capacity word in metadata does not permit retry", event: `{"type":"response.failed","response":{"error":{"code":"server_error","message":"Generation rejected","request_id":"overloaded-request"},"status":"failed"}}`, retry: true, wantStatus: 200},
+		{name: "escaped busy after content does not replay", event: `{"type":"response.failed","response":{"error":{"code":"server_error","message":"The service\nis busy."},"status":"failed"}}`, retry: true, wantStatus: 503, prefix: "data: {\"type\":\"response.output_text.delta\",\"delta\":\"partial\"}\n\n"},
+		{name: "explicit quota status overrides escaped busy", event: `{"type":"response.failed","response":{"error":{"status_code":429,"message":"The service\nis busy."},"status":"failed"}}`, retry: true, wantStatus: 429},
 		{name: "explicit authentication status does not permit 503 retry", event: `{"type":"response.failed","response":{"error":{"status_code":401,"message":"The service is busy. Please retry later."},"status":"failed"}}`, retry: true, wantStatus: 401},
 		{name: "unrecognized failure keeps transport status without guessing", event: `{"type":"response.failed","response":{"error":{"status_code":"invalid","message":"Generation rejected"},"status":"failed"}}`, retry: true, wantStatus: 200},
 	} {
@@ -52,7 +57,7 @@ func TestStreamCapacityFailureUsesSemanticStatusAndConfiguredRetry(t *testing.T)
 					_, _ = w.Write([]byte("data: {\"type\":\"response.output_text.delta\",\"delta\":\"pong\"}\n\ndata: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\n\n"))
 					return
 				}
-				_, _ = w.Write([]byte("data: " + scenario.event + "\n\n"))
+				_, _ = w.Write([]byte(scenario.prefix + "data: " + scenario.event + "\n\n"))
 			}))
 			t.Cleanup(server.Close)
 			summary, err := probe.New(store, protectionTarget{endpoint: server.URL}, nil).RunNow(t.Context(), probe.Request{AccountID: pointer("41")})

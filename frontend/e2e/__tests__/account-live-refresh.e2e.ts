@@ -94,12 +94,20 @@ test("账号本身未变化时刷新模型检测结果仍更新置信度", async
   await expect(page.getByLabel("置信度长期：80.0%")).toBeVisible();
 });
 
-test("其他账号占用优先位后打开弹窗读取最新占用情况", async ({ page }) => {
+test("同组优先位满额后打开弹窗读取最新占用情况并禁选", async ({ page }) => {
   let rows = [account, { ...account, id: "42", name: "占位隔离账号" }];
   await mockAPI(page, () => rows);
   await page.goto("/accounts");
   await expect(page.getByRole("checkbox", { name: /选择账号 占位隔离账号/ })).toBeVisible();
-  rows = [account, { ...rows[1], manual_priority: 2 }];
+  rows = [
+    account,
+    ...["42", "43", "44"].map((id) => ({
+      ...account,
+      id,
+      name: `占位隔离账号 ${id}`,
+      manual_priority: 2,
+    })),
+  ];
   await page.getByRole("button", { name: "刷新账号池", exact: true }).click();
   await expect(page.getByRole("checkbox", { name: /选择账号 占位隔离账号/ })).toHaveCount(0);
   const row = page.getByRole("row").filter({
@@ -107,9 +115,7 @@ test("其他账号占用优先位后打开弹窗读取最新占用情况", async
   });
   await row.getByRole("button", { name: "设置手动控制", exact: true }).click();
   await page.getByRole("combobox", { name: "选择手动控制" }).click();
-  await expect(
-    page.getByRole("option", { name: "2 · 已被 占位隔离账号（42）占用", exact: true }),
-  ).toBeDisabled();
+  await expect(page.getByRole("option", { name: "2 · 已满（3/3）", exact: true })).toBeDisabled();
 });
 
 async function mockAPI(

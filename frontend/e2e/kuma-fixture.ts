@@ -1,3 +1,4 @@
+import { dictionaryResponse } from "./__tests__/fixtures/dictionaries";
 import type { Page } from "@playwright/test";
 import { config, monitor } from "../src/features/uptime-kuma/components/__tests__/fixtures";
 import { resourceDefaults } from "../src/features/uptime-kuma/lib/resource-schemas";
@@ -73,6 +74,10 @@ export async function setupKuma(
   };
   await page.route("**/api/**", async (route) => {
     const path = new URL(route.request().url()).pathname;
+    if (path === "/api/dictionaries") {
+      await route.fulfill({ json: dictionaryResponse(route.request().url()) });
+      return;
+    }
     const task = {
       id: "fixture-task",
       status: "succeeded",

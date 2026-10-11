@@ -34,6 +34,41 @@ function FilterFixture() {
 }
 
 describe("FilterMenu keyboard selection", () => {
+  it("鼠标选择选项后仍可从搜索框继续使用方向键选择", async () => {
+    const user = userEvent.setup();
+    render(<FilterFixture />);
+    await user.click(screen.getByRole("button", { name: "分组筛选" }));
+    await user.click(screen.getByRole("option", { name: "Codex" }));
+    expect(screen.getByRole("combobox", { name: "搜索分组" })).toHaveFocus();
+    await user.keyboard("{ArrowDown}{Enter}");
+    expect(screen.getByRole("option", { name: "Claude" })).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("清除筛选按钮消失后焦点返回搜索框并可继续输入", async () => {
+    const user = userEvent.setup();
+    render(<FilterFixture />);
+    await user.click(screen.getByRole("button", { name: "分组筛选" }));
+    await user.keyboard("{Enter}");
+    await user.click(screen.getByRole("button", { name: "清除筛选" }));
+    expect(screen.queryByRole("button", { name: "清除筛选" })).not.toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "搜索分组" })).toHaveFocus();
+    await user.keyboard("Codex");
+    expect(screen.getAllByRole("option")).toHaveLength(1);
+    expect(screen.getByRole("option", { name: "Codex" })).toHaveAttribute("aria-selected", "false");
+  });
+
+  it("已有搜索词时 Home 和 End 移动文字光标而不截获为选项导航", async () => {
+    const user = userEvent.setup();
+    render(<FilterFixture />);
+    await user.click(screen.getByRole("button", { name: "分组筛选" }));
+    const search = screen.getByRole("combobox", { name: "搜索分组" });
+    await user.type(search, "od");
+    await user.keyboard("{Home}C{End}ex");
+    expect(search).toHaveValue("Codex");
+    await user.keyboard("{Enter}");
+    expect(screen.getByRole("option", { name: "Codex" })).toHaveAttribute("aria-selected", "true");
+  });
+
   it("associates the focused search with its visible keyboard option", async () => {
     const user = userEvent.setup();
     render(<FilterFixture />);

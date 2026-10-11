@@ -10,6 +10,7 @@ import (
 )
 
 func TestEachStrategyReducesRepeatedCapacityFailuresWithoutCredentialCleanup(t *testing.T) {
+	t.Parallel()
 	for _, strategy := range []string{"price_first", "speed_first", "balanced", "reliability"} {
 		t.Run(strategy, func(t *testing.T) {
 			store, db := healthEvidenceStore(t)

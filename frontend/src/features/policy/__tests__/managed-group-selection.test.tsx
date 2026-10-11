@@ -1,3 +1,4 @@
+import { seedDictionaries } from "@/test/dictionary-fixtures";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -11,7 +12,11 @@ type Draft = Parameters<typeof PolicyScopeEditor>[0]["value"];
 beforeEach(() => vi.stubGlobal("PointerEvent", MouseEvent));
 afterEach(() => vi.unstubAllGlobals());
 
-function ManagedGroups(props: { selected: string[]; onChange: (value: Draft) => void }) {
+function ManagedGroups(props: {
+  dictionaryMissing?: boolean;
+  selected: string[];
+  onChange: (value: Draft) => void;
+}) {
   const [draft, setDraft] = useState<Draft>({
     mode: "完全模式",
     global_strategy: "balanced",
@@ -29,10 +34,16 @@ function ManagedGroups(props: { selected: string[]; onChange: (value: Draft) => 
       scope: { managed_group_mode: "selected", managed_group_ids: props.selected },
     },
   });
+  const [client] = useState(() => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { enabled: false } } });
+    seedDictionaries(
+      queryClient,
+      props.dictionaryMissing ? {} : { group: [{ value: "6", name: "主力组" }] },
+    );
+    return queryClient;
+  });
   return (
-    <QueryClientProvider
-      client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}
-    >
+    <QueryClientProvider client={client}>
       <PolicyScopeEditor
         value={draft}
         onChange={(value) => {
@@ -78,4 +89,15 @@ it.each([
       }),
     }),
   );
+});
+
+it("字典未读取时不允许切换分组范围并保留现有配置", () => {
+  const onChange = vi.fn();
+  render(<ManagedGroups selected={["6"]} onChange={onChange} dictionaryMissing />);
+  expect(screen.getByRole("switch", { name: "全部分组参与守护" })).toHaveAttribute(
+    "aria-disabled",
+    "true",
+  );
+  expect(screen.getByText("正在读取字典选项")).toBeVisible();
+  expect(onChange).not.toHaveBeenCalled();
 });

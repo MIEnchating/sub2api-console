@@ -7,6 +7,7 @@ import (
 )
 
 func TestSampleClassifierKeepsConfiguredScoresConsistentAcrossSamples(t *testing.T) {
+	t.Parallel()
 	scores := map[string]any{"gateway_error": 30, "perfect": 95}
 	policy := map[string]any{"scoring": map[string]any{"event_scores": scores}}
 	classify, err := routing.NewSampleClassifier(policy)
@@ -30,6 +31,7 @@ func TestSampleClassifierKeepsConfiguredScoresConsistentAcrossSamples(t *testing
 }
 
 func TestSampleClassifierRejectsInvalidPolicyBeforeClassifying(t *testing.T) {
+	t.Parallel()
 	classify, err := routing.NewSampleClassifier(map[string]any{"scoring": map[string]any{"short_window": 0}})
 	if err == nil || classify != nil {
 		t.Fatal("invalid policy returned a usable classifier")

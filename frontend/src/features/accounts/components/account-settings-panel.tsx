@@ -6,7 +6,7 @@ import { FieldError } from "@/components/field-error";
 import { ContentLoading } from "@/components/content-loading";
 import { QueryErrorToast } from "@/components/query-error-toast";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { RefreshCw, Save } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useForm } from "react-hook-form";
@@ -76,21 +76,41 @@ export function accountTestModelOptions(models: string[], currentModel: string):
   return [...new Set(normalized)].sort((left, right) => left.localeCompare(right));
 }
 
-function waitForNextTaskPoll(): Promise<void> {
-  return new Promise((resolve) => globalThis.setTimeout(resolve, 500));
+function waitForNextTaskPoll(signal?: AbortSignal): Promise<void> {
+  signal?.throwIfAborted();
+  return new Promise((resolve, reject) => {
+    const abort = (): void => {
+      globalThis.clearTimeout(timer);
+      reject(signal?.reason);
+    };
+    const timer = globalThis.setTimeout(() => {
+      signal?.removeEventListener("abort", abort);
+      resolve();
+    }, 500);
+    signal?.addEventListener("abort", abort, { once: true });
+  });
 }
 
 export async function waitForAccountSettingTasks(
   initial: Task[],
-  load: (taskID: string) => Promise<Task>,
-  wait: () => Promise<void> = waitForNextTaskPoll,
+  load: (taskID: string, signal?: AbortSignal) => Promise<Task>,
+  wait?: () => Promise<void>,
+  signal?: AbortSignal,
 ): Promise<Task[]> {
+  signal?.throwIfAborted();
   let current = initial;
   while (!current.every(taskStopsPolling)) {
     current = await Promise.all(
-      current.map((task) => (taskStopsPolling(task) ? task : load(task.id))),
+      current.map((task) => {
+        if (taskStopsPolling(task)) return task;
+        return signal ? load(task.id, signal) : load(task.id);
+      }),
     );
-    if (!current.every(taskStopsPolling)) await wait();
+    signal?.throwIfAborted();
+    if (!current.every(taskStopsPolling)) {
+      await (wait ? wait() : waitForNextTaskPoll(signal));
+      signal?.throwIfAborted();
+    }
   }
   const unsuccessful = current.filter((task) => task.status !== "succeeded");
   if (unsuccessful.length > 0) {
@@ -101,8 +121,9 @@ export async function waitForAccountSettingTasks(
   return current;
 }
 
-export function AccountSettingsPanel(props: {
+type AccountSettingsPanelProps = {
   accountId: string;
+  open?: boolean;
   query: {
     data?: AccountDetail;
     isLoading: boolean;
@@ -112,17 +133,39 @@ export function AccountSettingsPanel(props: {
   };
   onCancel: () => void;
   onSaved: () => void;
-}) {
-  const detail = props.query.data;
+};
+
+export function AccountSettingsPanel(props: AccountSettingsPanelProps) {
+  if (props.open === false) return null;
+  return <AccountSettingsEditor key={props.accountId} {...props} />;
+}
+
+function AccountSettingsEditor(props: AccountSettingsPanelProps) {
+  const detail = props.query.data?.id === props.accountId ? props.query.data : undefined;
   const queryClient = useQueryClient();
   const allocation = useUpstreamAllocationDraft(
     "accounts",
     props.accountId,
     detail?.upstream_type?.toLowerCase() === "sub2api",
   );
-  const [models, setModels] = useState<string[]>([]);
-  const [modelsLoading, setModelsLoading] = useState(false);
-  const [modelsLoaded, setModelsLoaded] = useState(false);
+  const lifetime = useRef(new AbortController());
+  const saving = useRef(false);
+  const readingModels = useRef(false);
+  useEffect(() => {
+    const controller = new AbortController();
+    lifetime.current = controller;
+    return () => controller.abort();
+  }, []);
+  const modelsQuery = useQuery({
+    queryKey: ["account-models", props.accountId],
+    queryFn: ({ signal }) => api.accountModels(props.accountId, signal),
+    enabled: false,
+    retry: false,
+    networkMode: "always",
+  });
+  const models = modelsQuery.data?.models ?? [];
+  const modelsLoading = modelsQuery.isFetching;
+  const modelsLoaded = modelsQuery.data !== undefined;
   const [activeTaskId, setActiveTaskId] = useState<string | null>(null);
   const form = useForm<AccountSettingsValues>({
     resolver: zodResolver(settingsSchema),
@@ -157,11 +200,17 @@ export function AccountSettingsPanel(props: {
   }, [detail, form, isDirty]);
 
   const save = useMutation({
+    retry: false,
+    networkMode: "always",
     mutationFn: async (values: AccountSettingsValues) => {
       if (!detail) throw new Error("账号详情尚未读取完成");
+      const signal = lifetime.current.signal;
+      signal.throwIfAborted();
       await allocation.save();
+      signal.throwIfAborted();
       if (values.ignoreCostWall !== (detail.ignore_cost_wall === true)) {
         await api.setAccountIgnoreCostWall(props.accountId, values.ignoreCostWall);
+        signal.throwIfAborted();
       }
       const task = await api.saveAccountSettings(props.accountId, {
         priority: Number(values.priority),
@@ -172,11 +221,12 @@ export function AccountSettingsPanel(props: {
         paused: values.paused,
         excluded: values.excluded,
       });
+      signal.throwIfAborted();
       setActiveTaskId(task.id);
       try {
-        return await waitForAccountSettingTasks([task], api.task);
+        return await waitForAccountSettingTasks([task], api.task, undefined, signal);
       } finally {
-        setActiveTaskId(null);
+        if (!signal.aborted) setActiveTaskId(null);
       }
     },
     onSuccess: async (tasks) => {
@@ -184,8 +234,9 @@ export function AccountSettingsPanel(props: {
         queryClient.invalidateQueries({ queryKey: ["accounts"] }),
         queryClient.invalidateQueries({ queryKey: ["account-detail", props.accountId] }),
         queryClient.invalidateQueries({ queryKey: ["policy"] }),
-        queryClient.invalidateQueries({ queryKey: ["logs"] }),
       ]);
+      void queryClient.invalidateQueries({ queryKey: ["logs"] }).catch(() => undefined);
+      if (lifetime.current.signal.aborted) return;
       toast.success(tasks.length ? "账号设置已执行完成" : "账号设置已保存");
       props.onSaved();
     },
@@ -196,21 +247,27 @@ export function AccountSettingsPanel(props: {
         queryClient.invalidateQueries({ queryKey: ["policy"] }),
         queryClient.invalidateQueries({ queryKey: ["logs"] }),
       ]);
-      notifyOperationError(error, "账号设置保存失败");
+      if (!lifetime.current.signal.aborted) notifyOperationError(error, "账号设置保存失败");
+    },
+    onSettled: () => {
+      saving.current = false;
     },
   });
 
   async function loadModels() {
-    setModelsLoading(true);
+    if (readingModels.current || saving.current) return;
+    readingModels.current = true;
+    const signal = lifetime.current.signal;
     try {
-      const result = await api.accountModels(props.accountId);
-      setModels(result.models);
-      setModelsLoaded(true);
-      toast.success(`已读取 ${result.models.length} 个模型`);
-    } catch (error) {
-      notifyOperationError(error, "账号模型读取失败");
+      const result = await modelsQuery.refetch({ cancelRefetch: false });
+      if (signal.aborted) return;
+      if (result.error) {
+        notifyOperationError(result.error, "账号模型读取失败");
+      } else if (result.data) {
+        toast.success(`已读取 ${result.data.models.length} 个模型`);
+      }
     } finally {
-      setModelsLoading(false);
+      readingModels.current = false;
     }
   }
 
@@ -238,7 +295,11 @@ export function AccountSettingsPanel(props: {
           <form
             id={formId}
             className="grid gap-5 md:grid-cols-2"
-            onSubmit={form.handleSubmit((values) => save.mutate(values))}
+            onSubmit={form.handleSubmit((values) => {
+              if (saving.current || !allocation.ready) return;
+              saving.current = true;
+              save.mutate(values);
+            })}
           >
             <div className="grid min-w-0 content-start gap-5">
               <section aria-labelledby={`${formId}-routing`} className="grid gap-3">
@@ -254,41 +315,64 @@ export function AccountSettingsPanel(props: {
                   <SettingsField
                     label="优先级"
                     error={form.formState.errors.priority?.message}
+                    errorId={`${formId}-priority-error`}
                     hint="数值越小越优先"
                   >
                     <Input
                       type="number"
                       min={1}
                       aria-label="优先级"
+                      aria-invalid={Boolean(form.formState.errors.priority)}
+                      aria-describedby={
+                        form.formState.errors.priority ? `${formId}-priority-error` : undefined
+                      }
+                      disabled={save.isPending}
                       {...form.register("priority")}
                     />
                   </SettingsField>
                   <SettingsField
                     label="并发上限"
                     error={form.formState.errors.concurrency?.message}
+                    errorId={`${formId}-concurrency-error`}
                   >
                     <Input
                       type="number"
                       min={1}
                       aria-label="并发上限"
+                      aria-invalid={Boolean(form.formState.errors.concurrency)}
+                      aria-describedby={
+                        form.formState.errors.concurrency
+                          ? `${formId}-concurrency-error`
+                          : undefined
+                      }
+                      disabled={save.isPending}
                       {...form.register("concurrency")}
                     />
                   </SettingsField>
-                  <SettingsField label="负载因子" error={form.formState.errors.loadFactor?.message}>
+                  <SettingsField
+                    label="负载因子"
+                    error={form.formState.errors.loadFactor?.message}
+                    errorId={`${formId}-load-factor-error`}
+                  >
                     <Input
                       type="number"
                       min={1}
                       step="any"
                       aria-label="负载因子"
+                      aria-invalid={Boolean(form.formState.errors.loadFactor)}
+                      aria-describedby={
+                        form.formState.errors.loadFactor ? `${formId}-load-factor-error` : undefined
+                      }
                       {...form.register("loadFactor")}
                       value={followConcurrency ? concurrency : loadFactor}
-                      disabled={followConcurrency}
+                      disabled={followConcurrency || save.isPending}
                     />
                     <div className="flex items-center justify-between gap-2 pr-3 text-xs text-muted-foreground">
                       <label htmlFor={`${formId}-follow-concurrency`}>跟随并发上限</label>
                       <Switch
                         id={`${formId}-follow-concurrency`}
                         aria-label="跟随并发上限"
+                        disabled={save.isPending}
                         checked={followConcurrency}
                         onCheckedChange={(checked) => {
                           if (!checked)
@@ -328,6 +412,7 @@ export function AccountSettingsPanel(props: {
                 <div className="grid min-w-0 gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
                   {modelsLoaded && modelOptions.length > 0 ? (
                     <Select
+                      disabled={save.isPending}
                       value={testModel.trim() || inheritedTestModelValue}
                       itemToStringLabel={(value) =>
                         value === inheritedTestModelValue ? "继承分组或全局默认模型" : value
@@ -362,6 +447,7 @@ export function AccountSettingsPanel(props: {
                     <Input
                       className="min-w-0"
                       aria-label="探测模型"
+                      disabled={save.isPending}
                       aria-invalid={Boolean(form.formState.errors.testModel)}
                       placeholder="留空使用分组或全局默认模型"
                       {...form.register("testModel")}
@@ -371,7 +457,7 @@ export function AccountSettingsPanel(props: {
                     type="button"
                     variant="outline"
                     className="whitespace-nowrap"
-                    disabled={modelsLoading}
+                    disabled={modelsLoading || save.isPending}
                     onClick={() => void loadModels()}
                   >
                     <RefreshCw className={modelsLoading ? "animate-spin" : undefined} />
@@ -408,6 +494,7 @@ export function AccountSettingsPanel(props: {
                   <SettingsSwitch
                     id={`${formId}-paused`}
                     label="暂停调度"
+                    disabled={save.isPending}
                     description="停止接收流量，继续监控计分，不自动恢复。"
                     checked={form.watch("paused")}
                     onCheckedChange={(checked) =>
@@ -417,6 +504,7 @@ export function AccountSettingsPanel(props: {
                   <SettingsSwitch
                     id={`${formId}-excluded`}
                     label="排除该账号"
+                    disabled={save.isPending}
                     description="不探测、不调度、不计分，并恢复接管前配置。"
                     checked={form.watch("excluded")}
                     onCheckedChange={(checked) =>
@@ -486,6 +574,7 @@ export function AccountSettingsPanel(props: {
 function SettingsField(props: {
   label: string;
   error?: string;
+  errorId?: string;
   hint?: string;
   children: ReactNode;
 }) {
@@ -493,7 +582,7 @@ function SettingsField(props: {
     <div className="grid min-w-0 content-start gap-1.5 text-sm">
       <FieldLabel label={props.label} description={!props.error ? props.hint : undefined} />
       {props.children}
-      {props.error ? <FieldError message={props.error} /> : null}
+      {props.error ? <FieldError id={props.errorId} message={props.error} /> : null}
     </div>
   );
 }
@@ -503,6 +592,7 @@ function SettingsSwitch(props: {
   label: string;
   description: string;
   checked: boolean;
+  disabled?: boolean;
   onCheckedChange: (checked: boolean) => void;
 }) {
   return (
@@ -514,6 +604,7 @@ function SettingsSwitch(props: {
       <Switch
         id={props.id}
         checked={props.checked}
+        disabled={props.disabled}
         aria-label={props.label}
         className="shrink-0"
         onCheckedChange={props.onCheckedChange}

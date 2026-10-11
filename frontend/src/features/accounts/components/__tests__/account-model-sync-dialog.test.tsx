@@ -1,3 +1,8 @@
+import {
+  seedDictionaries,
+  dictionaryItems,
+  standardDictionaryFixtures,
+} from "@/test/dictionary-fixtures";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -14,6 +19,7 @@ import {
   AccountModelSyncDialog,
   accountModelSyncDialogLayout,
   availableUnifiedProbeModels,
+  groupModelSyncFailures,
   modelSyncProbeItems,
   modelSyncPlatformGroups,
   modelSyncTaskItems,
@@ -65,7 +71,7 @@ describe("账号批量模型同步", () => {
       preview,
       new Map([["41", "openai"]]),
       new Map([["41", ["A", "B"]]]),
-      undefined,
+      dictionaryItems("platform", standardDictionaryFixtures.platform!),
       entries,
     );
     expect(result[0].groups.map((group) => group.label)).toEqual(["B", "A"]);
@@ -86,6 +92,33 @@ describe("账号批量模型同步", () => {
       accountId: "42",
       status: "failed",
       error: "上游超时",
+    });
+  });
+
+  it("同一上游的相同发现错误合并账号名单，不同上游分别显示", () => {
+    const groups = groupModelSyncFailures(
+      [
+        { accountId: "41", accountName: "账号 A", status: "failed", error: "HTTP 502" },
+        { accountId: "42", accountName: "账号 B", status: "failed", error: "HTTP 502" },
+        { accountId: "43", accountName: "账号 C", status: "failed", error: "HTTP 502" },
+      ],
+      new Map([
+        ["41", { upstreamId: "upstream-1", upstreamHost: "one.example.test" }],
+        ["42", { upstreamId: "upstream-1", upstreamHost: "one.example.test" }],
+        ["43", { upstreamId: "upstream-2", upstreamHost: "two.example.test" }],
+      ]),
+    );
+
+    expect(groups).toHaveLength(2);
+    expect(groups[0]).toMatchObject({
+      label: "one.example.test",
+      items: [{ accountId: "41" }, { accountId: "42" }],
+      errors: [{ message: "HTTP 502", items: [{ accountId: "41" }, { accountId: "42" }] }],
+    });
+    expect(groups[1]).toMatchObject({
+      label: "two.example.test",
+      items: [{ accountId: "43" }],
+      errors: [{ message: "HTTP 502", items: [{ accountId: "43" }] }],
     });
   });
 
@@ -252,6 +285,20 @@ describe("账号批量模型同步", () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
     });
+    seedDictionaries(queryClient, {
+      group: [
+        { value: "1", name: "A" },
+        { value: "2", name: "B" },
+        { value: "3", name: "C" },
+        { value: "4", name: "默认组" },
+        { value: "5", name: "codex" },
+        { value: "6", name: "claude" },
+        { value: "7", name: "基础组" },
+        { value: "8", name: "高级组" },
+        { value: "9", name: "Claude 组" },
+        { value: "10", name: "OpenAI 组" },
+      ],
+    });
 
     render(
       <QueryClientProvider client={queryClient}>
@@ -380,6 +427,20 @@ describe("账号批量模型同步", () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
     });
+    seedDictionaries(queryClient, {
+      group: [
+        { value: "1", name: "A" },
+        { value: "2", name: "B" },
+        { value: "3", name: "C" },
+        { value: "4", name: "默认组" },
+        { value: "5", name: "codex" },
+        { value: "6", name: "claude" },
+        { value: "7", name: "基础组" },
+        { value: "8", name: "高级组" },
+        { value: "9", name: "Claude 组" },
+        { value: "10", name: "OpenAI 组" },
+      ],
+    });
 
     render(
       <QueryClientProvider client={queryClient}>
@@ -398,6 +459,9 @@ describe("账号批量模型同步", () => {
               ["42", ["OpenAI 组"]],
             ])
           }
+          accountUpstreams={
+            new Map([["43", { upstreamId: "upstream-1", upstreamHost: "cloudflare.example.test" }]])
+          }
           onOpenChange={() => undefined}
           onCompleted={() => undefined}
         />
@@ -407,15 +471,17 @@ describe("账号批量模型同步", () => {
     await userEvent.click(screen.getByRole("button", { name: "开始同步" }));
 
     const anthropicTab = await screen.findByRole("tab", { name: /Anthropic/ });
-    const openaiTab = screen.getByRole("tab", { name: /OpenAI/ });
+    const openaiTab = screen.getByRole("tab", { name: /^OpenAI ·/ });
+    expect(openaiTab).toHaveAttribute("aria-selected", "true");
+    await userEvent.click(anthropicTab);
     expect(anthropicTab).toHaveAttribute("aria-selected", "true");
-    expect(openaiTab).toHaveAttribute("aria-selected", "false");
     await userEvent.click(screen.getByRole("combobox", { name: "统一探活模型" }));
     await userEvent.click(await screen.findByRole("option", { name: "model-a" }));
     await userEvent.keyboard("{Escape}");
-    const failureSummary = screen.getByText("1 个账号获取模型失败，已跳过");
+    const failureSummary = screen.getByText("1 个上游获取模型失败，涉及 1 个账号");
     expect(screen.getByText(/Cloudflare 响应不完整/)).not.toBeVisible();
     await userEvent.click(failureSummary);
+    expect(screen.getByText(/cloudflare.example.test · 1 个账号/)).toBeVisible();
     expect(screen.getByText(/Cloudflare 响应不完整/)).toBeVisible();
 
     const modelE = screen.getByRole("checkbox", { name: /^同步模型 model-e/ });
@@ -500,6 +566,20 @@ describe("账号批量模型同步", () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
     });
+    seedDictionaries(queryClient, {
+      group: [
+        { value: "1", name: "A" },
+        { value: "2", name: "B" },
+        { value: "3", name: "C" },
+        { value: "4", name: "默认组" },
+        { value: "5", name: "codex" },
+        { value: "6", name: "claude" },
+        { value: "7", name: "基础组" },
+        { value: "8", name: "高级组" },
+        { value: "9", name: "Claude 组" },
+        { value: "10", name: "OpenAI 组" },
+      ],
+    });
 
     render(
       <QueryClientProvider client={queryClient}>
@@ -527,7 +607,7 @@ describe("账号批量模型同步", () => {
     await userEvent.click(screen.getByRole("button", { name: "开始同步" }));
 
     expect(await screen.findByRole("tablist", { name: "账号平台" })).toBeVisible();
-    expect(screen.getByRole("tab", { name: /OpenAI/ })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tab", { name: /^OpenAI ·/ })).toHaveAttribute("aria-selected", "true");
     expect(screen.getByRole("tablist", { name: "账号分组" })).toBeVisible();
     expect(screen.getByTestId("unified-probe-models")).toHaveClass("self-start");
     expect(screen.getByTestId("account-sync-models")).toHaveClass(
@@ -592,11 +672,27 @@ describe("账号批量模型同步", () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
     });
+    seedDictionaries(queryClient, {
+      group: [
+        { value: "1", name: "A" },
+        { value: "2", name: "B" },
+        { value: "3", name: "C" },
+        { value: "4", name: "默认组" },
+        { value: "5", name: "codex" },
+        { value: "6", name: "claude" },
+        { value: "7", name: "基础组" },
+        { value: "8", name: "高级组" },
+        { value: "9", name: "Claude 组" },
+        { value: "10", name: "OpenAI 组" },
+      ],
+    });
 
     const grouped = modelSyncPlatformGroups(
       preview,
       new Map(accountIds.map((accountId) => [accountId, "openai"])),
       new Map(accountIds.map((accountId) => [accountId, ["默认组"]])),
+      dictionaryItems("platform", standardDictionaryFixtures.platform!),
+      dictionaryItems("group", [{ value: "4", name: "默认组" }]),
     );
     const models = grouped[0]?.groups[0]?.models ?? [];
     expect(models.find((item) => item.model === "sparse-model")?.supportingAccounts).toEqual([
@@ -680,6 +776,20 @@ describe("账号批量模型同步", () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
     });
+    seedDictionaries(queryClient, {
+      group: [
+        { value: "1", name: "A" },
+        { value: "2", name: "B" },
+        { value: "3", name: "C" },
+        { value: "4", name: "默认组" },
+        { value: "5", name: "codex" },
+        { value: "6", name: "claude" },
+        { value: "7", name: "基础组" },
+        { value: "8", name: "高级组" },
+        { value: "9", name: "Claude 组" },
+        { value: "10", name: "OpenAI 组" },
+      ],
+    });
 
     render(
       <QueryClientProvider client={queryClient}>
@@ -733,6 +843,20 @@ describe("账号批量模型同步", () => {
     const cancel = vi.spyOn(api, "cancelTask").mockResolvedValue({ cancelled: true });
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    seedDictionaries(queryClient, {
+      group: [
+        { value: "1", name: "A" },
+        { value: "2", name: "B" },
+        { value: "3", name: "C" },
+        { value: "4", name: "默认组" },
+        { value: "5", name: "codex" },
+        { value: "6", name: "claude" },
+        { value: "7", name: "基础组" },
+        { value: "8", name: "高级组" },
+        { value: "9", name: "Claude 组" },
+        { value: "10", name: "OpenAI 组" },
+      ],
     });
 
     render(

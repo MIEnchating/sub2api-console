@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import type { BrowserFrame } from "@/api";
@@ -61,5 +61,38 @@ describe("上游浏览器输入", () => {
     fireEvent.keyDown(surface, { key: "a" });
     expect(screen.getByRole("button", { name: "下一个输入框" })).toBeDisabled();
     expect(onInput).not.toHaveBeenCalled();
+  });
+
+  it("连续按键等待前一个输入完成，保持发送顺序", async () => {
+    const user = userEvent.setup();
+    let release!: () => void;
+    const first = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const calls: string[] = [];
+    const onInput = vi.fn((value: { kind: string; text?: string }) => {
+      calls.push(value.text ?? value.kind);
+      return calls.length === 1 ? first : Promise.resolve();
+    });
+    render(<BrowserSurface session={session} disabled={false} onInput={onInput} />);
+    const surface = screen.getByRole("button", { name: "上游登录页面" });
+    surface.focus();
+    await user.keyboard("ab");
+    expect(calls).toEqual(["a"]);
+    await act(async () => {
+      release();
+    });
+    await waitFor(() => expect(calls).toEqual(["a", "b"]));
+  });
+
+  it("手动文字发送失败时保留输入，便于重试", async () => {
+    const user = userEvent.setup();
+    const onInput = vi.fn().mockRejectedValue(new Error("连接已断开"));
+    render(<BrowserSurface session={session} disabled={false} onInput={onInput} />);
+    const field = screen.getByLabelText("发送到上游当前输入框的文字");
+    await user.type(field, "待重试文字");
+    await user.click(screen.getByRole("button", { name: "发送文字" }));
+    await waitFor(() => expect(onInput).toHaveBeenCalledOnce());
+    expect(field).toHaveValue("待重试文字");
   });
 });

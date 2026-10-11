@@ -52,7 +52,7 @@ func TestQueuedRemoteMaintenanceRejectsRestrictedMode(t *testing.T) {
 }
 
 func TestBaseURLSyncPreservesManuallyProtectedAccounts(t *testing.T) {
-	for _, protection := range []business.AccountMutationProtection{{ManualPriority: true}, {Paused: true}, {Excluded: true}, {ManualFused: true}} {
+	for _, protection := range []business.AccountMutationProtection{{ManualPriority: true}, {Paused: true}, {Excluded: true}, {ManualFused: true, ManualPriority: true}, {ManualFused: true, Paused: true}, {ManualFused: true, Excluded: true}} {
 		t.Run(protection.Reasons()[0], func(t *testing.T) {
 			var writes atomic.Int32
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

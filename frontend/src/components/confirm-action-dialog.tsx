@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -15,6 +16,7 @@ export type ConfirmActionDialogProps = {
   confirmLabel: string;
   pendingLabel?: string;
   pending?: boolean;
+  pendingContent?: ReactNode;
   confirmDisabled?: boolean;
   onOpenChange: (open: boolean) => void;
   onConfirm: () => void;
@@ -27,6 +29,7 @@ export function ConfirmActionDialogContent(props: ConfirmActionDialogProps) {
         <DialogTitle>{props.title}</DialogTitle>
         <DialogDescription>{props.description}</DialogDescription>
       </DialogHeader>
+      {props.pending && props.pendingContent}
       <DialogFooter>
         <Button
           variant="outline"

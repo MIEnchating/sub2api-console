@@ -9,6 +9,9 @@ import {
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { TaskStartupState } from "@/components/task-startup-state";
+import { DataTablePagination } from "@/components/data-table/pagination";
+import { DataTablePanel } from "@/components/data-table/table-panel";
+import { useClientPagination } from "@/hooks/use-client-pagination";
 import {
   Table,
   TableHeader,
@@ -62,29 +65,10 @@ export function ImportPreview(props: {
               ))}
             </ul>
           )}
-          <Table aria-label="本批账号预览" containerClassName="max-h-80 overflow-auto">
-            <TableHeader>
-              <TableRow>
-                <TableHead>序号</TableHead>
-                <TableHead>账号</TableHead>
-                <TableHead>识别类型</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {props.preview.items.map((item) => (
-                <TableRow key={item.id}>
-                  <TableCell>{item.index + 1}</TableCell>
-                  <TableCell
-                    className="max-w-80 whitespace-normal wrap-anywhere"
-                    overflowTooltip={false}
-                  >
-                    {item.email || item.name || "刷新后识别身份"}
-                  </TableCell>
-                  <TableCell>{inputKindLabels[item.kind] || "其他资料格式"}</TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
+          <PreviewItems
+            key={`${props.preview.id}:${props.preview.revision}`}
+            items={props.preview.items}
+          />
           {props.pending && <TaskStartupState message="正在创建账号处理任务" />}
         </DialogBody>
         <DialogFooter>
@@ -102,5 +86,45 @@ export function ImportPreview(props: {
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  );
+}
+
+function PreviewItems(props: { items: WorkbenchPreview["items"] }): ReactElement {
+  const pagination = useClientPagination(props.items);
+  return (
+    <DataTablePanel>
+      <Table
+        aria-label="本批账号预览"
+        className="min-w-[28rem]"
+        containerClassName="max-h-80 overflow-auto"
+      >
+        <TableHeader>
+          <TableRow>
+            <TableHead className="w-16">序号</TableHead>
+            <TableHead>账号</TableHead>
+            <TableHead className="w-36">识别类型</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {pagination.visibleItems.map((item) => (
+            <TableRow key={item.id}>
+              <TableCell>{item.index + 1}</TableCell>
+              <TableCell className="whitespace-normal wrap-anywhere" overflowTooltip={false}>
+                {item.email || item.name || "刷新后识别身份"}
+              </TableCell>
+              <TableCell>{inputKindLabels[item.kind] || "其他资料格式"}</TableCell>
+            </TableRow>
+          ))}
+        </TableBody>
+      </Table>
+      <DataTablePagination
+        currentPage={pagination.currentPage}
+        totalPages={pagination.totalPages}
+        totalItems={props.items.length}
+        pageSize={pagination.pageSize}
+        onPageChange={pagination.setCurrentPage}
+        onPageSizeChange={pagination.setPageSize}
+      />
+    </DataTablePanel>
   );
 }

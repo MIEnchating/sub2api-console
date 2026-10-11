@@ -32,7 +32,7 @@ export function ChannelGroupMemberDialog(props: {
   const [selected, setSelected] = useState(new Map<string, NewAPIChannel>());
   const channels = useQuery({
     queryKey: ["newapi-channels", props.platformId, page, pageSize, "all"],
-    queryFn: () => api.newAPIChannels(props.platformId, page, pageSize),
+    queryFn: ({ signal }) => api.newAPIChannels(props.platformId, page, pageSize, "", signal),
   });
   const items = channels.data?.items ?? [];
   const query = search.trim().toLocaleLowerCase();

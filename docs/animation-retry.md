@@ -25,9 +25,9 @@ OpenAI 官方文档说明，可以通过再次传入消息历史，或使用支�
 - [Conversation state](https://developers.openai.com/api/docs/guides/conversation-state)
 - [Codex configuration reference](https://developers.openai.com/codex/config-reference)：分别定义 HTTP 请求和 SSE 中断的重试次数，不能据此推断所有兼容接口均支持恢复同一条生成流。
 
-## 固定参数与结果统计
+## 默认参数与结果统计
 
-新检测固定使用 `gpt-6-astra`，前置检测 `medium`，鹈鹕动画 `low`。动画提示词要求单文件 HTML 与内联 SVG，可使用内联 JavaScript 驱动动画，不得主动发送网络请求；后端保留原文与实际提示词，预览保留模型返回的 HTML、CSS、SVG 和内联脚本，拒绝脚本外链、事件属性和外部资源引用。HTML 在仅允许脚本的 opaque-origin sandbox 中运行，CSP 禁止 Fetch 等网络连接、表单提交和子框架，沙箱禁止顶层导航；CSP 不能阻止脚本导航 iframe 自身，不能保证任意脚本绝对不会发出导航请求。旧 SVG 结果继续以图片展示。
+新检测默认使用 `gpt-6-astra`，允许从模型列表选择或手动输入其他模型；计划执行及恢复保留所选模型，重测沿用原结果的请求模型。前置检测使用 `medium`，鹈鹕动画使用 `low`。动画提示词要求单文件 HTML 与内联 SVG，可使用内联 JavaScript 驱动动画，不得主动发送网络请求；后端保留原文与实际提示词，预览保留模型返回的 HTML、CSS、SVG 和内联脚本，拒绝脚本外链、事件属性和外部资源引用。HTML 在仅允许脚本的 opaque-origin sandbox 中运行，CSP 禁止 Fetch 等网络连接、表单提交和子框架，沙箱禁止顶层导航；CSP 不能阻止脚本导航 iframe 自身，不能保证任意脚本绝对不会发出导航请求。旧 SVG 结果继续以图片展示。
 
 HTML 缩略图与放大预览使用稳定的布局视口，按整页内容边界等比缩放、居中显示，保留原有 SVG 比例。超宽、超高及脚本动态改变尺寸的内容重新测量适配，不通过隐藏滚动条裁掉页面内容；代码视图仍保留原文。
 

@@ -2,9 +2,9 @@ import { animationTestModel } from "../constants";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Tabs } from "@base-ui/react/tabs";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { lazy, Suspense, useCallback, useEffect, useState, type ReactElement } from "react";
+import { lazy, Suspense, useCallback, useEffect, useRef, useState, type ReactElement } from "react";
 import { useForm } from "react-hook-form";
-import { api, type AccountStatus, type AnimationTarget, type PrecheckQuestionID } from "@/api";
+import { api, type AccountStatus, type AnimationTarget } from "@/api";
 import { allPrecheckQuestions } from "../constants";
 import { useAnimationTasks } from "../hooks/use-animation-tasks";
 import { animationSchema, type AnimationForm } from "../lib/animation-schema";
@@ -24,12 +24,9 @@ import { toast } from "sonner";
 import { ContentLoading } from "@/components/content-loading";
 import { defaultAnimationFilters } from "../lib/animation-filters";
 import { DetectionAccountControlProvider } from "./detection-account-control-provider";
+import { shareAccountHealthSnapshots } from "@/features/accounts/lib/account-health-snapshot";
+import { applyManualPriorityTaskResult } from "../lib/manual-priority-task";
 
-const TerminalContinuityPanel = lazy(() =>
-  import("./terminal-continuity-panel").then((module) => ({
-    default: module.TerminalContinuityPanel,
-  })),
-);
 const DetectionTaskPanel = lazy(() =>
   import("./detection-task-panel").then((module) => ({ default: module.DetectionTaskPanel })),
 );
@@ -61,9 +58,8 @@ function AnimationCheckContent(props: {
   } | null>(null);
   const [manualPriorityAccount, setManualPriorityAccount] = useState<AccountStatus | null>(null);
   const [manualPriorityTaskID, setManualPriorityTaskID] = useState<string | null>(null);
+  const handledManualPriorityTask = useRef<string | null>(null);
   const client = useQueryClient();
-  const [precheckQuestions, setPrecheckQuestions] =
-    useState<PrecheckQuestionID[]>(allPrecheckQuestions);
   const form = useForm<AnimationForm>({
     resolver: zodResolver(animationSchema),
     defaultValues: {
@@ -72,11 +68,18 @@ function AnimationCheckContent(props: {
       timeout_seconds: 120,
     },
   });
-  const accounts = useQuery({ queryKey: ["accounts"], queryFn: api.accounts });
-  const policy = useQuery({ queryKey: ["policy"], queryFn: api.policy });
+  const accounts = useQuery({
+    queryKey: ["accounts"],
+    queryFn: ({ signal }) => api.accounts(signal),
+    enabled: props.active !== false,
+    structuralSharing: shareAccountHealthSnapshots,
+    refetchOnWindowFocus: "always",
+    refetchInterval: props.active === false ? false : 30_000,
+  });
+  const policy = useQuery({ queryKey: ["policy"], queryFn: ({ signal }) => api.policy(signal) });
   const manualPriorityTask = useQuery({
     queryKey: ["model-animation", "manual-priority-task", manualPriorityTaskID],
-    queryFn: () => api.task(manualPriorityTaskID!),
+    queryFn: ({ signal }) => api.task(manualPriorityTaskID!, signal),
     enabled: Boolean(manualPriorityTaskID),
     refetchInterval: taskPollInterval,
   });
@@ -97,13 +100,25 @@ function AnimationCheckContent(props: {
   });
   useEffect(() => {
     const task = manualPriorityTask.data;
-    if (!task || ["queued", "running", "waiting_input"].includes(task.status)) return;
-    setManualPriorityTaskID(null);
-    setManualPriorityAccount(null);
-    void client.invalidateQueries({ queryKey: ["accounts"] });
-    if (task.status === "succeeded") toast.success("手动控制已更新");
-    else toast.error(task.message || "手动控制操作失败");
-  }, [client, manualPriorityTask.data]);
+    if (
+      !task ||
+      task.id !== manualPriorityTaskID ||
+      !manualPriorityAccount ||
+      handledManualPriorityTask.current === task.id ||
+      ["queued", "running", "waiting_input"].includes(task.status)
+    )
+      return;
+    handledManualPriorityTask.current = task.id;
+    const accountID = manualPriorityAccount.id;
+    void applyManualPriorityTaskResult(client, task, accountID).then(() => {
+      setManualPriorityTaskID(null);
+      setManualPriorityAccount(null);
+      void client.invalidateQueries({ queryKey: ["accounts"] });
+      void client.invalidateQueries({ queryKey: ["account-detail", accountID] });
+      if (task.status === "succeeded") toast.success("手动控制已更新");
+      else toast.error(task.message || "手动控制操作失败");
+    });
+  }, [client, manualPriorityTask.data, manualPriorityTaskID, manualPriorityAccount]);
   const manualPrioritySection = policy.data?.advanced_policy?.manual_priority;
   const configuredReservedMax =
     manualPrioritySection !== null &&
@@ -119,7 +134,7 @@ function AnimationCheckContent(props: {
       : 10;
   const schedules = useQuery({
     queryKey: ["model-animation", "schedules"],
-    queryFn: api.animationSchedules,
+    queryFn: ({ signal }) => api.animationSchedules(signal),
     refetchInterval: props.active === false ? false : 15_000,
   });
   const run = useMutation({
@@ -127,7 +142,7 @@ function AnimationCheckContent(props: {
   });
   const submit = (value: AnimationForm, mode?: "precheck"): void => {
     run.mutate({
-      ...(mode ? { mode, precheck_questions: precheckQuestions } : {}),
+      ...(mode ? { mode, precheck_questions: allPrecheckQuestions } : {}),
       targets: value.account_ids
         .filter((id) => !tasks.busyIDs.has(id))
         .map((id) => ({
@@ -193,12 +208,6 @@ function AnimationCheckContent(props: {
               自定义接口
             </Tabs.Tab>
             <Tabs.Tab
-              value="terminal-continuity"
-              className="border-b-2 border-transparent px-3 py-2 text-sm data-[active]:border-primary data-[active]:text-primary focus-visible:ring-2 focus-visible:ring-ring"
-            >
-              终端续接检测
-            </Tabs.Tab>
-            <Tabs.Tab
               value="task-management"
               className="border-b-2 border-transparent px-3 py-2 text-sm data-[active]:border-primary data-[active]:text-primary focus-visible:ring-2 focus-visible:ring-ring"
             >
@@ -215,8 +224,6 @@ function AnimationCheckContent(props: {
               onFiltersChange={setFilters}
               mode={tab === "precheck" ? "precheck" : "animation"}
               accountID={props.showAllAccounts ? undefined : props.accountID}
-              precheckQuestions={precheckQuestions}
-              onPrecheckQuestionsChange={setPrecheckQuestions}
               precheckResults={tasks.precheckResults}
               precheckStatuses={tasks.precheckStatuses}
               onPrecheck={(value) => submit(value, "precheck")}
@@ -283,19 +290,6 @@ function AnimationCheckContent(props: {
           <Tabs.Panel value="task-management" className="min-h-0 flex-1">
             <Suspense fallback={<ContentLoading label="正在读取任务管理" />}>
               <DetectionTaskPanel />
-            </Suspense>
-          </Tabs.Panel>
-          <Tabs.Panel value="terminal-continuity" className="min-h-0 flex-1">
-            <Suspense
-              fallback={
-                <ContentLoading label="正在读取终端续接检测" className="h-full justify-center" />
-              }
-            >
-              <TerminalContinuityPanel
-                accountID={props.showAllAccounts ? undefined : props.accountID}
-                filters={filters}
-                onFiltersChange={setFilters}
-              />
             </Suspense>
           </Tabs.Panel>
         </Tabs.Root>

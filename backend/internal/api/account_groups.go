@@ -38,7 +38,7 @@ func (s *Server) updateAccountGroups(c *gin.Context) {
 		return
 	}
 	var input accountops.AccountGroupsInput
-	if err := c.ShouldBindJSON(&input); err != nil || input.ExpectedGroupIDs == nil || input.TargetVersion == "" || len(input.GroupIDs) == 0 || len(input.GroupIDs) > 50 {
+	if err := bindRequestJSON(c, &input); err != nil || input.ExpectedGroupIDs == nil || input.TargetVersion == "" || len(input.GroupIDs) == 0 || len(input.GroupIDs) > 50 {
 		writeError(c, http.StatusUnprocessableEntity, "请提供原分组、管理目标版本和 1 到 50 个目标分组")
 		return
 	}

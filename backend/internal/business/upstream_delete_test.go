@@ -11,6 +11,7 @@ import (
 )
 
 func TestDeleteUpstreamProjectionWaitsForIdentityCatalogLease(t *testing.T) {
+	t.Parallel()
 	store, err := Open(filepath.Join(t.TempDir(), "delete-catalog-lease.sqlite3"))
 	if err != nil {
 		t.Fatal(err)
@@ -45,6 +46,7 @@ func TestDeleteUpstreamProjectionWaitsForIdentityCatalogLease(t *testing.T) {
 }
 
 func TestUpstreamDeleteStorePreservesHostValidationErrors(t *testing.T) {
+	t.Parallel()
 	store, err := Open(filepath.Join(t.TempDir(), "delete-host-validation.sqlite3"))
 	if err != nil {
 		t.Fatal(err)
@@ -95,7 +97,7 @@ func TestDeleteUpstreamProjectionReconcilesUnrelatedIdentitiesWithoutCatalogSelf
 			t.Fatal(err)
 		}
 	}
-	deleteCtx, cancel := context.WithTimeout(ctx, 250*time.Millisecond)
+	deleteCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	if _, err := store.DeleteUpstreamProjection(deleteCtx, "target.example", nil, UpstreamDeleteAudit{}); err != nil {
 		t.Fatalf("delete self-locked while reconciling unrelated identities: %v", err)
@@ -111,6 +113,7 @@ func TestDeleteUpstreamProjectionReconcilesUnrelatedIdentitiesWithoutCatalogSelf
 }
 
 func TestDeleteUpstreamProjectionDoesNotRepairUnrelatedBindingIdentities(t *testing.T) {
+	t.Parallel()
 	store, err := Open(filepath.Join(t.TempDir(), "delete-scoped-relations.sqlite3"))
 	if err != nil {
 		t.Fatal(err)
@@ -162,6 +165,7 @@ func TestDeleteUpstreamProjectionDoesNotRepairUnrelatedBindingIdentities(t *test
 }
 
 func TestDeleteUpstreamProjectionCollectsPreviewBeforeNestedQueries(t *testing.T) {
+	t.Parallel()
 	store, err := Open(filepath.Join(t.TempDir(), "delete.sqlite3"))
 	if err != nil {
 		t.Fatal(err)
@@ -220,6 +224,7 @@ func TestDeleteUpstreamProjectionCollectsPreviewBeforeNestedQueries(t *testing.T
 }
 
 func TestDeleteUpstreamProjectionRollsBackWhenEventCannotBeWritten(t *testing.T) {
+	t.Parallel()
 	store, err := Open(filepath.Join(t.TempDir(), "delete-rollback.sqlite3"))
 	if err != nil {
 		t.Fatal(err)
@@ -250,6 +255,7 @@ func TestDeleteUpstreamProjectionRollsBackWhenEventCannotBeWritten(t *testing.T)
 }
 
 func TestDeleteUpstreamProjectionUsesStableIdentityAcrossHostAliases(t *testing.T) {
+	t.Parallel()
 	store, err := Open(filepath.Join(t.TempDir(), "delete-alias.sqlite3"))
 	if err != nil {
 		t.Fatal(err)

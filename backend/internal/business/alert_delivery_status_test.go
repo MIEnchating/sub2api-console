@@ -8,6 +8,7 @@ import (
 )
 
 func TestUncertainNotificationDeliveryRecordsFailureRequiringConfirmation(t *testing.T) {
+	t.Parallel()
 	store := openPolicyStore(t)
 	ctx := context.Background()
 	record, err := store.RecordAlertEvaluation(ctx, time.Now().UTC().Format(time.RFC3339Nano),

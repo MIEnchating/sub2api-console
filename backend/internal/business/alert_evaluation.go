@@ -78,6 +78,9 @@ func (s *Store) evaluateAlertIncidents(ctx context.Context, balanceHost string) 
 				return AlertEvidenceResult{}, err
 			}
 		}
+		if err := closeLegacyManualFuseAlerts(ctx, tx, now); err != nil {
+			return AlertEvidenceResult{}, err
+		}
 		if err := closeLegacyCapacityWaitAlerts(ctx, tx, now); err != nil {
 			return AlertEvidenceResult{}, err
 		}
@@ -109,6 +112,9 @@ func (s *Store) evaluateAlertIncidents(ctx context.Context, balanceHost string) 
 				return AlertEvidenceResult{}, err
 			}
 		}
+	}
+	if err := closeDeletedUpstreamAlerts(ctx, tx, balanceHost, now); err != nil {
+		return AlertEvidenceResult{}, err
 	}
 	query := `SELECT incident_key,event_type,object_kind,object_id,cause_code,status FROM alert_incidents
 		WHERE status IN ('firing','suppressed') AND event_type NOT IN ('account.multiplier_increased','account.multiplier_decreased')`
@@ -424,7 +430,8 @@ type routingAlertGroup struct {
 }
 
 func (s *Store) routingAlertFindings(ctx context.Context, policy AlertPolicy) ([]alertFinding, map[string]string, error) {
-	findings, manualFused, err := s.manualFuseAlertFindings(ctx, policy.RoutingBreakerEnabled)
+	findings := []alertFinding{}
+	manualFused, err := s.manualFusedAlertAccounts(ctx)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -479,7 +486,7 @@ func (s *Store) routingAlertFindings(ctx context.Context, policy AlertPolicy) ([
 				"account.binding_invalid", "account", accountID, alertCause("BINDING_INVALID", reason),
 			})
 			accountFindings[accountID] = struct{}{}
-		case policy.RoutingBreakerEnabled && fusedRoutingDecisionState(state):
+		case policy.RoutingBreakerEnabled && fusedRoutingDecisionState(state) && !manualFuseAlert("account.routing_breaker", alertCause("ROUTING_BREAKER", reason)):
 			findings = append(findings, alertFinding{
 				"console:routing:breaker:" + accountID + ":" + primaryGroupName,
 				"account.routing_breaker", "account", accountID, alertCause("ROUTING_BREAKER", reason),

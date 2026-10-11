@@ -85,7 +85,7 @@ describe("开户模型选项", () => {
       "models.example.test",
       "group-a",
     );
-    expect(api.task).toHaveBeenCalledWith("models-1");
+    expect(api.task).toHaveBeenCalledWith("models-1", expect.any(AbortSignal));
     expect(view.result.current).toMatchObject({
       models: ["gpt-5", "claude-sonnet"],
       pending: false,
@@ -147,7 +147,7 @@ describe("开户模型选项", () => {
       .mockResolvedValue(task("models-1", "succeeded", { models: ["finished-model"] }));
     const view = renderOptions();
     act(() => view.result.current.load());
-    await waitFor(() => expect(api.task).toHaveBeenCalledWith("models-1"));
+    await waitFor(() => expect(api.task).toHaveBeenCalledWith("models-1", expect.any(AbortSignal)));
     expect(view.result.current.pending).toBe(true);
 
     act(() => {
@@ -202,7 +202,7 @@ describe("开户模型选项", () => {
     act(() => view.result.current.load());
     await waitFor(() => expect(view.result.current.loaded).toBe(true));
     expect(api.startOnboardingProbeTask).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(api.task).mock.calls).toEqual([["models-1"], ["models-1"]]);
+    expect(vi.mocked(api.task).mock.calls.map(([id]) => id)).toEqual(["models-1", "models-1"]);
   });
 
   it("切换上游和分组后旧任务结果不能覆盖新目标的模型", async () => {
@@ -214,7 +214,7 @@ describe("开户模型选项", () => {
     );
     const view = renderOptions();
     act(() => view.result.current.load());
-    await waitFor(() => expect(api.task).toHaveBeenCalledWith("models-1"));
+    await waitFor(() => expect(api.task).toHaveBeenCalledWith("models-1", expect.any(AbortSignal)));
     view.rerender({ host: "other.example.test", groupId: "group-b" });
     expect(view.result.current).toMatchObject({ models: [], loaded: false, pending: false });
     vi.mocked(api.startOnboardingProbeTask).mockResolvedValue(task("models-2", "queued"));
@@ -299,7 +299,7 @@ describe("开户模型选项", () => {
     await act(async () => resolveStart(task("models-1", "queued")));
 
     expect(view.result.current.models).toEqual(["target-model"]);
-    expect(api.task).not.toHaveBeenCalledWith("models-1");
+    expect(api.task).not.toHaveBeenCalledWith("models-1", expect.any(AbortSignal));
   });
 
   it.each([

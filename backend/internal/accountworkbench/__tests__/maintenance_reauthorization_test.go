@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/MIEnchating/sub2api-console/backend/internal/accountworkbench"
 	"github.com/MIEnchating/sub2api-console/backend/internal/business"
@@ -17,8 +18,17 @@ import (
 )
 
 func TestMaintenanceReusesCorrectedPasswordWhenRefreshedAccountStillReturns401(t *testing.T) {
+	testMaintenanceRememberedLogin(t, false)
+}
+
+func TestMaintenanceDoesNotReuseDeletedLoginSource(t *testing.T) {
+	testMaintenanceRememberedLogin(t, true)
+}
+
+func testMaintenanceRememberedLogin(t *testing.T, deleteSource bool) {
+	t.Helper()
 	service, private := fixture(t, `{}`)
-	owner, _ := previewOwner(t, private)
+	owner, token := previewOwner(t, private)
 	runner, tasks := runTasks(t, service)
 	catalog, err := business.Open(filepath.Join(t.TempDir(), "business.db"))
 	if err != nil {
@@ -56,8 +66,23 @@ func TestMaintenanceReusesCorrectedPasswordWhenRefreshedAccountStillReturns401(t
 	service.UseExecution(tasks, runner, checker, t.TempDir())
 	exchanges := 0
 	attempts := 0
+	expectedSourceID := ""
 	signedRunInputWithProtocol(t, service, func(req *http.Request) (*http.Response, error) {
 		if req.URL.Path == "/api/accounts/password/verify" {
+			if expectedSourceID != "" {
+				records, err := private.WorkbenchDocuments(req.Context(), "maintenance:", 1)
+				if err != nil || len(records) != 1 {
+					return nil, errors.New("maintenance source checkpoint missing")
+				}
+				var checkpoint struct {
+					Attempts map[string]struct {
+						SourceRunID string `json:"source_run_id"`
+					} `json:"attempts"`
+				}
+				if json.Unmarshal(records[0].Payload, &checkpoint) != nil || checkpoint.Attempts["41"].SourceRunID != expectedSourceID {
+					return nil, errors.New("maintenance selected an ineligible login source")
+				}
+			}
 			attempts++
 			if attempts == 1 {
 				rejected := upstreamResponse(map[string]any{"error": map[string]any{"code": "invalid_password"}})
@@ -129,6 +154,62 @@ func TestMaintenanceReusesCorrectedPasswordWhenRefreshedAccountStillReturns401(t
 	if err != nil || run.Status != "completed" {
 		t.Fatalf("initial login import failed: %v %+v", err, run)
 	}
+	expectedSourceID = run.ID
+	// Transient processing records must not replace the durable login source.
+	raw, _, err := private.WorkbenchDocument(ctx, "run:"+owner+":"+run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index, condition := range []string{"target", "expired", "account", "status", "identity", "login", "action"} {
+		var document map[string]any
+		if err := json.Unmarshal(raw, &document); err != nil {
+			t.Fatal(err)
+		}
+		public := document["public"].(map[string]any)
+		row := public["items"].([]any)[0].(map[string]any)
+		input := document["items"].([]any)[0].(map[string]any)
+		switch condition {
+		case "target":
+			document["target"].(map[string]any)["BaseURL"] = "https://other.invalid"
+		case "expired":
+			public["expires_at"] = time.Now().Add(-time.Hour).UTC().Format(time.RFC3339)
+		case "account":
+			row["account_id"] = "42"
+		case "status":
+			row["status"] = "failed"
+		case "identity":
+			input["credentials"].(map[string]any)["chatgpt_account_id"] = "other-workspace"
+		case "login":
+			input["login_source"] = ""
+		case "action":
+			public["action"] = "export"
+		}
+		id := strings.Repeat(string(rune('a'+index)), 32)
+		public["id"] = id
+		payload, err := json.Marshal(document)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := private.SaveWorkbenchDocument(ctx, "run:"+owner+":"+id, 0, payload); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := private.RevokeSession(ctx, token); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.Cleanup(ctx); err != nil {
+		t.Fatal(err)
+	}
+	owner, _ = previewOwner(t, private)
+	if deleteSource {
+		saved, err := service.RememberedAccounts(ctx, owner)
+		if err != nil || len(saved) != 1 {
+			t.Fatalf("saved login source missing: %v %+v", err, saved)
+		}
+		if err := service.DeleteRememberedAccount(ctx, owner, saved[0].ID, saved[0].Revision); err != nil {
+			t.Fatal(err)
+		}
+	}
 	account["status"] = "error"
 	account["schedulable"] = false
 	account["error_message"] = "HTTP 401"
@@ -145,6 +226,12 @@ func TestMaintenanceReusesCorrectedPasswordWhenRefreshedAccountStillReturns401(t
 	}
 	awaitRun(t, runner)
 	result, err := service.Maintenance(ctx, owner)
+	if deleteSource {
+		if err != nil || len(result.Results) != 1 || result.Results[0].Reason != "manual_login_required" || exchanges != 1 || protocol.bootstraps != 1 {
+			t.Fatalf("deleted login source reused: %v %+v exchanges=%d logins=%d", err, result, exchanges, protocol.bootstraps)
+		}
+		return
+	}
 	if err != nil || len(result.Results) != 1 || result.Results[0].Status != "repaired" || result.Results[0].Action != "reauthorize" {
 		t.Fatalf("reauthorization did not recover: %v %+v", err, result)
 	}

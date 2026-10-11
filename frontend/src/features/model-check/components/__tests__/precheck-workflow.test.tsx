@@ -1,3 +1,4 @@
+import { seedDictionaries } from "@/test/dictionary-fixtures";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -54,6 +55,7 @@ function setup(task?: Task): void {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false, staleTime: Infinity } },
   });
+  seedDictionaries(client);
   clients.push(client);
   client.setQueryData(
     ["accounts"],
@@ -76,7 +78,7 @@ function setup(task?: Task): void {
   expect(screen.getByRole("combobox", { name: "检测模型" })).toHaveValue("gpt-6-astra");
 }
 
-it("批量前置检测直接开始后展示糖果题结果，并可分别选择通过或降智账号继续动画检测", async () => {
+it("批量前置检测使用默认糖果题，完成后可手动勾选账号继续动画检测", async () => {
   const task = finishedTask();
   const bodies: unknown[] = [];
   vi.stubGlobal(
@@ -116,7 +118,10 @@ it("批量前置检测直接开始后展示糖果题结果，并可分别选择�
   const detail = await screen.findByRole("dialog", { name: "前置检测详情" });
   expect(within(detail).getByText("21")).toBeVisible();
   await user.click(within(detail).getByRole("button", { name: "关闭" }));
-  await user.click(screen.getByRole("button", { name: "选择通过（1）" }));
+  await user.click(screen.getByRole("button", { name: "清空选择" }));
+  const firstCheckbox = within(first).getByRole("checkbox");
+  firstCheckbox.focus();
+  await user.keyboard(" ");
   expect(within(first).getByRole("checkbox")).toBeChecked();
   expect(
     within(screen.getByRole("article", { name: "账号 账号2" })).getByRole("checkbox"),
@@ -127,7 +132,10 @@ it("批量前置检测直接开始后展示糖果题结果，并可分别选择�
     expect(bodies[1]).toMatchObject({ targets: [{ account_id: "1", model: "gpt-6-astra" }] }),
   );
   await user.click(screen.getByRole("tab", { name: "前置检测" }));
-  await user.click(screen.getByRole("button", { name: "选择降智（1）" }));
+  await user.click(screen.getByRole("button", { name: "清空选择" }));
+  await user.click(
+    within(screen.getByRole("article", { name: "账号 账号2" })).getByRole("checkbox"),
+  );
   expect(
     within(screen.getByRole("article", { name: "账号 账号2" })).getByRole("checkbox"),
   ).toBeChecked();
@@ -137,55 +145,41 @@ it("批量前置检测直接开始后展示糖果题结果，并可分别选择�
     ).not.toBeChecked();
 });
 
-it("切换模型后仅允许选择同一模型的历史前置结果", () => {
+it.each([false, true])("前置检测有历史结果为 %s 时不展示题目和结果快捷选择按钮", (hasHistory) => {
   vi.stubGlobal(
     "fetch",
     vi.fn(async () => Response.json({ categories: [] })),
   );
-  const task = finishedTask();
-  if (Array.isArray(task.result.animations)) {
-    task.result.animations = task.result.animations.map((result: AnimationResult) => ({
-      ...result,
-      model: "legacy-model",
-    }));
-  }
-  setup(task);
-  expect(screen.getByRole("combobox", { name: "检测模型" })).toHaveValue("gpt-6-astra");
-  expect(screen.getByRole("button", { name: "选择通过（0）" })).toBeDisabled();
-  expect(screen.getByRole("button", { name: "选择降智（0）" })).toBeDisabled();
-  fireEvent.change(screen.getByRole("combobox", { name: "检测模型" }), {
-    target: { value: "legacy-model" },
-  });
-  expect(screen.getByRole("button", { name: "选择通过（1）" })).toBeEnabled();
-  expect(screen.getByRole("button", { name: "选择降智（1）" })).toBeEnabled();
+  setup(hasHistory ? finishedTask() : undefined);
+  const operations = screen.getByRole("group", { name: "前置检测操作" });
+  expect(
+    within(operations).queryByRole("button", { name: "选择前置检测题目" }),
+  ).not.toBeInTheDocument();
+  expect(
+    within(operations).queryByRole("button", { name: /选择通过|选择降智|选择不通过/ }),
+  ).not.toBeInTheDocument();
+  expect(within(operations).getByRole("button", { name: "全选账号" })).toBeEnabled();
+  expect(within(operations).getByRole("button", { name: "前置检测（0）" })).toBeDisabled();
 });
 
-it("取消全选后禁止前置检测，选择单题后确认并只提交该题", async () => {
+it("清空已选账号后禁用前置检测且不发送任务请求", async () => {
   const bodies: unknown[] = [];
   vi.stubGlobal(
     "fetch",
     vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-      if (init?.method === "POST") {
-        bodies.push(JSON.parse(String(init.body)));
-        return Response.json(finishedTask());
-      }
+      if (init?.method === "POST") bodies.push(JSON.parse(String(init.body)));
       return Response.json([]);
     }),
   );
   setup();
   const user = userEvent.setup();
   await user.click(screen.getByRole("button", { name: "全选账号" }));
-  await user.click(screen.getByRole("button", { name: "选择前置检测题目" }));
-  const menu = screen.getByRole("dialog", { name: "前置检测题目" });
-  await user.click(within(menu).getByRole("checkbox", { name: "全选" }));
-  expect(screen.getByRole("button", { name: "前置检测（4）" })).toBeDisabled();
-  await user.click(within(menu).getByRole("checkbox", { name: "糖果题" }));
-  await user.keyboard("{Escape}");
-  await user.click(screen.getByRole("button", { name: "前置检测（4）" }));
-  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
-  await waitFor(() =>
-    expect(bodies[0]).toMatchObject({ mode: "precheck", precheck_questions: ["candy"] }),
-  );
+  expect(screen.getByRole("button", { name: "前置检测（4）" })).toBeEnabled();
+  await user.click(screen.getByRole("button", { name: "清空选择" }));
+  const start = screen.getByRole("button", { name: "前置检测（0）" });
+  expect(start).toBeDisabled();
+  await user.click(start);
+  expect(bodies).toEqual([]);
 });
 
 it("前置检测运行中切换到账号检测仍锁定忙碌账号，返回后显示原任务状态", async () => {

@@ -113,7 +113,7 @@ func TestExistingDatabaseAddsMissingStatisticsTableAndPreservesAccounts(t *testi
 	if err := db.QueryRow(`SELECT COUNT(*) FROM account_stability_samples`).Scan(&count); err != nil || count != 0 {
 		t.Fatalf("new table=%d err=%v", count, err)
 	}
-	if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_schema WHERE name='ix_account_stability_window'`).Scan(&count); err != nil || count != 1 {
+	if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_schema WHERE name='ix_account_stability_grouped'`).Scan(&count); err != nil || count != 1 {
 		t.Fatalf("new index=%d err=%v", count, err)
 	}
 }

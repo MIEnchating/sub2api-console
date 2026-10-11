@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -24,9 +24,10 @@ function formValues(settings: TaskConcurrencySettings): TaskConcurrencyValues {
 
 export function TaskConcurrencySettingsCard() {
   const client = useQueryClient();
+  const [isReloading, setIsReloading] = useState(false);
   const settings = useQuery({
     queryKey: ["task-concurrency"],
-    queryFn: api.taskConcurrency,
+    queryFn: ({ signal }) => api.taskConcurrency(signal),
     refetchInterval: 10000,
   });
   const form = useForm<TaskConcurrencyValues>({
@@ -42,7 +43,8 @@ export function TaskConcurrencySettingsCard() {
         queue_capacity: Number(values.queueCapacity),
         version: values.version,
       }),
-    onSuccess: (value) => {
+    onSuccess: async (value) => {
+      await client.cancelQueries({ queryKey: ["task-concurrency"], exact: true });
       client.setQueryData(["task-concurrency"], value);
       form.reset(formValues(value));
       toast.success("任务并发设置已保存并生效");
@@ -52,6 +54,16 @@ export function TaskConcurrencySettingsCard() {
   useEffect(() => {
     if (settings.data && !form.formState.isDirty) form.reset(formValues(settings.data));
   }, [settings.data, form, form.formState.isDirty]);
+
+  async function reloadSettings(): Promise<void> {
+    setIsReloading(true);
+    try {
+      const result = await settings.refetch();
+      if (result.isSuccess) form.reset(formValues(result.data));
+    } finally {
+      setIsReloading(false);
+    }
+  }
 
   if (!settings.data && settings.isPending)
     return (
@@ -90,7 +102,7 @@ export function TaskConcurrencySettingsCard() {
         onSubmit={form.handleSubmit((values) => save.mutate(values))}
       >
         <CardContent className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
-          <fieldset disabled={save.isPending} className="grid min-w-0 gap-4 py-3">
+          <fieldset disabled={save.isPending || isReloading} className="grid min-w-0 gap-4 py-3">
             <div className="flex flex-wrap items-center gap-3">
               <label htmlFor="task-queue-capacity">每个模块的等待队列容量</label>
               <Input
@@ -146,15 +158,12 @@ export function TaskConcurrencySettingsCard() {
           <Button
             type="button"
             variant="outline"
-            disabled={save.isPending || settings.isFetching}
-            onClick={() => {
-              form.reset(formValues(settings.data));
-              void settings.refetch();
-            }}
+            disabled={save.isPending || isReloading || settings.isFetching}
+            onClick={() => void reloadSettings()}
           >
-            重新读取
+            {isReloading ? "读取中…" : "重新读取"}
           </Button>
-          <Button type="submit" disabled={save.isPending || !form.formState.isDirty}>
+          <Button type="submit" disabled={save.isPending || isReloading || !form.formState.isDirty}>
             {save.isPending ? "保存中…" : "保存任务并发"}
           </Button>
         </SettingsFooter>

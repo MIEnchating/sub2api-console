@@ -6,6 +6,7 @@ import (
 )
 
 func TestPartialKeySyncPrefersStableGroupIDOverCollidingName(t *testing.T) {
+	t.Parallel()
 	store := upstreamSyncTestStore(t)
 	active, rate, keyID, reference := "active", "0.2", "key-17", "group-7"
 	_, err := store.ApplyUpstreamSync(context.Background(), UpstreamSyncWrite{

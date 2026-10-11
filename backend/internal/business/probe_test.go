@@ -12,6 +12,7 @@ import (
 )
 
 func TestProbeRepositoryReadsStableCandidatesAndPersistsSamplesAtomically(t *testing.T) {
+	t.Parallel()
 	store, err := Open(filepath.Join(t.TempDir(), "probe.sqlite3"))
 	if err != nil {
 		t.Fatal(err)
@@ -92,6 +93,7 @@ func TestProbeRepositoryReadsStableCandidatesAndPersistsSamplesAtomically(t *tes
 }
 
 func TestProbeCandidatesPreferEnabledModelsOverDiscoveredCatalog(t *testing.T) {
+	t.Parallel()
 	store := openPolicyStore(t)
 	ctx := context.Background()
 	if _, err := store.db.ExecContext(ctx, `INSERT INTO accounts(id,name,upstream_type,metadata_json,updated_at) VALUES
@@ -111,6 +113,7 @@ func TestProbeCandidatesPreferEnabledModelsOverDiscoveredCatalog(t *testing.T) {
 }
 
 func TestProbeCandidatesUseNewerDiscoveredCatalogWhenEnabledCatalogIsStale(t *testing.T) {
+	t.Parallel()
 	store := openPolicyStore(t)
 	ctx := context.Background()
 	if _, err := store.db.ExecContext(ctx, `INSERT INTO accounts(id,name,upstream_type,metadata_json,updated_at) VALUES
@@ -125,6 +128,7 @@ func TestProbeCandidatesUseNewerDiscoveredCatalogWhenEnabledCatalogIsStale(t *te
 }
 
 func TestProbeCandidatesFilterPlatformByExactCaseInsensitiveValue(t *testing.T) {
+	t.Parallel()
 	store := openPolicyStore(t)
 	ctx := context.Background()
 	if _, err := store.db.ExecContext(ctx, `INSERT INTO accounts(id,name,upstream_type,metadata_json,updated_at) VALUES
@@ -147,6 +151,7 @@ func TestProbeCandidatesFilterPlatformByExactCaseInsensitiveValue(t *testing.T) 
 }
 
 func TestProbeRepositoryPersistsModelRewriteEvidence(t *testing.T) {
+	t.Parallel()
 	store, err := Open(filepath.Join(t.TempDir(), "probe-rewrite.sqlite3"))
 	if err != nil {
 		t.Fatal(err)
@@ -177,6 +182,7 @@ func TestProbeRepositoryPersistsModelRewriteEvidence(t *testing.T) {
 }
 
 func TestProbeRepositoryKeepsMultipleModelsFromTheSameRun(t *testing.T) {
+	t.Parallel()
 	store := openPolicyStore(t)
 	observed := time.Now().UTC().Format(time.RFC3339Nano)
 	samples := []ProbeSample{
@@ -196,6 +202,7 @@ func TestProbeRepositoryKeepsMultipleModelsFromTheSameRun(t *testing.T) {
 }
 
 func TestProbeRepositoryPersistsFailedProbeEvent(t *testing.T) {
+	t.Parallel()
 	store := openPolicyStore(t)
 	ctx := context.Background()
 	observed := time.Now().UTC().Format(time.RFC3339Nano)
@@ -217,6 +224,7 @@ func TestProbeRepositoryPersistsFailedProbeEvent(t *testing.T) {
 }
 
 func TestProbeRepositoryPersistsRetryAttemptHistory(t *testing.T) {
+	t.Parallel()
 	store := openPolicyStore(t)
 	ctx := context.Background()
 	observed := time.Now().UTC().Format(time.RFC3339Nano)
@@ -237,6 +245,7 @@ func TestProbeRepositoryPersistsRetryAttemptHistory(t *testing.T) {
 }
 
 func TestPersistProbeSamplesKeepsLatestTwoHundred(t *testing.T) {
+	t.Parallel()
 	store := openPolicyStore(t)
 	ctx := context.Background()
 	base := time.Date(2026, 8, 28, 0, 0, 0, 0, time.UTC)

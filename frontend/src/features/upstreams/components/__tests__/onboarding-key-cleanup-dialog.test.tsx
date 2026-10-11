@@ -68,6 +68,26 @@ describe("OnboardingKeyCleanupDialog", () => {
     ]);
   });
 
+  it("ignores malformed result entries when parsing rows and choosing dialog width", () => {
+    const task: Task = {
+      ...completedTask,
+      result: { items: [null, [], "failed", {}, { status: "running" }] },
+    };
+    expect(keyCleanupResultItems(task)).toEqual([]);
+    expect(keyCleanupDialogWidth(null, task)).toBe("medium");
+    task.result.items = [null, { key_id: 19, status: "failed", reason: "  上游拒绝删除  " }];
+    expect(keyCleanupResultItems(task)).toEqual([
+      { keyId: "19", name: "", status: "failed", reason: "上游拒绝删除" },
+    ]);
+    expect(keyCleanupDialogWidth(null, task)).toBe("wide");
+  });
+
+  it("accepts older tasks without per-key result items", () => {
+    const task = { ...completedTask, result: {} };
+    expect(keyCleanupResultItems(task)).toEqual([]);
+    expect(keyCleanupDialogWidth(null, task)).toBe("medium");
+  });
+
   it("uses a compact adaptive dialog when the scan has no rows", () => {
     expect(keyCleanupDialogWidth({ host: "api.example", keys: [] }, null)).toBe("medium");
     expect(

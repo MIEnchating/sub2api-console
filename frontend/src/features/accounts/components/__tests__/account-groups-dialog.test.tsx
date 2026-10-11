@@ -1,3 +1,4 @@
+import { seedDictionaries } from "@/test/dictionary-fixtures";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -36,6 +37,9 @@ function setup(data: AccountGroupsPreview = preview, manual: number | null = nul
   vi.stubGlobal("fetch", fetch);
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  });
+  seedDictionaries(client, {
+    group: data.groups.map((group) => ({ value: group.id, name: group.name })),
   });
   const view = render(
     <QueryClientProvider client={client}>
@@ -116,6 +120,13 @@ it("无兼容分组时展示空状态并禁止确认", async () => {
   f.client.clear();
 });
 
+it("历史分组缺失时保留稳定 ID 回退文案", async () => {
+  const f = setup({ ...preview, current_group_ids: ["99"] });
+  expect(await screen.findByText("当前分组：分组 #99")).toBeVisible();
+  expect(screen.getByText("切换后分组：分组 #99")).toBeVisible();
+  f.client.clear();
+});
+
 it("提交失败保留所选分组和重试入口，不关闭弹窗", async () => {
   const user = userEvent.setup();
   const f = setup({ ...preview, current_group_ids: [] });
@@ -137,6 +148,9 @@ it("提交失败保留所选分组和重试入口，不关闭弹窗", async () =
 it("读取失败提供重新读取，重试成功后显示真实分组", async () => {
   vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response({}, 503)));
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  seedDictionaries(client, {
+    group: preview.groups.map((group) => ({ value: group.id, name: group.name })),
+  });
   render(
     <QueryClientProvider client={client}>
       <AccountGroupsDialog

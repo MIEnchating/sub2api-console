@@ -11,8 +11,10 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
+	"github.com/MIEnchating/sub2api-console/backend/internal/accountquality"
 	"github.com/MIEnchating/sub2api-console/backend/internal/runtimepolicy"
 	"github.com/MIEnchating/sub2api-console/backend/internal/sqliteutil"
 
@@ -22,6 +24,11 @@ import (
 type Store struct {
 	path string
 	db   *database
+
+	stabilityCacheMu      sync.Mutex
+	stabilityCacheAt      time.Time
+	stabilityCacheVersion int64
+	stabilityCache        map[string]accountquality.Statistics
 }
 
 func preferContextError(ctx context.Context, err error) error {

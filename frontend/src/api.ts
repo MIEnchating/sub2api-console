@@ -1,4 +1,9 @@
-import { SessionExpiredError, signalSessionExpired } from "./lib/session-auth";
+import {
+  SessionExpiredError,
+  signalSessionExpired,
+  currentSessionGeneration,
+  assertCurrentSession,
+} from "./lib/session-auth";
 import type {
   TemplateLibrary,
   TemplateConfig,
@@ -11,6 +16,7 @@ import type {
   WorkbenchMaintenance,
   MaintenanceSettings,
   MaintenancePreview,
+  RememberedAccount,
 } from "./features/account-workbench/types";
 
 export type Overview = {
@@ -123,10 +129,69 @@ export type NewAPIChannel = {
   version: string;
 };
 
+export type NewAPIChannelLookup = {
+  items: NewAPIChannel[];
+  failures: Array<{ id: string; code: string; message: string }>;
+};
+
 export type NewAPIChannelModelChange = {
   action: "add" | "remove";
   models: string[];
   version: string;
+};
+
+export type AccountModelAutomationTaskRequest = {
+  group_ids: string[];
+  platform_id: string;
+  channels: Array<{ id: string; version: string }>;
+  selected_models?: string[];
+  publish_missing: boolean;
+  price_enabled: boolean;
+  pricing_source: "official" | "cached";
+  dry_run: boolean;
+  preview_task_id?: string;
+};
+
+export type AccountModelAutomationSchedule = {
+  id: string;
+  name: string;
+  request: Omit<AccountModelAutomationTaskRequest, "dry_run" | "preview_task_id">;
+  enabled: boolean;
+  schedule_type?: "interval" | "daily";
+  daily_times?: string[];
+  timezone?: string;
+  interval_minutes: number;
+  last_run_at: string | null;
+  next_run_at: string | null;
+};
+
+export type AccountModelAutomationScheduleInput = {
+  id?: string;
+  name: string;
+  group_ids: string[];
+  platform_id: string;
+  channels: Array<{ id: string; version: string }>;
+  selected_models?: string[];
+  publish_missing: boolean;
+  price_enabled: boolean;
+  pricing_source: "official" | "cached";
+  enabled: boolean;
+  schedule_type?: "interval" | "daily";
+  daily_times?: string[];
+  timezone?: string;
+  interval_minutes: number;
+};
+
+export type AccountModelAutomationTaskGroup = {
+  id: string;
+  name: string;
+  schedule_ids: string[];
+};
+
+export type AccountModelAutomationTaskGroupInput = {
+  id?: string;
+  name: string;
+  schedule_ids: string[];
 };
 
 export type NewAPIChannelKey = {
@@ -385,6 +450,13 @@ export type SessionStatus = {
   username: string | null;
 };
 
+export type UpstreamAccountRequestUsage = {
+  account_id: string;
+  account_name: string;
+  request_count: number;
+  share: number;
+};
+
 type UpstreamHost = {
   upstream_id: string;
   host: string;
@@ -410,6 +482,10 @@ type UpstreamHost = {
   last_auth_success_method?: string | null;
   last_auth_recovery_method?: string | null;
   last_auth_success_at?: string | null;
+  spending?: { total: string; started_at: string; updated_at: string } | null;
+  request_count?: number;
+  request_window_days?: number;
+  account_request_usage?: UpstreamAccountRequestUsage[];
 };
 
 export type UpstreamSummary = {
@@ -555,6 +631,7 @@ export type OnboardingContext = {
 };
 
 export type ProbeResult = {
+  animation?: AnimationResult;
   status: "passed" | "failed" | "skipped";
   message: string;
   request_model: string;
@@ -566,7 +643,7 @@ export type ProbeResult = {
   temporary_key?: boolean;
 };
 
-export type OnboardingProbeMode = "stream" | "default";
+export type OnboardingProbeMode = "stream" | "default" | "animation";
 
 export type OnboardingRequest = {
   host: string;
@@ -719,22 +796,11 @@ export type AutoInspectionStatus = AutoInspectionConfig & {
 };
 
 export type LogCleanupStatus = {
+  task_id?: string;
   enabled: boolean;
   retention_days: number;
   last_run_at: string | null;
   next_run_at: string | null;
-};
-
-export type LogCleanupResult = {
-  tasks: number;
-  runs: number;
-  events: number;
-  changes: number;
-  protected_tasks: number;
-  total: number;
-  retention_days: number;
-  cutoff_at: string;
-  completed_at: string;
 };
 
 export type GroupStatus = {
@@ -1047,6 +1113,7 @@ export type AccountStatus = {
   manual_priority?: number | null;
   groups_locked?: boolean;
   manual_sync_balance_multiplier?: boolean;
+  manual_fused?: boolean;
   load_factor: string | null;
   concurrency: number | null;
   multiplier: string | null;
@@ -1120,6 +1187,18 @@ type AccountBinding = {
   status: string | null;
   updated_at: string;
 };
+
+export type AccountControlState = Pick<
+  AccountStatus,
+  | "id"
+  | "name"
+  | "health"
+  | "health_status"
+  | "routing_state"
+  | "paused"
+  | "schedulable"
+  | "manual_priority"
+>;
 
 export type AccountDetail = AccountStatus & {
   metadata: Record<string, unknown>;
@@ -1418,11 +1497,12 @@ export type Task = {
   progress: number;
   message: string;
   result: Record<string, unknown>;
+  display_account_names?: Record<string, string>;
   created_at: string;
   updated_at: string;
 };
 
-export type TaskSummary = Omit<Task, "result"> & { system_info: true };
+export type TaskSummary = Omit<Task, "result" | "display_account_names"> & { system_info: true };
 
 export type SystemMetrics = {
   sampled_at: string;
@@ -1459,11 +1539,6 @@ export type TerminalContinuityResult = {
   duration_ms: number;
   completed_at: string;
 };
-export type TerminalContinuityRequest = {
-  rounds?: number;
-  targets: AnimationTarget[];
-  timeout_seconds: number;
-};
 export type TerminalContinuityRound = {
   round: number;
   verdict: TerminalContinuityVerdict;
@@ -1480,6 +1555,7 @@ export type DetectionTask = {
   name: string;
   group_ids: string[];
   model: string;
+  prompt?: string;
   animation?: boolean;
   precheck: boolean;
   precheck_questions?: PrecheckQuestionID[];
@@ -1505,6 +1581,7 @@ export type AnimationCustomEndpoint = {
   model: string;
 };
 export type AnimationRequest = {
+  prompt?: string;
   precheck_questions?: PrecheckQuestionID[];
   mode?: "animation" | "precheck";
   targets: AnimationTarget[];
@@ -1513,6 +1590,8 @@ export type AnimationRequest = {
 };
 export type AnimationResult = {
   source_task_id?: string;
+  source_task_status?: Task["status"];
+  manual_verdict?: AnimationManualVerdict;
   mode?: "animation" | "precheck";
   precheck?: {
     verdict: "passed" | "not_passed" | "inconclusive" | "error";
@@ -1553,7 +1632,13 @@ export type AnimationResult = {
   duration_ms: number;
   completed_at: string;
 };
+export type AnimationManualVerdict = {
+  verdict: "passed" | "not_passed" | "unmarked";
+  updated_at: string;
+  updated_by: string;
+};
 export type AnimationSchedule = {
+  prompt?: string;
   schedule_type?: "interval" | "daily";
   daily_time?: string;
   daily_times?: string[];
@@ -1732,32 +1817,44 @@ export class ApiError extends Error {
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(apiEndpoint(path), {
-    ...init,
-    credentials: "include",
-    headers: { "Content-Type": "application/json", ...init?.headers },
-  });
-  if (!response.ok) {
-    if (response.status === 401 && path !== "/api/auth/login") {
-      signalSessionExpired();
-      throw new SessionExpiredError();
+  const generation = currentSessionGeneration();
+  try {
+    const response = await fetch(apiEndpoint(path), {
+      ...init,
+      credentials: "include",
+      headers: { "Content-Type": "application/json", ...init?.headers },
+    });
+    assertCurrentSession(generation);
+    if (!response.ok) {
+      if (response.status === 401 && path !== "/api/auth/login") {
+        signalSessionExpired();
+        throw new SessionExpiredError();
+      }
+      const body = (await response.json().catch(() => null)) as {
+        code?: unknown;
+        detail?: unknown;
+      } | null;
+      assertCurrentSession(generation);
+      const code =
+        typeof body?.code === "string" && body.code !== "" ? body.code : "request_failed";
+      if (body !== null && Object.prototype.hasOwnProperty.call(body, "detail")) {
+        if (body.detail === null) throw new ApiError("空值", code, response.status);
+        if (typeof body.detail === "string") throw new ApiError(body.detail, code, response.status);
+        throw new ApiError(JSON.stringify(body.detail), code, response.status);
+      }
+      throw new ApiError(`请求失败（${response.status}）`, code, response.status);
     }
-    const body = (await response.json().catch(() => null)) as {
-      code?: unknown;
-      detail?: unknown;
-    } | null;
-    const code = typeof body?.code === "string" && body.code !== "" ? body.code : "request_failed";
-    if (body !== null && Object.prototype.hasOwnProperty.call(body, "detail")) {
-      if (body.detail === null) throw new ApiError("空值", code, response.status);
-      if (typeof body.detail === "string") throw new ApiError(body.detail, code, response.status);
-      throw new ApiError(JSON.stringify(body.detail), code, response.status);
+    if (response.status === 204 || response.headers.get("content-length") === "0") {
+      return undefined as T;
     }
-    throw new ApiError(`请求失败（${response.status}）`, code, response.status);
+    const result = (await response.json()) as T;
+    assertCurrentSession(generation);
+    return result;
+  } catch (error) {
+    // The current request may itself have signalled expiry and changed the generation.
+    if (!(error instanceof SessionExpiredError)) assertCurrentSession(generation);
+    throw error;
   }
-  if (response.status === 204 || response.headers.get("content-length") === "0") {
-    return undefined as T;
-  }
-  return response.json() as Promise<T>;
 }
 
 export type KumaConfig = {
@@ -1782,6 +1879,13 @@ export type KumaTemplate = {
   headers_configured: boolean;
   body_configured: boolean;
   auth_configured: boolean;
+};
+export type KumaTemplateDistributionPreview = {
+  template_id: string;
+  revision: number;
+  config_revision: number;
+  scope: string;
+  items: { monitor_id: number; name: string; template_revision: number; reason: string }[];
 };
 export type KumaTemplateDetail = KumaTemplate & { headers: string; body: string };
 export type KumaTemplateInput = {
@@ -1995,7 +2099,24 @@ export type KumaWriteInput = {
 export type KumaSnapshot = { config: KumaConfig; monitors: KumaMonitor[]; warning: string };
 
 export const api = {
-  workbenchAccounts: () => request<WorkbenchAccount[]>("/api/account-workbench/accounts"),
+  workbenchAccounts: (signal?: AbortSignal) =>
+    request<WorkbenchAccount[]>("/api/account-workbench/accounts", { signal }),
+  workbenchRememberedAccounts: (signal?: AbortSignal) =>
+    request<RememberedAccount[]>("/api/account-workbench/remembered-accounts", { signal }),
+  previewWorkbenchRememberedLogin: (id: string, revision: number, signal?: AbortSignal) =>
+    request<WorkbenchPreview>(
+      `/api/account-workbench/remembered-accounts/${encodeURIComponent(id)}/preview`,
+      {
+        method: "POST",
+        body: JSON.stringify({ revision }),
+        signal,
+      },
+    ),
+  deleteWorkbenchRememberedAccount: (id: string, revision: number) =>
+    request<void>(`/api/account-workbench/remembered-accounts/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+      body: JSON.stringify({ revision }),
+    }),
   workbenchPreview: (input: WorkbenchInput) =>
     request<WorkbenchPreview>("/api/account-workbench/preview", {
       method: "POST",
@@ -2006,8 +2127,10 @@ export const api = {
       method: "POST",
       body: JSON.stringify(input),
     }),
-  workbenchRuns: () => request<WorkbenchRun[]>("/api/account-workbench/runs"),
-  workbenchMaintenance: () => request<WorkbenchMaintenance>("/api/account-workbench/maintenance"),
+  workbenchRuns: (signal?: AbortSignal) =>
+    request<WorkbenchRun[]>("/api/account-workbench/runs", { signal }),
+  workbenchMaintenance: (signal?: AbortSignal) =>
+    request<WorkbenchMaintenance>("/api/account-workbench/maintenance", { signal }),
   previewWorkbenchMaintenance: (input: MaintenanceSettings) =>
     request<MaintenancePreview>("/api/account-workbench/maintenance/preview", {
       method: "POST",
@@ -2023,8 +2146,8 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ revision }),
     }),
-  workbenchRun: (id: string) =>
-    request<WorkbenchRun>(`/api/account-workbench/runs/${encodeURIComponent(id)}`),
+  workbenchRun: (id: string, signal?: AbortSignal) =>
+    request<WorkbenchRun>(`/api/account-workbench/runs/${encodeURIComponent(id)}`, { signal }),
   workbenchRunAction: (
     id: string,
     action: "retry" | "enable" | "cancel" | "delete",
@@ -2048,9 +2171,12 @@ export const api = {
       `/api/account-workbench/runs/${encodeURIComponent(id)}/login-input/${encodeURIComponent(item)}`,
       { method: "POST", body: JSON.stringify(input) },
     ),
-  workbenchTemplates: () => request<TemplateLibrary>("/api/account-workbench/templates"),
-  workbenchTemplateSource: (id: string) =>
-    request<WorkbenchTemplate>(`/api/account-workbench/template-source/${encodeURIComponent(id)}`),
+  workbenchTemplates: (signal?: AbortSignal) =>
+    request<TemplateLibrary>("/api/account-workbench/templates", { signal }),
+  workbenchTemplateSource: (id: string, signal?: AbortSignal) =>
+    request<WorkbenchTemplate>(`/api/account-workbench/template-source/${encodeURIComponent(id)}`, {
+      signal,
+    }),
   saveWorkbenchTemplate: (input: {
     id?: string;
     name: string;
@@ -2078,7 +2204,18 @@ export const api = {
       method: "POST",
       body: JSON.stringify(input),
     }),
-  kumaTemplates: () => request<KumaTemplate[]>("/api/uptime-kuma/templates"),
+  kumaTemplates: (signal?: AbortSignal) =>
+    request<KumaTemplate[]>("/api/uptime-kuma/templates", { signal }),
+  kumaTemplateDistribution: (id: string, revision: number, signal?: AbortSignal) =>
+    request<KumaTemplateDistributionPreview>(
+      `/api/uptime-kuma/templates/${id}/distribution?revision=${revision}`,
+      { signal, cache: "no-store" },
+    ),
+  distributeKumaTemplate: (id: string, input: { revision: number; scope: string }) =>
+    request<Task>(`/api/uptime-kuma/templates/${id}/distribution`, {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
   kumaTemplate: (id: string, signal?: AbortSignal) =>
     request<KumaTemplateDetail>(`/api/uptime-kuma/templates/${id}`, { signal, cache: "no-store" }),
   saveKumaTemplate: (id: string | undefined, input: KumaTemplateInput) =>
@@ -2091,8 +2228,8 @@ export const api = {
       method: "DELETE",
       body: JSON.stringify({ revision }),
     }),
-  kumaResources: (kind: KumaResourceKind) =>
-    request<KumaResourceList>(`/api/uptime-kuma/resources/${kind}`),
+  kumaResources: (kind: KumaResourceKind, signal?: AbortSignal) =>
+    request<KumaResourceList>(`/api/uptime-kuma/resources/${kind}`, { signal }),
   kumaResource: (kind: KumaResourceKind, id: number, signal?: AbortSignal) =>
     request<KumaResource>(`/api/uptime-kuma/resources/${kind}/${id}`, { signal }),
   writeKumaResource: (kind: KumaResourceKind, id: number, input: KumaResourceWrite) =>
@@ -2100,7 +2237,7 @@ export const api = {
       method: "POST",
       body: JSON.stringify(input),
     }),
-  kumaConfig: () => request<KumaConfig>("/api/uptime-kuma/config"),
+  kumaConfig: (signal?: AbortSignal) => request<KumaConfig>("/api/uptime-kuma/config", { signal }),
   saveKumaConfig: (input: KumaConfigInput) =>
     request<Task>("/api/uptime-kuma/config", { method: "PUT", body: JSON.stringify(input) }),
   disconnectKuma: (revision: number) =>
@@ -2108,7 +2245,8 @@ export const api = {
       method: "DELETE",
       body: JSON.stringify({ revision }),
     }),
-  kumaMonitors: () => request<KumaSnapshot>("/api/uptime-kuma/monitors"),
+  kumaMonitors: (signal?: AbortSignal) =>
+    request<KumaSnapshot>("/api/uptime-kuma/monitors", { signal }),
   kumaPushURL: (id: number, revision: string) =>
     request<{ url: string }>(
       `/api/uptime-kuma/monitors/${id}/push-url?revision=${encodeURIComponent(revision)}`,
@@ -2122,7 +2260,7 @@ export const api = {
     apiEndpoint(`/api/accounts/results/events?account_ids=${encodeURIComponent(ids.join(","))}`),
   autoInspectionEventsURL: () => apiEndpoint("/api/inspection/automation/events"),
   taskEventsURL: (id: string) => apiEndpoint(`/api/tasks/${encodeURIComponent(id)}/events`),
-  setupStatus: () => request<SetupStatus>("/api/setup/status"),
+  setupStatus: (signal?: AbortSignal) => request<SetupStatus>("/api/setup/status", { signal }),
   initialize: (
     payload: {
       username: string;
@@ -2143,7 +2281,7 @@ export const api = {
             },
       body: JSON.stringify(payload),
     }),
-  session: () => request<SessionStatus>("/api/auth/session"),
+  session: (signal?: AbortSignal) => request<SessionStatus>("/api/auth/session", { signal }),
   login: (payload: { username: string; password: string }) =>
     request<SessionStatus>("/api/auth/login", {
       method: "POST",
@@ -2155,10 +2293,10 @@ export const api = {
       method: "PUT",
       body: JSON.stringify(payload),
     }),
-  overview: () => request<Overview>("/api/overview"),
-  newAPIWorkspace: (platformId?: string) => {
+  overview: (signal?: AbortSignal) => request<Overview>("/api/overview", { signal }),
+  newAPIWorkspace: (platformId?: string, signal?: AbortSignal) => {
     const query = platformId ? `?platform_id=${encodeURIComponent(platformId)}` : "";
-    return request<NewAPIWorkspace>(`/api/newapi${query}`);
+    return request<NewAPIWorkspace>(`/api/newapi${query}`, { signal });
   },
   saveNewAPIPlatform: (payload: {
     id?: string;
@@ -2175,38 +2313,47 @@ export const api = {
     request<{ deleted: boolean }>(`/api/newapi/platforms/${encodeURIComponent(platformId)}`, {
       method: "DELETE",
     }),
-  refreshNewAPIPlatform: (platformId: string) =>
+  refreshNewAPIPlatform: (platformId: string, signal?: AbortSignal) =>
     request<NewAPIRemoteSnapshot>(
       `/api/newapi/platforms/${encodeURIComponent(platformId)}/refresh`,
-      { method: "POST" },
+      { method: "POST", signal },
     ),
-  managementModelPrices: (platformId: string) =>
+  newAPIRemoteGroups: (platformId: string, signal?: AbortSignal) =>
+    request<{ groups: NewAPIRemoteGroup[] }>(
+      `/api/newapi/platforms/${encodeURIComponent(platformId)}/groups`,
+      { signal },
+    ),
+  managementModelPrices: (platformId: string, signal?: AbortSignal) =>
     request<ModelPriceCatalog>(
       `/api/newapi/platforms/${encodeURIComponent(platformId)}/management-model-prices`,
+      { signal },
     ),
   refreshManagementModelPrices: (platformId: string) =>
     request<ModelPriceCatalog>(
       `/api/newapi/platforms/${encodeURIComponent(platformId)}/management-model-prices/refresh`,
       { method: "POST" },
     ),
-  remoteModelPricingSource: (platformId: string) =>
+  remoteModelPricingSource: (platformId: string, signal?: AbortSignal) =>
     request<RemoteModelPricingSource>(
       `/api/newapi/platforms/${encodeURIComponent(platformId)}/remote-model-prices/raw`,
+      { signal },
     ),
   saveNewAPIGroupBindings: (platformId: string, bindings: NewAPIGroupBindingUpdate[]) =>
     request<NewAPIGroupBinding[]>(
       `/api/newapi/platforms/${encodeURIComponent(platformId)}/group-bindings`,
       { method: "PUT", body: JSON.stringify({ bindings }) },
     ),
-  navigationPreferences: () => request<NavigationPreferences>("/api/preferences/navigation"),
+  navigationPreferences: (signal?: AbortSignal) =>
+    request<NavigationPreferences>("/api/preferences/navigation", { signal }),
   saveNavigationPreferences: (payload: NavigationPreferences) =>
     request<NavigationPreferences>("/api/preferences/navigation", {
       method: "PUT",
       body: JSON.stringify(payload),
     }),
-  newAPIChannelGroups: (platformId: string) =>
+  newAPIChannelGroups: (platformId: string, signal?: AbortSignal) =>
     request<NewAPIChannelGroups>(
       `/api/newapi/platforms/${encodeURIComponent(platformId)}/channel-groups`,
+      { signal },
     ),
   saveNewAPIChannelGroups: (platformId: string, payload: NewAPIChannelGroups) =>
     request<NewAPIChannelGroups>(
@@ -2228,9 +2375,24 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload),
     }),
-  newAPIChannels: (platformId: string, page: number, pageSize = 50, groupId = "") =>
+  newAPIChannelLookup: (platformId: string, ids: string[], signal?: AbortSignal) => {
+    const query = new URLSearchParams();
+    for (const id of ids) query.append("id", id);
+    return request<NewAPIChannelLookup>(
+      `/api/newapi/platforms/${encodeURIComponent(platformId)}/channels/lookup?${query}`,
+      { signal },
+    );
+  },
+  newAPIChannels: (
+    platformId: string,
+    page: number,
+    pageSize = 50,
+    groupId = "",
+    signal?: AbortSignal,
+  ) =>
     request<{ items: NewAPIChannel[]; total: number }>(
       `/api/newapi/platforms/${encodeURIComponent(platformId)}/channels?${new URLSearchParams({ page: String(page), page_size: String(pageSize), ...(groupId ? { group_id: groupId } : {}) })}`,
+      { signal },
     ),
   changeNewAPIChannelModels: (
     platformId: string,
@@ -2263,10 +2425,11 @@ export const api = {
   fetchNewAPIChannelModels: (
     platformId: string,
     payload: { sub2api_group_id: string; key_id: string; base_url: string },
+    signal?: AbortSignal,
   ) =>
     request<{ models: string[] }>(
       `/api/newapi/platforms/${encodeURIComponent(platformId)}/channel-models`,
-      { method: "POST", body: JSON.stringify(payload) },
+      { method: "POST", body: JSON.stringify(payload), signal },
     ),
   availableNewAPIChannelModels: (
     platformId: string,
@@ -2282,21 +2445,26 @@ export const api = {
       `/api/newapi/platforms/${encodeURIComponent(platformId)}/model-prices`,
       { method: "PUT", body: JSON.stringify({ prices }) },
     ),
-  trafficRanking: (filters: {
-    timeRange: "1h" | "6h" | "24h" | "7d" | "30d";
-    group?: string;
-    sortBy: TrafficRankingSort;
-  }) => {
+  trafficRanking: (
+    filters: {
+      timeRange: "1h" | "6h" | "24h" | "7d" | "30d";
+      group?: string;
+      sortBy: TrafficRankingSort;
+    },
+    signal?: AbortSignal,
+  ) => {
     const query = new URLSearchParams({
       time_range: filters.timeRange,
       sort_by: filters.sortBy,
     });
     if (filters.group) query.set("group", filters.group);
-    return request<TrafficRanking>(`/api/traffic/ranking?${query.toString()}`);
+    return request<TrafficRanking>(`/api/traffic/ranking?${query.toString()}`, { signal });
   },
-  config: () => request<RuntimeConfig>("/api/config"),
-  notificationStatus: () => request<NotificationStatus>("/api/notifications/status"),
-  notificationQueue: () => request<NotificationQueueDetails>("/api/notifications/queue"),
+  config: (signal?: AbortSignal) => request<RuntimeConfig>("/api/config", { signal }),
+  notificationStatus: (signal?: AbortSignal) =>
+    request<NotificationStatus>("/api/notifications/status", { signal }),
+  notificationQueue: (signal?: AbortSignal) =>
+    request<NotificationQueueDetails>("/api/notifications/queue", { signal }),
   configureNotification: (payload: {
     app_id: string;
     client_secret: string;
@@ -2351,13 +2519,15 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload),
     }),
-  taskConcurrency: () => request<TaskConcurrencySettings>("/api/config/task-concurrency"),
+  taskConcurrency: (signal?: AbortSignal) =>
+    request<TaskConcurrencySettings>("/api/config/task-concurrency", { signal }),
   updateTaskConcurrency: (payload: TaskConcurrencyUpdate) =>
     request<TaskConcurrencySettings>("/api/config/task-concurrency", {
       method: "PUT",
       body: JSON.stringify(payload),
     }),
-  accountCreationSettings: () => request<AccountCreationSettings>("/api/config/account-settings"),
+  accountCreationSettings: (signal?: AbortSignal) =>
+    request<AccountCreationSettings>("/api/config/account-settings", { signal }),
   updateAccountCreationSettings: (payload: AccountCreationSettings) =>
     request<AccountCreationSettings>("/api/config/account-settings", {
       method: "PUT",
@@ -2377,9 +2547,10 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload),
     }),
-  upstreamAllocationSetting: (kind: UpstreamAllocationTarget, id: string) =>
+  upstreamAllocationSetting: (kind: UpstreamAllocationTarget, id: string, signal?: AbortSignal) =>
     request<UpstreamAllocationSetting>(
       `/api/policy/upstream-concurrency/${kind}/${encodeURIComponent(id)}`,
+      { signal },
     ),
   setUpstreamAllocationSetting: (
     kind: UpstreamAllocationTarget,
@@ -2397,7 +2568,7 @@ export const api = {
         body: JSON.stringify(payload),
       },
     ),
-  policy: () => request<PolicySnapshot>("/api/policy"),
+  policy: (signal?: AbortSignal) => request<PolicySnapshot>("/api/policy", { signal }),
   updatePolicy: (payload: PolicyUpdatePayload) =>
     request<PolicySnapshot>("/api/policy", {
       method: "PUT",
@@ -2415,15 +2586,17 @@ export const api = {
         error?: string;
       }>;
     }>("/api/policy/restore-control", { method: "POST" }),
-  pricing: () => request<PricingSnapshot>("/api/pricing"),
-  pricingChanges: () => request<PricingChangeRecord[]>("/api/pricing/changes"),
+  pricing: (signal?: AbortSignal) => request<PricingSnapshot>("/api/pricing", { signal }),
+  pricingChanges: (signal?: AbortSignal) =>
+    request<PricingChangeRecord[]>("/api/pricing/changes", { signal }),
   updatePricingConfig: (payload: PricingConfig) =>
     request<PricingSnapshot>("/api/pricing/config", {
       method: "PUT",
       body: JSON.stringify(payload),
     }),
   applyPricing: () => request<Task>("/api/pricing/apply", { method: "POST" }),
-  pricingBackups: () => request<PricingBackup[]>("/api/pricing/backups"),
+  pricingBackups: (signal?: AbortSignal) =>
+    request<PricingBackup[]>("/api/pricing/backups", { signal }),
   createPricingBackup: (name: string) =>
     request<PricingBackup>("/api/pricing/backups", {
       method: "POST",
@@ -2443,20 +2616,21 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ date }),
     }),
-  latestRevenue: () => request<Task | null>("/api/pricing/revenue/latest"),
+  latestRevenue: (signal?: AbortSignal) =>
+    request<Task | null>("/api/pricing/revenue/latest", { signal }),
   setAccountGroupsLocked: (id: string, enabled: boolean) =>
     request<{ groups_locked: boolean }>(`/api/accounts/${encodeURIComponent(id)}/group-lock`, {
       method: "PUT",
       body: JSON.stringify({ groups_locked: enabled }),
     }),
-  accountGroups: (id: string) =>
-    request<AccountGroupsPreview>(`/api/accounts/${encodeURIComponent(id)}/groups`),
+  accountGroups: (id: string, signal?: AbortSignal) =>
+    request<AccountGroupsPreview>(`/api/accounts/${encodeURIComponent(id)}/groups`, { signal }),
   updateAccountGroups: (id: string, input: AccountGroupsInput) =>
     request<Task>(`/api/accounts/${encodeURIComponent(id)}/groups`, {
       method: "PUT",
       body: JSON.stringify(input),
     }),
-  groups: () => request<GroupStatus[]>("/api/groups"),
+  groups: (signal?: AbortSignal) => request<GroupStatus[]>("/api/groups", { signal }),
   dictionaries: (kind: DictionaryKind) =>
     request<{ items: DictionaryEntry[] }>(`/api/dictionaries?kind=${encodeURIComponent(kind)}`),
   reorderDictionaries: (kind: DictionaryKind, ids: string[]) =>
@@ -2478,7 +2652,12 @@ export const api = {
       method: "PUT",
       body: JSON.stringify({ excluded }),
     }),
-  upstreams: () => request<UpstreamSummary>("/api/upstreams"),
+  batchGroupPolicy: (groupIds: string[], action: "reset" | "exclude" | "include") =>
+    request<{ updated: number }>("/api/groups/batch-policy", {
+      method: "POST",
+      body: JSON.stringify({ group_ids: groupIds, action }),
+    }),
+  upstreams: (signal?: AbortSignal) => request<UpstreamSummary>("/api/upstreams", { signal }),
   cleanupUpstreamBinding: (host: string, bindingId: number, payload: UpstreamBindingCleanup) =>
     request<{ binding_id: number }>(
       `/api/upstreams/${encodeURIComponent(host)}/bindings/${bindingId}/cleanup`,
@@ -2487,8 +2666,10 @@ export const api = {
         body: JSON.stringify(payload),
       },
     ),
-  upstreamConfiguration: (host: string) =>
-    request<UpstreamConfiguration>(`/api/upstreams/${encodeURIComponent(host)}/configuration`),
+  upstreamConfiguration: (host: string, signal?: AbortSignal) =>
+    request<UpstreamConfiguration>(`/api/upstreams/${encodeURIComponent(host)}/configuration`, {
+      signal,
+    }),
   detectUpstream: (baseUrl: string) =>
     request<UpstreamDetection>("/api/upstreams/detect", {
       method: "POST",
@@ -2508,14 +2689,14 @@ export const api = {
     request<UpstreamGroup[]>(
       `/api/upstreams/${encodeURIComponent(host)}/groups?include_bound=${includeBound ? "true" : "false"}`,
     ),
-  upstreamGroupBindingAudit: () =>
-    request<UpstreamGroupBindingAudit>("/api/upstreams/group-bindings/audit"),
+  upstreamGroupBindingAudit: (signal?: AbortSignal) =>
+    request<UpstreamGroupBindingAudit>("/api/upstreams/group-bindings/audit", { signal }),
   upstreamGroupHistory: (host: string) =>
     request<UpstreamGroupChange[]>(
       `/api/upstreams/${encodeURIComponent(host)}/group-history?limit=200`,
     ),
-  allUpstreamGroupHistory: () =>
-    request<UpstreamGroupChange[]>("/api/upstreams/group-history?limit=500"),
+  allUpstreamGroupHistory: (signal?: AbortSignal) =>
+    request<UpstreamGroupChange[]>("/api/upstreams/group-history?limit=500", { signal }),
   clearOneUpstreamGroupHistory: (upstreamID: string) =>
     request<{ deleted: number }>(`/api/upstreams/group-history/${encodeURIComponent(upstreamID)}`, {
       method: "DELETE",
@@ -2532,11 +2713,58 @@ export const api = {
         expected_account_ids: expectedAccountIds,
       }),
     }),
-  accounts: () => request<AccountStatus[]>("/api/accounts"),
-  groupAllocation: (groupId: string) =>
-    request<GroupAllocation>(`/api/groups/${encodeURIComponent(groupId)}/allocation`),
-  groupProbeModels: (groupId: string) =>
-    request<GroupProbeModels>(`/api/groups/${encodeURIComponent(groupId)}/models`),
+  accounts: (signal?: AbortSignal) => request<AccountStatus[]>("/api/accounts", { signal }),
+  enqueueAccountModelAutomation: (payload: AccountModelAutomationTaskRequest) =>
+    request<Task>("/api/management/accounts/models/automation", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  accountModelAutomationSchedules: (signal?: AbortSignal) =>
+    request<AccountModelAutomationSchedule[]>(
+      "/api/management/accounts/models/automation/schedules",
+      { signal },
+    ),
+  saveAccountModelAutomationSchedule: (payload: AccountModelAutomationScheduleInput) =>
+    request<AccountModelAutomationSchedule>(
+      "/api/management/accounts/models/automation/schedules",
+      { method: "PUT", body: JSON.stringify(payload) },
+    ),
+  deleteAccountModelAutomationSchedule: (id: string) =>
+    request<{ deleted: boolean }>(
+      `/api/management/accounts/models/automation/schedules/${encodeURIComponent(id)}`,
+      { method: "DELETE" },
+    ),
+  runAccountModelAutomationSchedule: (id: string) =>
+    request<Task>(
+      `/api/management/accounts/models/automation/schedules/${encodeURIComponent(id)}/run`,
+      { method: "POST" },
+    ),
+  accountModelAutomationTaskGroups: (signal?: AbortSignal) =>
+    request<AccountModelAutomationTaskGroup[]>(
+      "/api/management/accounts/models/automation/groups",
+      {
+        signal,
+      },
+    ),
+  saveAccountModelAutomationTaskGroup: (payload: AccountModelAutomationTaskGroupInput) =>
+    request<AccountModelAutomationTaskGroup>("/api/management/accounts/models/automation/groups", {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    }),
+  deleteAccountModelAutomationTaskGroup: (id: string) =>
+    request<{ deleted: boolean }>(
+      `/api/management/accounts/models/automation/groups/${encodeURIComponent(id)}`,
+      { method: "DELETE" },
+    ),
+  runAccountModelAutomationTaskGroup: (id: string) =>
+    request<Task>(
+      `/api/management/accounts/models/automation/groups/${encodeURIComponent(id)}/run`,
+      { method: "POST" },
+    ),
+  groupAllocation: (groupId: string, signal?: AbortSignal) =>
+    request<GroupAllocation>(`/api/groups/${encodeURIComponent(groupId)}/allocation`, { signal }),
+  groupProbeModels: (groupId: string, signal?: AbortSignal) =>
+    request<GroupProbeModels>(`/api/groups/${encodeURIComponent(groupId)}/models`, { signal }),
   syncManagement: () => request<Task>("/api/management/sync", { method: "POST" }),
   syncAccountRates: (accountIds: string[]) =>
     request<Task>("/api/management/accounts/rates/sync", {
@@ -2581,12 +2809,19 @@ export const api = {
   syncUpstreamBalances: () => request<Task>("/api/upstreams/balances/sync", { method: "POST" }),
   repairUpstreamNames: () => request<Task>("/api/upstreams/names/repair", { method: "POST" }),
   syncUpstreamGroups: () => request<Task>("/api/upstreams/groups/sync", { method: "POST" }),
-  account: (accountId: string) =>
-    request<AccountDetail>(`/api/accounts/${encodeURIComponent(accountId)}`),
-  accountDeletePreview: (accountId: string) =>
-    request<AccountDeletePreview>(`/api/accounts/${encodeURIComponent(accountId)}/delete-preview`),
-  accountDeleteBatchPreview: (accountIds: string[]) =>
+  accountControlState: (accountId: string, signal?: AbortSignal) =>
+    request<AccountControlState>(`/api/accounts/${encodeURIComponent(accountId)}/control-state`, {
+      signal,
+    }),
+  account: (accountId: string, signal?: AbortSignal) =>
+    request<AccountDetail>(`/api/accounts/${encodeURIComponent(accountId)}`, { signal }),
+  accountDeletePreview: (accountId: string, signal?: AbortSignal) =>
+    request<AccountDeletePreview>(`/api/accounts/${encodeURIComponent(accountId)}/delete-preview`, {
+      signal,
+    }),
+  accountDeleteBatchPreview: (accountIds: string[], signal?: AbortSignal) =>
     request<AccountDeleteBatchPreview>("/api/accounts/delete-preview", {
+      signal,
       method: "POST",
       body: JSON.stringify({ account_ids: accountIds }),
     }),
@@ -2623,15 +2858,18 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ action }),
     }),
-  accountModels: (accountId: string) =>
-    request<{ models: string[] }>(`/api/accounts/${encodeURIComponent(accountId)}/models`),
+  accountModels: (accountId: string, signal?: AbortSignal) =>
+    request<{ models: string[] }>(`/api/accounts/${encodeURIComponent(accountId)}/models`, {
+      signal,
+    }),
   discoverAccountModels: (accountIds: string[]) =>
     request<Task>("/api/management/accounts/models/discover", {
       method: "POST",
       body: JSON.stringify({ account_ids: accountIds }),
     }),
-  previewAccountModels: (accountIds: string[]) =>
+  previewAccountModels: (accountIds: string[], signal?: AbortSignal) =>
     request<AccountModelSyncPreview>("/api/management/accounts/models/preview", {
+      signal,
       method: "POST",
       body: JSON.stringify({ account_ids: accountIds }),
     }),
@@ -2648,8 +2886,16 @@ export const api = {
         catalog_fingerprint: catalogFingerprint,
       }),
     }),
-  accountModelSyncSettings: () => request<AccountModelSyncSettings>("/api/config/model-sync"),
-  updateAccountModelSyncSettings: (payload: AccountModelSyncSettings) =>
+  accountModelSyncSettings: (signal?: AbortSignal) =>
+    request<AccountModelSyncSettings>("/api/config/model-sync", { signal }),
+  addAccountModelBlock: (model: string) =>
+    request<AccountModelSyncSettings>("/api/config/model-sync/blocked-models", {
+      method: "POST",
+      body: JSON.stringify({ model }),
+    }),
+  updateAccountModelSyncSettings: (
+    payload: AccountModelSyncSettings & { expected_patterns: string[] },
+  ) =>
     request<AccountModelSyncSettings>("/api/config/model-sync", {
       method: "PUT",
       body: JSON.stringify(payload),
@@ -2721,17 +2967,20 @@ export const api = {
     request<Task>(`/api/accounts/${encodeURIComponent(accountId)}/manual-priority`, {
       method: "DELETE",
     }),
-  recentEvents: () => request<RunEvent[]>("/api/events?limit=8"),
-  logs: (params: {
-    kind: UnifiedLogKind;
-    state: UnifiedLogState;
-    level: UnifiedLogEventLevel;
-    group: string;
-    groupId: string;
-    search: string;
-    page: number;
-    pageSize: number;
-  }) => {
+  recentEvents: (signal?: AbortSignal) => request<RunEvent[]>("/api/events?limit=8", { signal }),
+  logs: (
+    params: {
+      kind: UnifiedLogKind;
+      state: UnifiedLogState;
+      level: UnifiedLogEventLevel;
+      group: string;
+      groupId: string;
+      search: string;
+      page: number;
+      pageSize: number;
+    },
+    signal?: AbortSignal,
+  ) => {
     const query = new URLSearchParams({
       kind: params.kind,
       state: params.state,
@@ -2742,16 +2991,17 @@ export const api = {
       page: String(params.page),
       page_size: String(params.pageSize),
     });
-    return request<UnifiedLogPage>(`/api/logs?${query.toString()}`);
+    return request<UnifiedLogPage>(`/api/logs?${query.toString()}`, { signal });
   },
-  logCleanupStatus: () => request<LogCleanupStatus>("/api/config/log-cleanup"),
+  logCleanupStatus: (signal?: AbortSignal) =>
+    request<LogCleanupStatus>("/api/config/log-cleanup", { signal }),
   updateLogCleanup: (payload: { enabled: boolean; retention_days: number }) =>
     request<LogCleanupStatus>("/api/config/log-cleanup", {
       method: "PUT",
       body: JSON.stringify(payload),
     }),
   clearLogs: (retentionDays: number) =>
-    request<LogCleanupResult>(`/api/logs?retention_days=${retentionDays}`, {
+    request<Task>(`/api/logs?retention_days=${retentionDays}`, {
       method: "DELETE",
     }),
   runInspection: (payload?: { account_id?: string; group_name?: string }) =>
@@ -2759,7 +3009,8 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload ?? {}),
     }),
-  autoInspection: () => request<AutoInspectionStatus>("/api/inspection/automation"),
+  autoInspection: (signal?: AbortSignal) =>
+    request<AutoInspectionStatus>("/api/inspection/automation", { signal }),
   updateAutoInspection: (payload: AutoInspectionConfig) =>
     request<AutoInspectionStatus>("/api/inspection/automation", {
       method: "PUT",
@@ -2789,7 +3040,16 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload ?? {}),
     }),
-  animationHistory: () => request<Task[]>("/api/model-checks/animations"),
+  animationHistory: (signal?: AbortSignal) =>
+    request<Task[]>("/api/model-checks/animations", { signal }),
+  setAnimationManualVerdict: (
+    taskId: string,
+    payload: { account_id: string; request_id: string; verdict: AnimationManualVerdict["verdict"] },
+  ) =>
+    request<Task>(`/api/model-checks/animations/${encodeURIComponent(taskId)}/manual-verdict`, {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    }),
   accountAnimationModels: (accountId: string, signal?: AbortSignal) =>
     request<{ models: string[] }>(
       `/api/model-checks/animations/accounts/${encodeURIComponent(accountId)}/models`,
@@ -2806,8 +3066,8 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload),
     }),
-  terminalContinuityHistory: () => request<Task[]>("/api/model-checks/terminal-continuity"),
-  detectionTasks: () => request<DetectionTask[]>("/api/model-checks/detection-tasks"),
+  detectionTasks: (signal?: AbortSignal) =>
+    request<DetectionTask[]>("/api/model-checks/detection-tasks", { signal }),
   saveDetectionTask: (value: DetectionTask) =>
     request<DetectionTask[]>("/api/model-checks/detection-tasks", {
       method: "PUT",
@@ -2823,12 +3083,15 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ version }),
     }),
-  runTerminalContinuity: (payload: TerminalContinuityRequest) =>
-    request<Task>("/api/model-checks/terminal-continuity", {
-      method: "POST",
+  animationPrompt: (signal?: AbortSignal) =>
+    request<{ prompt: string; version: number }>("/api/model-checks/animation-prompt", { signal }),
+  saveAnimationPrompt: (payload: { prompt: string; version: number }) =>
+    request<{ prompt: string; version: number }>("/api/model-checks/animation-prompt", {
+      method: "PUT",
       body: JSON.stringify(payload),
     }),
-  animationSchedules: () => request<AnimationSchedule[]>("/api/model-checks/animation-schedules"),
+  animationSchedules: (signal?: AbortSignal) =>
+    request<AnimationSchedule[]>("/api/model-checks/animation-schedules", { signal }),
   saveAnimationSchedules: (schedules: AnimationSchedule[]) =>
     request<AnimationSchedule[]>("/api/model-checks/animation-schedules", {
       method: "PUT",
@@ -2842,11 +3105,12 @@ export const api = {
         body: JSON.stringify(payload),
       },
     ),
-  modelCheckCapabilities: () => request<ModelCheckCapabilities>("/api/model-checks/capabilities"),
-  modelCheckAccountStatuses: () =>
-    request<ModelCheckAccountStatus[]>("/api/model-checks/account-statuses"),
-  modelCheckConfiguration: () =>
-    request<ModelCheckConfiguration>("/api/model-checks/configuration"),
+  modelCheckCapabilities: (signal?: AbortSignal) =>
+    request<ModelCheckCapabilities>("/api/model-checks/capabilities", { signal }),
+  modelCheckAccountStatuses: (signal?: AbortSignal) =>
+    request<ModelCheckAccountStatus[]>("/api/model-checks/account-statuses", { signal }),
+  modelCheckConfiguration: (signal?: AbortSignal) =>
+    request<ModelCheckConfiguration>("/api/model-checks/configuration", { signal }),
   saveModelCheckDraft: (payload: {
     expected_fingerprint: string;
     note: string;
@@ -2880,7 +3144,8 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload),
     }),
-  authRecoveryConfig: () => request<PrivateAuthConfigStatus>("/api/auth-recovery/config"),
+  authRecoveryConfig: (signal?: AbortSignal) =>
+    request<PrivateAuthConfigStatus>("/api/auth-recovery/config", { signal }),
   verifyManualAuth: (payload: {
     host: string;
     auth_mode?: string;
@@ -2959,28 +3224,30 @@ export const api = {
   runUpstreamSync: () => request<Task>("/api/upstreams/sync", { method: "POST" }),
   requestTrace: (requestId: string) =>
     request<RequestTrace>(`/api/usage/trace/${encodeURIComponent(requestId)}`),
-  systemLogs: (params: SystemLogSearchQuery) => {
+  systemLogs: (params: SystemLogSearchQuery, signal?: AbortSignal) => {
     const query = new URLSearchParams({
       request_id: params.requestId,
       page: String(params.page),
       page_size: String(params.pageSize),
     });
-    return request<SystemLogPage>(`/api/ops/system-logs?${query.toString()}`);
+    return request<SystemLogPage>(`/api/ops/system-logs?${query.toString()}`, { signal });
   },
   // Keep the alert view bounded; an unbounded incident table can block the
   // browser when a long-running instance has accumulated a large history.
-  alerts: () => request<AlertIncident[]>("/api/alerts?limit=200"),
+  alerts: (signal?: AbortSignal) => request<AlertIncident[]>("/api/alerts?limit=200", { signal }),
   clearAlerts: () => request<{ deleted: number }>("/api/alerts", { method: "DELETE" }),
-  alertPolicy: () => request<AlertPolicy>("/api/alerts/policy"),
+  alertPolicy: (signal?: AbortSignal) => request<AlertPolicy>("/api/alerts/policy", { signal }),
   updateAlertPolicy: (payload: AlertPolicy) =>
     request<AlertPolicy>("/api/alerts/policy", {
       method: "PUT",
       body: JSON.stringify(payload),
     }),
   evaluateAlerts: () => request<Task>("/api/alerts/evaluate", { method: "POST" }),
-  systemMetrics: () => request<SystemMetrics>("/api/system/metrics"),
-  tasks: (limit = 20) => request<TaskSummary[]>(`/api/tasks?limit=${limit}`),
-  task: (id: string) => request<Task>(`/api/tasks/${id}`),
+  systemMetrics: (signal?: AbortSignal) =>
+    request<SystemMetrics>("/api/system/metrics", { signal }),
+  tasks: (limit = 20, signal?: AbortSignal) =>
+    request<TaskSummary[]>(`/api/tasks?limit=${limit}`, { signal }),
+  task: (id: string, signal?: AbortSignal) => request<Task>(`/api/tasks/${id}`, { signal }),
   cancelTask: (id: string) =>
     request<{ cancelled: boolean }>(`/api/tasks/${encodeURIComponent(id)}`, {
       method: "DELETE",

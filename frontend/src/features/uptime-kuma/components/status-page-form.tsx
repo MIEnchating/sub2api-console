@@ -1,7 +1,7 @@
 import { Controller, useFieldArray, type UseFormReturn } from "react-hook-form";
 import { ArrowUp, ArrowDown, CirclePlus, Trash2 } from "lucide-react";
 import { SortableList, SortableItem } from "@/components/sortable-list";
-import { FormField } from "@/App";
+import { FormField } from "@/components/form-field";
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader, CardTitle, CardAction, CardContent } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/textarea";

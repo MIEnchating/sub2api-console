@@ -220,7 +220,7 @@ describe("automatic inspection log details", () => {
     expect(markup).not.toContain("disk_evaluation");
   });
 
-  it("collapses and paginates large routing record maps", () => {
+  it("renders only the summary for initially collapsed large routing record maps", () => {
     const accountTargets = Object.fromEntries(
       Array.from({ length: 12 }, (_, index) => [
         String(index + 1),
@@ -240,7 +240,7 @@ describe("automatic inspection log details", () => {
     expect(markup).toContain("<details");
     expect(markup).toContain("调度目标");
     expect(markup).toContain("12 项");
-    expect(markup).toContain('data-slot="log-result-items"');
+    expect(markup).not.toContain('data-slot="log-result-items"');
     expect(markup).not.toContain("第 11 项");
   });
 

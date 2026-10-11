@@ -77,7 +77,9 @@ describe("模型价格远程同步", () => {
     });
     fireEvent.click(syncButton);
 
-    await waitFor(() => expect(managementPrices).toHaveBeenCalledWith("primary"));
+    await waitFor(() =>
+      expect(managementPrices).toHaveBeenCalledWith("primary", expect.any(AbortSignal)),
+    );
     await waitFor(() =>
       expect(savePrice).toHaveBeenCalledWith("primary", [
         {

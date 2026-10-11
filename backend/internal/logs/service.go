@@ -16,10 +16,11 @@ import (
 )
 
 const (
-	sourceLimit     = 5000
-	cacheFreshness  = 10 * time.Second
-	refreshTimeout  = 30 * time.Second
-	maximumCacheAge = 5 * time.Minute
+	sourceLimit          = 5000
+	cacheFreshness       = 10 * time.Second
+	refreshTimeout       = 30 * time.Second
+	maximumCacheAge      = 5 * time.Minute
+	maximumCachedFilters = 8
 )
 
 type BusinessReader interface {
@@ -73,14 +74,27 @@ type Service struct {
 	tasks    TaskReader
 	runner   taskrunner.Runner
 
-	mu      sync.Mutex
-	cache   map[Query]cachedPage
-	loading map[Query]chan struct{}
+	mu          sync.Mutex
+	cache       map[Query]cachedPage
+	loading     map[Query]*logLoad
+	cacheClock  uint64
+	generation  uint64
+	cacheWeight int64
+	loadSlots   chan struct{}
 }
 
 type cachedPage struct {
 	page     Page
 	loadedAt time.Time
+	lastUsed uint64
+	weight   int64
+}
+
+type logLoad struct {
+	done       chan struct{}
+	page       Page
+	err        error
+	generation uint64
 }
 
 type logSnapshot struct {
@@ -94,14 +108,25 @@ type logSnapshot struct {
 
 func New(businessReader BusinessReader, taskReader TaskReader) *Service {
 	return &Service{
-		business: businessReader,
-		tasks:    taskReader,
-		cache:    map[Query]cachedPage{},
-		loading:  map[Query]chan struct{}{},
+		business:  businessReader,
+		tasks:     taskReader,
+		cache:     map[Query]cachedPage{},
+		loading:   map[Query]*logLoad{},
+		loadSlots: make(chan struct{}, maximumColdLoads),
 	}
 }
 
 func (s *Service) UseTaskRunner(runner taskrunner.Runner) { s.runner = runner }
+
+// Invalidate also prevents reads started before a cleanup from repopulating the
+// cache with deleted records. Existing readers retry after their load finishes.
+func (s *Service) Invalidate() {
+	s.mu.Lock()
+	clear(s.cache)
+	s.cacheWeight = 0
+	s.generation++
+	s.mu.Unlock()
+}
 
 func (s *Service) Query(ctx context.Context, query Query) (Page, error) {
 	if _, ok := map[string]struct{}{"all": {}, "task": {}, "event": {}, "change": {}}[query.Kind]; !ok {
@@ -119,7 +144,15 @@ func (s *Service) Query(ctx context.Context, query Query) (Page, error) {
 	if query.Page < 1 || query.PageSize < 1 || query.PageSize > 200 {
 		return Page{}, errors.New("page 必须大于 0，page_size 必须在 1 到 200 之间")
 	}
-	return s.currentPage(ctx, query, strings.TrimSpace(query.Search) == "")
+	key := query
+	key.Page, key.PageSize = 0, 0
+	key.Search = strings.TrimSpace(key.Search)
+	key.Group, key.GroupID = strings.TrimSpace(key.Group), strings.TrimSpace(key.GroupID)
+	records, err := s.currentPage(ctx, key, key.Search == "")
+	if err != nil {
+		return Page{}, err
+	}
+	return paginateRecords(query, records), nil
 }
 
 func pageFromSnapshot(query Query, snapshot *logSnapshot) Page {
@@ -178,41 +211,60 @@ func pageFromSnapshot(query Query, snapshot *logSnapshot) Page {
 		}
 		return left.After(right)
 	})
-	total := len(filtered)
-	start := total
-	if query.Page-1 <= total/query.PageSize {
-		start = (query.Page - 1) * query.PageSize
-	}
-	end := start + query.PageSize
-	if end > total {
-		end = total
-	}
 	return Page{
-		Items: filtered[start:end], Total: total, Page: query.Page, PageSize: query.PageSize,
+		Items: filtered, Total: len(filtered),
 		Counts:    map[string]int{"task": len(taskEntries), "event": len(eventEntries), "change": len(changeEntries)},
 		Truncated: snapshot.truncated,
 	}
 }
 
+func paginateRecords(query Query, records Page) Page {
+	start := records.Total
+	if query.Page-1 <= records.Total/query.PageSize {
+		start = (query.Page - 1) * query.PageSize
+	}
+	end := start + query.PageSize
+	if end > records.Total {
+		end = records.Total
+	}
+	// A consumer holding one page must not retain the full cached backing array.
+	items := make([]Entry, end-start)
+	copy(items, records.Items[start:end])
+	records.Items, records.Page, records.PageSize = items, query.Page, query.PageSize
+	return records
+}
+
 func (s *Service) currentPage(ctx context.Context, query Query, allowStale bool) (Page, error) {
 	for {
 		s.mu.Lock()
+		now := time.Now()
+		for key, value := range s.cache {
+			if now.Sub(value.loadedAt) >= maximumCacheAge {
+				s.removeCached(key)
+			}
+		}
 		current, exists := s.cache[query]
-		fresh := exists && time.Since(current.loadedAt) < cacheFreshness
+		if exists {
+			s.cacheClock++
+			current.lastUsed = s.cacheClock
+			s.cache[query] = current
+		}
+		fresh := exists && now.Sub(current.loadedAt) < cacheFreshness
 		if fresh {
 			s.mu.Unlock()
 			return current.page, nil
 		}
 		if exists && allowStale {
 			launch := false
+			generation := s.generation
 			if s.loading[query] == nil {
-				s.loading[query] = make(chan struct{})
+				s.loading[query] = &logLoad{done: make(chan struct{}), generation: generation}
 				launch = true
 			}
 			s.mu.Unlock()
 			if launch {
-				if err := taskrunner.Go(s.runner, func(parent context.Context) { s.refreshPage(parent, query) }); err != nil {
-					s.finishRefresh(query, Page{}, err)
+				if err := taskrunner.Go(s.runner, func(parent context.Context) { s.refreshPage(parent, query, generation) }); err != nil {
+					s.finishRefresh(query, Page{}, 0, err, generation)
 				}
 			}
 			return current.page, nil
@@ -222,57 +274,97 @@ func (s *Service) currentPage(ctx context.Context, query Query, allowStale bool)
 			select {
 			case <-ctx.Done():
 				return Page{}, ctx.Err()
-			case <-loading:
+			case <-loading.done:
+			}
+			if err := ctx.Err(); err != nil {
+				return Page{}, err
+			}
+			s.mu.Lock()
+			valid := loading.generation == s.generation
+			s.mu.Unlock()
+			if valid && loading.err == nil {
+				return loading.page, nil
 			}
 			continue
 		}
-		s.loading[query] = make(chan struct{})
+		generation := s.generation
+		s.loading[query] = &logLoad{done: make(chan struct{}), generation: generation}
 		s.mu.Unlock()
 
-		loaded, err := s.loadPage(ctx, query)
-		s.finishRefresh(query, loaded, err)
+		loaded, weight, err := s.loadPage(ctx, query)
+		valid := s.finishRefresh(query, loaded, weight, err, generation)
 		if err != nil {
 			return Page{}, err
+		}
+		if !valid {
+			continue
 		}
 		return loaded, nil
 	}
 }
 
-func (s *Service) refreshPage(parent context.Context, query Query) {
+func (s *Service) refreshPage(parent context.Context, query Query, generation uint64) {
 	ctx, cancel := context.WithTimeout(parent, refreshTimeout)
 	defer cancel()
-	loaded, err := s.loadPage(ctx, query)
-	s.finishRefresh(query, loaded, err)
+	loaded, weight, err := s.loadPage(ctx, query)
+	s.finishRefresh(query, loaded, weight, err, generation)
 }
 
-func (s *Service) finishRefresh(query Query, loaded Page, err error) {
+func (s *Service) finishRefresh(query Query, loaded Page, weight int64, err error, generation uint64) bool {
 	s.mu.Lock()
-	if err == nil {
+	current := generation == s.generation
+	if err == nil && current {
 		now := time.Now()
-		s.cache[query] = cachedPage{page: loaded, loadedAt: now}
+		s.cacheClock++
+		s.removeCached(query)
+		if weight <= maximumCacheWeight {
+			s.cache[query] = cachedPage{page: loaded, loadedAt: now, lastUsed: s.cacheClock, weight: weight}
+			s.cacheWeight += weight
+		}
 		for key, value := range s.cache {
 			if now.Sub(value.loadedAt) > maximumCacheAge {
-				delete(s.cache, key)
+				s.removeCached(key)
 			}
+		}
+		for len(s.cache) > maximumCachedFilters || s.cacheWeight > maximumCacheWeight {
+			var oldest Query
+			var oldestUse uint64 = ^uint64(0)
+			for key, value := range s.cache {
+				if value.lastUsed < oldestUse {
+					oldest, oldestUse = key, value.lastUsed
+				}
+			}
+			s.removeCached(oldest)
 		}
 	}
 	loading := s.loading[query]
 	delete(s.loading, query)
 	if loading != nil {
-		close(loading)
+		loading.page, loading.err = loaded, err
+		close(loading.done)
 	}
 	s.mu.Unlock()
+	return current
 }
 
-func (s *Service) loadPage(ctx context.Context, query Query) (Page, error) {
+func (s *Service) loadPage(ctx context.Context, query Query) (Page, int64, error) {
+	select {
+	case <-ctx.Done():
+		return Page{}, 0, ctx.Err()
+	case s.loadSlots <- struct{}{}:
+	}
+	defer func() { <-s.loadSlots }()
+	if err := ctx.Err(); err != nil {
+		return Page{}, 0, err
+	}
 	search := strings.TrimSpace(query.Search)
 	useSummaries := search == ""
 	snapshot, err := s.loadSnapshot(ctx, useSummaries, search)
 	if err != nil {
-		return Page{}, err
+		return Page{}, 0, err
 	}
 	page := pageFromSnapshot(query, snapshot)
-	return page, nil
+	return page, logCacheWeight(query, page), nil
 }
 
 func (s *Service) loadSnapshot(ctx context.Context, useTaskSummaries bool, taskSearch string) (*logSnapshot, error) {

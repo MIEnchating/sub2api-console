@@ -20,12 +20,12 @@ func (r targetRepository) TargetSettings(context.Context) (configstore.TargetSet
 
 type accountRepository struct{}
 
-func (accountRepository) Accounts(context.Context) ([]business.AccountStatus, error) {
-	return nil, nil
-}
-
-func (accountRepository) Account(_ context.Context, id string) (*business.AccountDetail, error) {
-	return &business.AccountDetail{AccountStatus: business.AccountStatus{ID: id, Name: "账号 " + id}}, nil
+func (accountRepository) AccountLogLabels(_ context.Context, ids []string) (map[string]*business.AccountLogLabel, error) {
+	labels := make(map[string]*business.AccountLogLabel, len(ids))
+	for _, id := range ids {
+		labels[id] = &business.AccountLogLabel{Name: "账号 " + id}
+	}
+	return labels, nil
 }
 
 func TestRequestTraceWithMultipleAccountsKeepsEachRecordAccountName(t *testing.T) {

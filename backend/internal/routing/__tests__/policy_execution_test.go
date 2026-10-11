@@ -8,6 +8,7 @@ import (
 )
 
 func TestSavedDegradationPolicyAtSupportedMaximumStillCalculatesTargets(t *testing.T) {
+	t.Parallel()
 	for _, field := range []string{"priority_step", "min_load_factor"} {
 		t.Run(field, func(t *testing.T) {
 			store, db := controlScopeStore(t)
@@ -36,6 +37,7 @@ func TestSavedDegradationPolicyAtSupportedMaximumStillCalculatesTargets(t *testi
 }
 
 func TestBalancedPolicyWithZeroPriceShareCanBeSavedAndExecuted(t *testing.T) {
+	t.Parallel()
 	store, db := controlScopeStore(t)
 	_, err := db.Exec(`INSERT INTO accounts(id,name,multiplier,schedulable,metadata_json,updated_at)
 		VALUES('41','free','0',1,'{}','now'),('42','paid','1',1,'{}','now');
@@ -65,6 +67,7 @@ func TestBalancedPolicyWithZeroPriceShareCanBeSavedAndExecuted(t *testing.T) {
 }
 
 func TestBalancedPolicyWithOutOfRangePriceSharePreservesPreviousPolicy(t *testing.T) {
+	t.Parallel()
 	for _, share := range []float64{-0.1, 1.1} {
 		t.Run(fmt.Sprint(share), func(t *testing.T) {
 			store, _ := controlScopeStore(t)
