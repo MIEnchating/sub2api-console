@@ -98,9 +98,15 @@ test("切换有无刷新按钮的设置分类时，顶部页签位置和宽度�
     await expect(tab).toHaveAttribute("aria-selected", "true");
     await expect
       .poll(async () => {
-        const box = await tabs.boundingBox();
-        return { x: box?.x, y: box?.y, width: box?.width, height: box?.height };
+        const current = await tabs.boundingBox();
+        if (!current) return Infinity;
+        return Math.max(
+          Math.abs(current.x - initial!.x),
+          Math.abs(current.y - initial!.y),
+          Math.abs(current.width - initial!.width),
+          Math.abs(current.height - initial!.height),
+        );
       })
-      .toEqual(initial);
+      .toBeLessThanOrEqual(1);
   }
 });

@@ -87,8 +87,11 @@ for (const narrow of [false, true]) {
     await pageSize.press("Enter");
     await expect(pageSize).toHaveAttribute("aria-expanded", "true");
     await expect(page.getByRole("option", { name: "10", exact: true })).toBeVisible();
+    const firstPageSizeOption = page.getByRole("option", { name: "10", exact: true });
+    await expect(page.getByRole("option", { name: "20", exact: true })).toBeFocused();
     await page.keyboard.press("Home");
-    await page.keyboard.press("Enter");
+    await expect(firstPageSizeOption).toBeFocused();
+    await firstPageSizeOption.press("Enter");
     await expect(pageSize).toHaveAttribute("aria-expanded", "false");
     await expect(pageSize).toBeFocused();
     await expect(table.getByRole("row")).toHaveCount(11);
