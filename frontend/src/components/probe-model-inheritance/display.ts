@@ -1,4 +1,4 @@
-import type { GroupStatus } from "@/api";
+import type { GroupConfiguration } from "@/api";
 
 /** 只展示模型配置的来源，实际探活与跳过判定仍由后端执行。 */
 export function probeFallbackLabel(metadata?: Record<string, unknown>): string {
@@ -21,7 +21,7 @@ export function probeFallbackLabel(metadata?: Record<string, unknown>): string {
 export function inheritedProbeDescription(
   globalModel: string | null,
   fallback: string,
-  group?: GroupStatus,
+  group?: GroupConfiguration,
 ): string {
   const model = group?.override?.probe_model?.trim();
   let description = `全局未指定模型，${fallback}`;

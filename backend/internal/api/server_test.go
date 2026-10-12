@@ -474,6 +474,9 @@ func (f fakeBusiness) SetGroupExcluded(_ context.Context, _ string, excluded boo
 func (f fakeBusiness) Upstreams(context.Context) (business.UpstreamSummary, error) {
 	return f.upstreamSummary, nil
 }
+func (f fakeBusiness) UpstreamList(context.Context) (business.UpstreamSummary, error) {
+	return f.upstreamSummary, nil
+}
 func (f fakeBusiness) UpstreamGroups(context.Context, string, bool) ([]business.UpstreamGroup, error) {
 	return f.upstreamGroupRows, nil
 }

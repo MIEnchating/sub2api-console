@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/MIEnchating/sub2api-console/backend/internal/business"
 	"github.com/MIEnchating/sub2api-console/backend/internal/targetguard"
 	"strings"
+	"time"
 )
 
 type Group struct {
@@ -67,6 +69,11 @@ func publicAccount(row map[string]any) Account {
 	credentials := object(row["credentials"])
 	extra := object(row["extra"])
 	result := Account{ID: text(row["id"]), Name: text(row["name"]), Email: text(credentials["email"]), Status: text(row["status"]), Schedulable: row["schedulable"] != false, Plan: text(credentials["plan_type"]), Groups: []Group{}, ProxyName: text(object(row["proxy"])["name"]), Concurrency: text(row["concurrency"]), LoadFactor: text(row["load_factor"]), RateMultiplier: text(row["rate_multiplier"]), ModelMapping: map[string]string{}, Fingerprint: text(extra["codex_fingerprint_mode"])}
+	block := business.AccountUpstreamBlock(row, nil, time.Now().UTC())
+	switch block {
+	case business.AccountBlockRateLimited, business.AccountBlockOverloaded, business.AccountBlockTempUnschedulable, business.AccountBlockExpired:
+		result.Status = block
+	}
 	if result.Plan == "" {
 		result.Plan = text(extra["plan_type"])
 	}

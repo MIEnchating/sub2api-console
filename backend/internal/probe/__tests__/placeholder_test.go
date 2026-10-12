@@ -34,8 +34,23 @@ func TestCleanProbeDoesNotMarkFormattingAfterFirstText(t *testing.T) {
 	}
 }
 
+func TestProbeAcceptsChineseEnglishDigitsAndEmojiAsFirstContent(t *testing.T) {
+	for _, text := range []string{"你好", "Hello", "42", "✅", "🙂", "❤️", "👍🏽", "👨‍👩‍👧‍👦", "🇨🇳", "#️⃣", "*️⃣"} {
+		t.Run(text, func(t *testing.T) {
+			encoded, err := json.Marshal(text)
+			if err != nil {
+				t.Fatal(err)
+			}
+			sample := collectPerformanceProbe(t, performanceProbeCase{body: "data: {\"type\":\"response.output_text.delta\",\"delta\":" + string(encoded) + "}\n\n" + probeCompletedEvent})
+			if sample.LatencyP95 == nil || sample.Payload["ignored_placeholder"] != false {
+				t.Fatalf("valid content lost first-token credit or was marked: %+v", sample)
+			}
+		})
+	}
+}
+
 func TestProbeIgnoresPlaceholderUntilMeaningfulText(t *testing.T) {
-	for _, text := range []string{"_", "__-", " \t---___\n", "...！？", "\u200b\ufeff"} {
+	for _, text := range []string{"_", "__-", " \t---___\n", "...！？", "\u200b\ufeff", "\n", " \t\r\n", "αあ한", "²Ⅳ"} {
 		t.Run(text, func(t *testing.T) {
 			store := directProbeStore(t)
 			encoded, _ := json.Marshal(text)

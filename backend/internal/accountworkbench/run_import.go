@@ -65,6 +65,9 @@ func (s *Service) importItem(ctx context.Context, value *privateRun, index int, 
 	var account map[string]any
 	if existing != nil {
 		id := text(existing["id"])
+		if err := s.requireAccountManaged(ctx, id); err != nil {
+			return err
+		}
 		current, readErr := client.Account(ctx, id)
 		if readErr != nil || accountVersion(current) != accountVersion(existing) {
 			return errors.New("线上账号已变化，请刷新后重新导入")
@@ -200,6 +203,9 @@ func (s *Service) applyImportedItem(ctx context.Context, value *privateRun, inde
 	defer release()
 	if err = s.executionAllowed(ctx, value); err != nil {
 		return errors.New("目标或模板已变化，未执行启用")
+	}
+	if err := s.requireAccountManaged(ctx, id); err != nil {
+		return err
 	}
 	client, err := s.client(value.Target)
 	if err != nil {

@@ -13,8 +13,8 @@ export function AlertListActions(props: AlertListActionsProps) {
   return (
     <div className="flex items-center">
       <Button
-        variant="outline"
-        className="text-destructive hover:text-destructive"
+        variant="destructive"
+
         disabled={props.loading || props.failed || props.clearableCount === 0}
         onClick={props.onClear}
       >

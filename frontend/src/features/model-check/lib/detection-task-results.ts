@@ -1,4 +1,4 @@
-import type { AnimationResult, GroupStatus, Task } from "@/api";
+import type { AnimationResult, GroupOption, Task } from "@/api";
 import { collectAnimationTasks } from "./animation-task-results";
 import type { TerminalHistoryResult } from "./terminal-continuity";
 export type AccountRow = {
@@ -38,7 +38,7 @@ export function detectionAccountRows(
 
 export function detectionResultGroups(
   task: Task | undefined,
-  groups: GroupStatus[] | undefined,
+  groups: GroupOption[] | undefined,
   rows: Map<string, AccountRow>,
 ): GroupRows[] {
   const config = isRecord(task?.result.configuration) ? task?.result.configuration : undefined;

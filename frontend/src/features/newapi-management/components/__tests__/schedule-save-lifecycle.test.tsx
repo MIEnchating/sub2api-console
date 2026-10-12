@@ -71,7 +71,7 @@ it("旧任务保存完成时保留新打开任务的编辑草稿", async () => {
   });
   vi.spyOn(api, "accountModelAutomationSchedules").mockResolvedValue(schedules);
   vi.spyOn(api, "accountModelAutomationTaskGroups").mockResolvedValue([]);
-  vi.spyOn(api, "groups").mockResolvedValue([group]);
+  vi.spyOn(api, "groupMembershipOptions").mockResolvedValue([group]);
   vi.spyOn(globalThis, "fetch").mockImplementation(
     async () => new Response(JSON.stringify({ items: [], total: 0 }), { status: 200 }),
   );

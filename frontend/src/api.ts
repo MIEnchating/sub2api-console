@@ -5,11 +5,13 @@ import {
   assertCurrentSession,
 } from "./lib/session-auth";
 import type {
+  ImportModelSettings,
   TemplateLibrary,
   TemplateConfig,
   WorkbenchAccount,
   WorkbenchTemplate,
   WorkbenchPreview,
+  WorkbenchProxy,
   WorkbenchRun,
   WorkbenchArtifact,
   WorkbenchInput,
@@ -457,7 +459,15 @@ export type UpstreamAccountRequestUsage = {
   share: number;
 };
 
+export type UpstreamUsage = {
+  upstream_id: string;
+  request_count: number;
+  request_window_days: number;
+  account_request_usage: UpstreamAccountRequestUsage[];
+};
+
 type UpstreamHost = {
+  excluded?: boolean;
   upstream_id: string;
   host: string;
   hosts: string[];
@@ -504,6 +514,17 @@ export type UpstreamDeletePreview = {
   group_count: number;
   account_ids: string[];
   accounts: Array<{ id: string; name: string; groups: string[] }>;
+};
+
+export type UpstreamExclusionPreview = UpstreamDeletePreview & {
+  upstream_id: string;
+  excluded: boolean;
+};
+export type UpstreamExclusionRequest = {
+  upstream_id: string;
+  excluded: boolean;
+  stop_scheduling: boolean;
+  expected_account_ids: string[];
 };
 
 export type UpstreamGroup = {
@@ -2099,7 +2120,41 @@ export type KumaWriteInput = {
 
 export type KumaSnapshot = { config: KumaConfig; monitors: KumaMonitor[]; warning: string };
 
+export type GroupOption = Pick<
+  GroupStatus,
+  "id" | "name" | "platform" | "platforms" | "rate_multiplier"
+>;
+export type GroupMembershipOption = Pick<GroupStatus, "id" | "name" | "account_count">;
+export type GroupConfiguration = Pick<
+  GroupStatus,
+  "id" | "name" | "strategy_source" | "participation_status" | "override"
+>;
+export type AccountOption = Pick<
+  AccountStatus,
+  "id" | "name" | "groups" | "platform" | "account_type" | "upstream_type"
+>;
+export type UpstreamOption = Pick<
+  UpstreamSummary["hosts"][number],
+  "upstream_id" | "host" | "name" | "upstream_type" | "auth_status" | "account_count"
+>;
+
 export const api = {
+  groupMembershipOptions: (signal?: AbortSignal) =>
+    request<GroupMembershipOption[]>("/api/catalog/group-memberships", { signal }),
+  groupConfigurations: (signal?: AbortSignal) =>
+    request<GroupConfiguration[]>("/api/catalog/group-configurations", { signal }),
+  groupOptions: (signal?: AbortSignal) => request<GroupOption[]>("/api/catalog/groups", { signal }),
+  accountOptions: (signal?: AbortSignal) =>
+    request<AccountOption[]>("/api/catalog/accounts", { signal }),
+  upstreamOptions: (signal?: AbortSignal) =>
+    request<UpstreamOption[]>("/api/catalog/upstreams", { signal }),
+  workbenchImportModel: (signal?: AbortSignal) =>
+    request<ImportModelSettings>("/api/account-workbench/import-model", { signal }),
+  saveWorkbenchImportModel: (value: ImportModelSettings) =>
+    request<ImportModelSettings>("/api/account-workbench/import-model", {
+      method: "PUT",
+      body: JSON.stringify(value),
+    }),
   workbenchAccounts: (signal?: AbortSignal) =>
     request<WorkbenchAccount[]>("/api/account-workbench/accounts", { signal }),
   workbenchRememberedAccounts: (signal?: AbortSignal) =>
@@ -2172,6 +2227,8 @@ export const api = {
       `/api/account-workbench/runs/${encodeURIComponent(id)}/login-input/${encodeURIComponent(item)}`,
       { method: "POST", body: JSON.stringify(input) },
     ),
+  workbenchProxies: (signal?: AbortSignal) =>
+    request<WorkbenchProxy[]>("/api/account-workbench/proxies", { signal }),
   workbenchTemplates: (signal?: AbortSignal) =>
     request<TemplateLibrary>("/api/account-workbench/templates", { signal }),
   workbenchTemplateSource: (id: string, signal?: AbortSignal) =>
@@ -2212,7 +2269,10 @@ export const api = {
       `/api/uptime-kuma/templates/${id}/distribution?revision=${revision}`,
       { signal, cache: "no-store" },
     ),
-  distributeKumaTemplate: (id: string, input: { revision: number; scope: string }) =>
+  distributeKumaTemplate: (
+    id: string,
+    input: { revision: number; scope: string; monitor_ids: number[] },
+  ) =>
     request<Task>(`/api/uptime-kuma/templates/${id}/distribution`, {
       method: "POST",
       body: JSON.stringify(input),
@@ -2659,6 +2719,8 @@ export const api = {
       body: JSON.stringify({ group_ids: groupIds, action }),
     }),
   upstreams: (signal?: AbortSignal) => request<UpstreamSummary>("/api/upstreams", { signal }),
+  upstreamUsage: (signal?: AbortSignal) =>
+    request<UpstreamUsage[]>("/api/upstreams/usage", { signal }),
   cleanupUpstreamBinding: (host: string, bindingId: number, payload: UpstreamBindingCleanup) =>
     request<{ binding_id: number }>(
       `/api/upstreams/${encodeURIComponent(host)}/bindings/${bindingId}/cleanup`,
@@ -2706,6 +2768,16 @@ export const api = {
     request<{ deleted: number }>("/api/upstreams/group-history", { method: "DELETE" }),
   upstreamDeletePreview: (host: string) =>
     request<UpstreamDeletePreview>(`/api/upstreams/${encodeURIComponent(host)}/delete-preview`),
+  upstreamExclusionPreview: (host: string, signal?: AbortSignal) =>
+    request<UpstreamExclusionPreview>(
+      `/api/upstreams/${encodeURIComponent(host)}/exclusion-preview`,
+      { signal },
+    ),
+  setUpstreamExclusion: (host: string, input: UpstreamExclusionRequest) =>
+    request<Task>(`/api/upstreams/${encodeURIComponent(host)}/exclusion`, {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
   deleteUpstream: (host: string, expectedAccountIds: string[]) =>
     request<Task>(`/api/upstreams/${encodeURIComponent(host)}/delete`, {
       method: "POST",

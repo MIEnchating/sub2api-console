@@ -95,14 +95,9 @@ type OnboardingProjection struct {
 
 func (s *Store) OnboardingCandidates(ctx context.Context, host string) ([]OnboardingCandidate, error) {
 	host = canonicalHost(host)
-	upstreamName := ""
-	if summary, summaryErr := s.Upstreams(ctx); summaryErr == nil {
-		for _, upstream := range summary.Hosts {
-			if upstream.Host == host {
-				upstreamName = upstream.Name
-				break
-			}
-		}
+	upstreamName, err := s.onboardingUpstreamName(ctx, host)
+	if err != nil {
+		return nil, err
 	}
 	groups, err := s.UpstreamGroups(ctx, host, true)
 	if err != nil {
@@ -139,6 +134,26 @@ func (s *Store) OnboardingCandidates(ctx context.Context, host string) ([]Onboar
 		result = append(result, candidate)
 	}
 	return result, nil
+}
+
+// Candidate validation needs a name, not the overview's traffic and capacity
+// aggregates. Keep this read scoped even when a batch validates many items.
+func (s *Store) onboardingUpstreamName(ctx context.Context, host string) (string, error) {
+	var baseURL, raw string
+	err := s.db.QueryRowContext(ctx, `SELECT u.base_url,u.metadata_json FROM upstreams u
+		JOIN upstream_identity_hosts h ON h.host=u.host WHERE u.host=? AND h.is_primary=1`, host).Scan(&baseURL, &raw)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	metadata, _ := decodeObject(raw)
+	derived, err := s.derivedUpstreamNames(ctx, &host)
+	if err != nil {
+		return "", err
+	}
+	return upstreamDisplayName(metadata, baseURL, derived[host]), nil
 }
 
 func (s *Store) LocalOnboardingGroup(ctx context.Context, groupID string) (LocalOnboardingGroup, error) {

@@ -354,6 +354,7 @@ type Dependencies struct {
 	UpstreamConfigs        UpstreamConfigurationService
 	UpstreamSync           UpstreamSyncTaskEnqueuer
 	UpstreamDelete         UpstreamDeleteService
+	UpstreamExclusion      UpstreamExclusionService
 	AuthRecovery           AuthRecoveryService
 	Onboarding             OnboardingService
 	RequestTrace           RequestTraceReader
@@ -396,6 +397,7 @@ type Server struct {
 	upstreamConfigs        UpstreamConfigurationService
 	upstreamSync           UpstreamSyncTaskEnqueuer
 	upstreamDelete         UpstreamDeleteService
+	upstreamExclusion      UpstreamExclusionService
 	authRecovery           AuthRecoveryService
 	onboarding             OnboardingService
 	traceReader            RequestTraceReader
@@ -642,6 +644,7 @@ func New(cfg config.Config, private *configstore.Store, business Business, depen
 		upstreamConfigs:        services.UpstreamConfigs,
 		upstreamSync:           services.UpstreamSync,
 		upstreamDelete:         services.UpstreamDelete,
+		upstreamExclusion:      services.UpstreamExclusion,
 		authRecovery:           services.AuthRecovery,
 		onboarding:             services.Onboarding,
 		traceReader:            services.RequestTrace,
@@ -692,6 +695,7 @@ func New(cfg config.Config, private *configstore.Store, business Business, depen
 	authorized.POST("/notifications/test", server.testNotification)
 	authorized.POST("/notifications/target-discovery", server.discoverNotificationTarget)
 	authorized.DELETE("/notifications/target-discovery/:task_id", server.cancelNotificationTargetDiscovery)
+	authorized.GET("/catalog/:kind", server.catalogOptions)
 	authorized.GET("/accounts", server.accounts)
 	authorized.POST("/accounts/delete-preview", server.accountDeleteBatchPreview)
 	authorized.POST("/accounts/delete", server.deleteAccounts)
@@ -807,6 +811,7 @@ func New(cfg config.Config, private *configstore.Store, business Business, depen
 	authorized.PUT("/newapi/platforms/:platform_id/channels/:channel_id/models", server.changeNewAPIChannelModels)
 	authorized.PUT("/newapi/platforms/:platform_id/model-prices", server.saveNewAPIModelPrices)
 	authorized.GET("/upstreams", server.upstreams)
+	authorized.GET("/upstreams/usage", server.upstreamUsage)
 	authorized.POST("/upstreams", server.createUpstream)
 	authorized.POST("/upstreams/detect", server.detectUpstream)
 	authorized.POST("/upstreams/balances/sync", server.syncAllUpstreamBalances)
@@ -824,6 +829,8 @@ func New(cfg config.Config, private *configstore.Store, business Business, depen
 	authorized.POST("/upstreams/:host/bindings/:binding_id/cleanup", server.cleanupUpstreamBinding)
 	authorized.GET("/upstreams/:host/groups", server.upstreamGroups)
 	authorized.GET("/upstreams/:host/group-history", server.upstreamGroupHistory)
+	authorized.GET("/upstreams/:host/exclusion-preview", server.upstreamExclusionPreview)
+	authorized.POST("/upstreams/:host/exclusion", server.setUpstreamExclusion)
 	authorized.GET("/upstreams/:host/delete-preview", server.upstreamDeletePreview)
 	authorized.POST("/upstreams/:host/delete", server.deleteUpstream)
 	authorized.GET("/auth-recovery/config", server.authRecoveryConfiguration)
@@ -838,7 +845,10 @@ func New(cfg config.Config, private *configstore.Store, business Business, depen
 	authorized.POST("/inspection/run", server.runInspection)
 	authorized.POST("/inspection/probe", server.runActiveProbe)
 	authorized.GET("/model-checks/capabilities", server.modelCheckCapabilities)
+	authorized.GET("/account-workbench/import-model", server.accountWorkbenchImportModel)
+	authorized.PUT("/account-workbench/import-model", server.accountWorkbenchImportModel)
 	authorized.GET("/account-workbench/accounts", server.accountWorkbenchAccounts)
+	authorized.GET("/account-workbench/proxies", server.accountWorkbenchProxies)
 	authorized.GET("/account-workbench/remembered-accounts", server.accountWorkbenchRememberedAccounts)
 	authorized.DELETE("/account-workbench/remembered-accounts/:id", server.accountWorkbenchDeleteRememberedAccount)
 	authorized.POST("/account-workbench/remembered-accounts/:id/preview", server.accountWorkbenchRememberedLogin)
@@ -3816,7 +3826,12 @@ func (s *Server) detectUpstream(c *gin.Context) {
 }
 
 func (s *Server) upstreams(c *gin.Context) {
-	result, err := s.business.Upstreams(c.Request.Context())
+	store, ok := s.business.(upstreamListStore)
+	if !ok {
+		writeError(c, http.StatusServiceUnavailable, "上游列表服务尚未就绪，请稍后重试")
+		return
+	}
+	result, err := store.UpstreamList(c.Request.Context())
 	if err != nil {
 		writeError(c, http.StatusInternalServerError, "上游列表读取失败")
 		return

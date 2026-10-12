@@ -48,7 +48,7 @@ func (s *Service) Start(ctx context.Context, owner string, input RunConfirmation
 		return Run{}, err
 	}
 	now := time.Now().UTC()
-	value := privateRun{Owner: owner, Target: preview.Target, Settings: preview.Settings, Template: preview.Public.Template, TemplateRevision: preview.TemplateRevision, Items: preview.Items, Exports: make([]map[string]any, len(preview.Items)), AccountVersions: map[string]string{}, Phases: map[string]string{}, Public: Run{ID: newID(), Status: "queued", Action: preview.Public.Action, CreatedAt: now, UpdatedAt: now, ExpiresAt: now.Add(2 * time.Hour), DuplicateCount: preview.Public.DuplicateCount, Items: []RunItem{}}}
+	value := privateRun{ProxyBinding: preview.ProxyBinding, Owner: owner, Target: preview.Target, Settings: preview.Settings, Template: preview.Public.Template, TemplateRevision: preview.TemplateRevision, Items: preview.Items, Exports: make([]map[string]any, len(preview.Items)), AccountVersions: map[string]string{}, Phases: map[string]string{}, Public: Run{ID: newID(), Status: "queued", Action: preview.Public.Action, CreatedAt: now, UpdatedAt: now, ExpiresAt: now.Add(2 * time.Hour), DuplicateCount: preview.Public.DuplicateCount, Items: []RunItem{}}}
 	for _, item := range preview.Items {
 		label := "默认配置"
 		if value.Template != nil {

@@ -49,14 +49,15 @@ it("刷新列表取得最新并发后按上游分别更新额度和调度目标�
     target_concurrency: null,
   };
   vi.stubGlobal("PointerEvent", MouseEvent);
-  vi.stubGlobal("fetch", async () =>
-    Response.json({
+  vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+    if (String(input) === "/api/upstreams/usage") return Response.json([]);
+    return Response.json({
       hosts: [
         { ...upstream, concurrency_limit: 20, concurrency_status: "known", target_concurrency: 18 },
         unchanged,
       ],
-    }),
-  );
+    });
+  });
   client = new QueryClient({ defaultOptions: { queries: { enabled: false, retry: false } } });
   client.setQueryData(["upstreams"], { hosts: [upstream, unchanged] });
   client.setQueryData(["config"], { mode: "监控模式" });

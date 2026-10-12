@@ -608,6 +608,9 @@ func (r *Runner) plan(ctx context.Context, request RunRequest, now time.Time) (d
 			return duePlan{}, err
 		}
 		if request.Automatic {
+			if cleanup, ok := policy["binding_cleanup"].(map[string]any); ok && cleanup["enabled"] == true {
+				result.routing = true
+			}
 			if cleanup, ok := policy["abnormal_cleanup"].(map[string]any); ok && cleanup["enabled"] == true {
 				result.routing = true
 			}

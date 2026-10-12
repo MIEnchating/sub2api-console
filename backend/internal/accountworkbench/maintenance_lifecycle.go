@@ -39,28 +39,25 @@ func (s *Service) cleanupMaintenance(ctx context.Context, recovering bool) error
 		s.activeMu.Lock()
 		active := s.active[record.ID]
 		s.activeMu.Unlock()
-		live, err := s.private.ActiveSessionOwner(ctx, value.Owner, now)
-		if err != nil {
-			return err
-		}
 		if active != nil {
-			if !live {
-				s.runner.CancelTask(active.taskID)
-			}
 			return nil
 		}
 		changed := false
-		if (recovering || !live) && (value.Public.Enabled || value.Public.Running || value.Public.NextCheckAt != nil) {
-			value.Public.Enabled = false
+		if recovering && value.Public.Running {
 			value.Public.Running = false
-			value.Public.NextCheckAt = nil
-			value.Public.Message = "维护已暂停，请重新预览并保存设置后继续"
+			value.Public.Message = "服务已重启，按已保存设置继续维护"
+			changed = true
+		}
+		if value.Public.Enabled && value.Public.NextCheckAt == nil {
+			next := now.Add(time.Duration(value.Public.IntervalMinutes) * time.Minute)
+			value.Public.NextCheckAt = &next
 			changed = true
 		}
 		for _, attempt := range value.Attempts {
 			if !attempt.ExpiresAt.After(now) && attempt.Phase != "expired" {
 				attempt.Credentials = nil
 				attempt.ProxyURL = ""
+				attempt.ProxyBinding = nil
 				attempt.Phase = "expired"
 				changed = true
 			}

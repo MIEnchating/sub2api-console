@@ -23,7 +23,7 @@ function renderRanking(data?: TrafficRanking): QueryClient {
   });
   seedDictionaries(client);
   clients.push(client);
-  client.setQueryData(["groups"], []);
+  client.setQueryData(["groups", "options"], []);
   client.setQueryData(["dictionaries", "group"], { items: [] });
 
   if (data) client.setQueryData(["traffic-ranking", "24h", null, "traffic"], data);
@@ -219,7 +219,7 @@ it("字典顺序变更时流量排行分组筛选立即更新", async () => {
   const client = renderRanking(rankingFixture);
   act(() => {
     client.setQueryData(
-      ["groups"],
+      ["groups", "options"],
       [
         { id: "1", name: "A" },
         { id: "2", name: "B" },

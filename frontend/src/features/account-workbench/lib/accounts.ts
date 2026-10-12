@@ -2,6 +2,8 @@ import type { AccountFilter, WorkbenchAccount } from "../types";
 
 export function accountStatus(account: WorkbenchAccount): string {
   const status = account.status.toLowerCase();
+  if (["rate_limited", "overloaded", "temp_unschedulable", "expired"].includes(status))
+    return status;
   if (!account.schedulable || ["inactive", "disabled", "manually_disabled"].includes(status))
     return "inactive";
   if (status === "active") return "active";

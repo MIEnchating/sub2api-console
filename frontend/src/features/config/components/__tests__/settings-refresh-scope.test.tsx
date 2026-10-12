@@ -37,8 +37,8 @@ const responses: Record<string, unknown> = {
   },
   "/api/config/model-sync": { blocked_patterns: [] },
   "/api/config/task-concurrency": { version: "v1", queue_capacity: 100, pools: [] },
-  "/api/groups": [],
-  "/api/accounts": [],
+  "/api/catalog/groups": [],
+  "/api/catalog/accounts": [],
   "/api/notifications/status": { configured: false, configuration_errors: [], queues: {} },
   "/api/config/log-cleanup": { enabled: false, retention_days: 30 },
 };
@@ -78,8 +78,8 @@ it.each([
     paths: [
       "/api/config/account-settings",
       "/api/config/model-sync",
-      "/api/groups",
-      "/api/accounts",
+      "/api/catalog/groups",
+      "/api/catalog/accounts",
     ],
   },
   { tab: "tasks", paths: ["/api/config/task-concurrency"] },

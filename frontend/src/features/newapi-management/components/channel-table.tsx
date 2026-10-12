@@ -86,7 +86,7 @@ export function ChannelTable(props: {
               <p className="text-muted-foreground text-xs">ID {channel.id}</p>
             </TableCell>
             <TableCell>
-              <Badge variant={channel.status === 1 ? "secondary" : "outline"}>
+              <Badge variant={channel.status === 1 ? "success" : "neutral"}>
                 {channelStatusLabels[channel.status] ?? "状态未识别"}
               </Badge>
             </TableCell>

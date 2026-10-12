@@ -2023,9 +2023,9 @@ func TestOnboardPersistsUnknownKeyIntentAndNeverBlindlyCreatesAgain(t *testing.T
 	}
 }
 
-func TestOnboardingKeyMarkerUsesNeutralName(t *testing.T) {
-	marker := onboardingKeyMarker("account-onboarding-0123456789abcdef")
-	if marker != "console-0123456789abcdef" {
+func TestOnboardingKeyMarkerUsesGroupName(t *testing.T) {
+	marker := onboardingKeyMarker("account-onboarding-0123456789abcdef", "pro")
+	if marker != "pro-0123456789abcdef" {
 		t.Fatalf("marker=%q", marker)
 	}
 	if strings.Contains(marker, "account") || strings.Contains(marker, "onboarding") {
@@ -2036,24 +2036,26 @@ func TestOnboardingKeyMarkerUsesNeutralName(t *testing.T) {
 func TestPendingKeyMarkerRotatesExplicitlyUncommittedLegacyName(t *testing.T) {
 	legacy := "account-onboarding-0123456789abcdef"
 	pending := &business.PendingOnboarding{OperationID: legacy, UpstreamKeyName: &legacy}
-	marker, rotated := pendingKeyMarker(pending, onboardingKeyMarker(pending.OperationID))
-	if marker != "console-0123456789abcdef" || !rotated {
+	marker, rotated := pendingKeyMarker(pending, onboardingKeyMarker(pending.OperationID, "pro"))
+	if marker != "pro-0123456789abcdef" || !rotated {
 		t.Fatalf("marker=%q rotated=%t", marker, rotated)
 	}
 }
 
 func TestPendingKeyMarkerPreservesUncertainLegacyNameForReconciliation(t *testing.T) {
 	legacy := "account-onboarding-0123456789abcdef"
-	pending := &business.PendingOnboarding{
-		OperationID: legacy, UpstreamKeyName: &legacy, KeyCommitUnknown: true,
-	}
-	marker, rotated := pendingKeyMarker(pending, onboardingKeyMarker(pending.OperationID))
-	if marker != legacy || rotated {
-		t.Fatalf("marker=%q rotated=%t", marker, rotated)
+	for _, name := range []string{legacy, "console-0123456789abcdef", "原分组-0123456789abcdef"} {
+		t.Run(name, func(t *testing.T) {
+			pending := &business.PendingOnboarding{OperationID: legacy, UpstreamKeyName: &name, KeyCommitUnknown: true}
+			marker, rotated := pendingKeyMarker(pending, onboardingKeyMarker(legacy, "新分组"))
+			if marker != name || rotated {
+				t.Fatalf("uncertain name changed: %q rotated=%t", marker, rotated)
+			}
+		})
 	}
 }
 
-func TestOnboardRetriesExplicitlyRejectedLegacyMarkerWithNeutralName(t *testing.T) {
+func TestOnboardRetriesExplicitlyRejectedLegacyMarkerWithGroupName(t *testing.T) {
 	admin := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		writer.WriteHeader(http.StatusBadGateway)
 		_, _ = writer.Write([]byte(`{"message":"model service unavailable"}`))
@@ -2100,7 +2102,7 @@ func TestOnboardRetriesExplicitlyRejectedLegacyMarkerWithNeutralName(t *testing.
 	if _, err := service.Onboard(context.Background(), request); err == nil {
 		t.Fatal("model preview failure should keep onboarding pending")
 	}
-	if keys.createCalls != 1 || len(keys.createNames) != 1 || keys.createNames[0] != "console-0123456789abcdef" {
+	if keys.createCalls != 1 || len(keys.createNames) != 1 || keys.createNames[0] != "pro-0123456789abcdef" {
 		t.Fatalf("createCalls=%d names=%v", keys.createCalls, keys.createNames)
 	}
 	database, err := sql.Open("sqlite", "file:"+databasePath)
@@ -2112,7 +2114,7 @@ func TestOnboardRetriesExplicitlyRejectedLegacyMarkerWithNeutralName(t *testing.
 	if err := database.QueryRow(`SELECT upstream_key_id,upstream_key_name FROM onboarding_pending WHERE operation_id=?`, legacy).Scan(&keyID, &keyName); err != nil {
 		t.Fatal(err)
 	}
-	if keyID != "91" || keyName != "console-0123456789abcdef" {
+	if keyID != "91" || keyName != "pro-0123456789abcdef" {
 		t.Fatalf("keyID=%q keyName=%q", keyID, keyName)
 	}
 }

@@ -38,7 +38,7 @@ it("保存任务等待期间锁定提交范围并阻止同时预览，失败后�
         complete = resolve;
       });
     }
-    if (String(url) === "/api/groups")
+    if (String(url) === "/api/catalog/group-memberships")
       return Promise.resolve(Response.json([{ id: "7", name: "生产组", account_count: 2 }]));
     if (String(url).startsWith("/api/newapi?"))
       return Promise.resolve(

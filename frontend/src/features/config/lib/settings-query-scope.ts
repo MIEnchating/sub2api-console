@@ -27,7 +27,11 @@ export function settingsQueryScope(tab: ConfigTab): QueryFilters {
       return (
         typeof root === "string" &&
         queryRoots[tab].includes(root) &&
-        (root === "dictionaries" || query.queryKey.length === 1)
+        (root === "dictionaries" ||
+          query.queryKey.length === 1 ||
+          ((root === "groups" || root === "accounts") &&
+            query.queryKey.length === 2 &&
+            query.queryKey[1] === "options"))
       );
     },
   };

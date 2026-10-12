@@ -147,7 +147,17 @@ func distributionPreview(t *testing.T, f *kumaTaskFixture, template uptimekuma.T
 
 func runDistribution(t *testing.T, f *kumaTaskFixture, preview uptimekuma.TemplateDistributionPreview) {
 	t.Helper()
-	if _, err := f.service.DistributeTemplate(f.ctx, preview.TemplateID, uptimekuma.TemplateDistributionInput{Revision: preview.Revision, Scope: preview.Scope}); err != nil {
+	if _, err := f.service.DistributeTemplate(f.ctx, preview.TemplateID, uptimekuma.TemplateDistributionInput{Revision: preview.Revision, Scope: preview.Scope, MonitorIDs: distributionSelectedIDs(preview)}); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func distributionSelectedIDs(preview uptimekuma.TemplateDistributionPreview) []int64 {
+	ids := []int64{}
+	for _, item := range preview.Items {
+		if item.Reason == "" {
+			ids = append(ids, item.MonitorID)
+		}
+	}
+	return ids
 }

@@ -313,6 +313,9 @@ func reconcileUpstreamIdentityComponent(
 		if _, err := tx.ExecContext(ctx, `UPDATE upstream_identity_hosts SET upstream_id=?,updated_at=? WHERE upstream_id=?`, upstreamID, now, candidate); err != nil {
 			return err
 		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO upstream_exclusions(upstream_id,updated_at) SELECT ?,updated_at FROM upstream_exclusions WHERE upstream_id=? ON CONFLICT(upstream_id) DO NOTHING`, upstreamID, candidate); err != nil {
+			return err
+		}
 		if _, err := tx.ExecContext(ctx, `DELETE FROM upstream_identities WHERE upstream_id=?`, candidate); err != nil {
 			return err
 		}

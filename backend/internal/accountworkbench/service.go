@@ -73,6 +73,20 @@ func (s *Service) requireGroupsUnlocked(ctx context.Context, accountID string) e
 	return nil
 }
 
+func (s *Service) requireAccountManaged(ctx context.Context, accountID string) error {
+	if s.groupProtection == nil || accountID == "" {
+		return nil
+	}
+	protection, err := s.groupProtection.AccountMutationProtection(ctx, accountID)
+	if err != nil {
+		return err
+	}
+	if protection.UpstreamExcluded {
+		return business.ErrUpstreamExcluded
+	}
+	return nil
+}
+
 func (s *Service) acquireGroupMutation(ctx context.Context, resources ...string) (context.Context, func() error, error) {
 	if s.groupProtection != nil {
 		return targetguard.Acquire(ctx, s.groupProtection, resources...)
@@ -86,6 +100,7 @@ type taskRepository interface {
 	DeleteTerminalBySkill(context.Context, string, []taskstore.HistorySelection) error
 }
 type OAuthChecker interface {
+	CheckOAuthCandyWithProxy(context.Context, string, string, map[string]any, string, int, string) (map[string]any, error)
 	CheckOAuthWithProxy(context.Context, string, string, map[string]any, string, int, string) (map[string]any, error)
 }
 

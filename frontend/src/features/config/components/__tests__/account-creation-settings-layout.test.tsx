@@ -26,7 +26,7 @@ describe("账号设置响应式布局", () => {
       platform_probe_models: {},
     };
     queryClient.setQueryData(["account-creation-settings"], settings);
-    queryClient.setQueryData(["groups"], []);
+    queryClient.setQueryData(["groups", "options"], []);
 
     const markup = renderToStaticMarkup(
       <QueryClientProvider client={queryClient}>
@@ -93,7 +93,7 @@ describe("账号设置响应式布局", () => {
       groups: [{ group_id: "6", ...policy }],
       platform_probe_models: {},
     });
-    queryClient.setQueryData(["groups"], [group]);
+    queryClient.setQueryData(["groups", "options"], [group]);
     seedDictionaries(queryClient, { group: [{ value: "6", name: group.name }] });
 
     const markup = renderToStaticMarkup(
@@ -144,7 +144,7 @@ describe("账号设置响应式布局", () => {
       platform_probe_models: {},
     });
     queryClient.setQueryData(
-      ["groups"],
+      ["groups", "options"],
       [
         {
           id: "6",

@@ -26,6 +26,7 @@ export type DataTablePaginationProps = {
   onPageSizeChange: (pageSize: number) => void;
   pageSizes?: number[];
   disabled?: boolean;
+  compact?: boolean;
 };
 
 export function DataTablePagination(props: DataTablePaginationProps) {
@@ -40,7 +41,10 @@ export function DataTablePagination(props: DataTablePaginationProps) {
   return (
     <nav
       aria-label="表格分页"
-      className="@container/pagination shrink-0 border-t px-3 py-2.5 sm:px-4 sm:py-3"
+      className={cn(
+        "@container/pagination shrink-0",
+        props.compact ? "py-1" : "border-t px-3 py-2.5 sm:px-4 sm:py-3",
+      )}
     >
       <div className="flex min-w-0 flex-wrap items-center justify-end gap-2">
         <div className="flex min-w-0 flex-wrap items-center justify-end gap-2 @xl/pagination:gap-3">
@@ -86,14 +90,16 @@ export function DataTablePagination(props: DataTablePaginationProps) {
           </div>
 
           <div className="flex min-w-0 flex-wrap items-center justify-end gap-1 @lg/pagination:gap-1.5 @xl/pagination:gap-2">
-            <PaginationButton
-              label="转到第一页"
-              hiddenOnCompact
-              disabled={!!props.disabled || props.currentPage <= 1}
-              onClick={() => props.onPageChange(1)}
-            >
-              <ChevronsLeft />
-            </PaginationButton>
+            {!props.compact && (
+              <PaginationButton
+                label="转到第一页"
+                hiddenOnCompact
+                disabled={!!props.disabled || props.currentPage <= 1}
+                onClick={() => props.onPageChange(1)}
+              >
+                <ChevronsLeft />
+              </PaginationButton>
+            )}
             <PaginationButton
               label="转到上一页"
               disabled={!!props.disabled || props.currentPage <= 1}
@@ -105,7 +111,7 @@ export function DataTablePagination(props: DataTablePaginationProps) {
             <span
               className={cn(
                 "text-muted-foreground text-sm tabular-nums",
-                !unknownTotal && "@lg/pagination:hidden",
+                !unknownTotal && !props.compact && "@lg/pagination:hidden",
               )}
               aria-label={
                 unknownTotal
@@ -117,33 +123,34 @@ export function DataTablePagination(props: DataTablePaginationProps) {
                 ? `第 ${props.currentPage} 页`
                 : `${props.currentPage} / ${props.totalPages}`}
             </span>
-            {pageNumbers.map((pageNumber, index) =>
-              typeof pageNumber === "string" ? (
-                <span
-                  key={`ellipsis:${index}`}
-                  className="text-muted-foreground hidden px-0.5 text-sm @lg/pagination:inline @lg/pagination:px-1"
-                >
-                  ...
-                </span>
-              ) : (
-                <Button
-                  disabled={props.disabled}
-                  key={pageNumber}
-                  variant={props.currentPage === pageNumber ? "default" : "outline"}
-                  className={cn(
-                    "hidden min-w-8 px-2 tabular-nums @lg/pagination:inline-flex",
-                    props.currentPage === pageNumber
-                      ? "font-semibold"
-                      : "text-muted-foreground hover:text-foreground",
-                  )}
-                  aria-label={`转到第 ${pageNumber} 页`}
-                  aria-current={props.currentPage === pageNumber ? "page" : undefined}
-                  onClick={() => props.onPageChange(pageNumber)}
-                >
-                  {pageNumber}
-                </Button>
-              ),
-            )}
+            {!props.compact &&
+              pageNumbers.map((pageNumber, index) =>
+                typeof pageNumber === "string" ? (
+                  <span
+                    key={`ellipsis:${index}`}
+                    className="text-muted-foreground hidden px-0.5 text-sm @lg/pagination:inline @lg/pagination:px-1"
+                  >
+                    ...
+                  </span>
+                ) : (
+                  <Button
+                    disabled={props.disabled}
+                    key={pageNumber}
+                    variant={props.currentPage === pageNumber ? "default" : "outline"}
+                    className={cn(
+                      "hidden min-w-8 px-2 tabular-nums @lg/pagination:inline-flex",
+                      props.currentPage === pageNumber
+                        ? "font-semibold"
+                        : "text-muted-foreground hover:text-foreground",
+                    )}
+                    aria-label={`转到第 ${pageNumber} 页`}
+                    aria-current={props.currentPage === pageNumber ? "page" : undefined}
+                    onClick={() => props.onPageChange(pageNumber)}
+                  >
+                    {pageNumber}
+                  </Button>
+                ),
+              )}
 
             <PaginationButton
               label="转到下一页"
@@ -152,7 +159,7 @@ export function DataTablePagination(props: DataTablePaginationProps) {
             >
               <ChevronRight />
             </PaginationButton>
-            {!unknownTotal && (
+            {!unknownTotal && !props.compact && (
               <PaginationButton
                 label="转到最后一页"
                 hiddenOnCompact

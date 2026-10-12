@@ -169,6 +169,28 @@ func (s *Service) deliver(ctx context.Context, dryRun bool, balanceHost string) 
 	if len(plan.Pending) == 0 {
 		return result, nil
 	}
+	managed := make([]business.AlertIncident, 0, len(plan.Pending))
+	for _, incident := range plan.Pending {
+		var checkErr error
+		switch incident.ObjectKind {
+		case "account":
+			checkErr = business.CheckAccountUpstreamManaged(ctx, s.repository, incident.ObjectID)
+		case "host":
+			checkErr = business.CheckUpstreamManaged(ctx, s.repository, incident.ObjectID)
+		}
+		if errors.Is(checkErr, business.ErrUpstreamExcluded) {
+			result.Skipped++
+			continue
+		}
+		if checkErr != nil {
+			return result, checkErr
+		}
+		managed = append(managed, incident)
+	}
+	plan.Pending = managed
+	if len(plan.Pending) == 0 {
+		return result, nil
+	}
 	batches := NotificationBatches(plan.Pending, plan.MergeThreshold)
 	if dryRun {
 		result.Sent, result.Attempted, result.Batches = len(plan.Pending), len(plan.Pending), len(batches)

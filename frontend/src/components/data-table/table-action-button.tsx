@@ -2,7 +2,6 @@ import type { MouseEventHandler, ReactNode } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { cn } from "@/lib/utils";
 
 type TableActionTone = "default" | "primary" | "danger";
 
@@ -15,23 +14,21 @@ export function TableActionButton(props: {
   tone?: TableActionTone;
   className?: string;
 }) {
+  let variant: "outline" | "default" | "destructive" = "outline";
+  if (props.tone === "primary") variant = "default";
+  if (props.tone === "danger") variant = "destructive";
   return (
     <Tooltip>
       <TooltipTrigger
         render={
           <Button
             type="button"
-            variant="outline"
+            variant={variant}
             size="icon"
             aria-label={props.ariaLabel ?? props.label}
             disabled={props.disabled}
             onClick={props.onClick}
-            className={cn(
-              props.tone === "primary" && "text-primary hover:text-primary",
-              props.tone === "danger" &&
-                "text-destructive hover:bg-destructive/10 hover:text-destructive",
-              props.className,
-            )}
+            className={props.className}
           />
         }
       >

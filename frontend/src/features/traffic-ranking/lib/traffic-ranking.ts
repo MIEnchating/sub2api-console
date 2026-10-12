@@ -45,10 +45,10 @@ export function formatTrafficLatency(value: number | null): string {
 
 export function trafficStabilityLabel(value: number | null): {
   label: string;
-  variant: "secondary" | "warning" | "destructive" | "outline";
+  variant: "success" | "warning" | "destructive" | "outline";
 } {
   if (value === null) return { label: "无样本", variant: "outline" };
-  if (value >= 90) return { label: "稳定", variant: "secondary" };
+  if (value >= 90) return { label: "稳定", variant: "success" };
   if (value >= 70) return { label: "观察", variant: "warning" };
   return { label: "不稳定", variant: "destructive" };
 }

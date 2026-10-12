@@ -104,25 +104,26 @@ type preparedRun struct {
 }
 
 type Service struct {
-	animationPrompt   animationPromptState
-	tasks             TaskStore
-	credentials       CredentialStore
-	accounts          AccountCatalog
-	keys              KeyRevealer
-	resolver          UpstreamAuthResolver
-	profilesMu        sync.RWMutex
-	claudeProfiles    map[string]claudeProfile
-	solProfile        solProfile
-	configuration     configurationState
-	profileRepository configurationRepository
-	oauthTransport    http.RoundTripper
-	taskRunner        taskrunner.Runner
-	animationRunner   taskrunner.Runner
-	taskTimeout       time.Duration
-	animation         animationState
-	terminalMu        sync.Mutex
-	terminalActive    map[string]bool
-	detectionTasks    *detectionTaskState
+	animationPrompt       animationPromptState
+	tasks                 TaskStore
+	credentials           CredentialStore
+	accounts              AccountCatalog
+	keys                  KeyRevealer
+	resolver              UpstreamAuthResolver
+	profilesMu            sync.RWMutex
+	claudeProfiles        map[string]claudeProfile
+	solProfile            solProfile
+	configuration         configurationState
+	profileRepository     configurationRepository
+	oauthTransport        http.RoundTripper
+	oauthCredentialSource OAuthCredentialSource
+	taskRunner            taskrunner.Runner
+	animationRunner       taskrunner.Runner
+	taskTimeout           time.Duration
+	animation             animationState
+	terminalMu            sync.Mutex
+	terminalActive        map[string]bool
+	detectionTasks        *detectionTaskState
 }
 
 func New(tasks TaskStore, credentials CredentialStore, accounts AccountCatalog, keys KeyRevealer) (*Service, error) {
@@ -325,6 +326,12 @@ func (s *Service) prepare(ctx context.Context, request Request) (preparedRun, er
 func (s *Service) selectCheckAccounts(ctx context.Context, accountIDs []string) ([]selectedAccount, error) {
 	selected := make([]selectedAccount, 0, len(accountIDs))
 	for _, accountID := range accountIDs {
+		if err := business.CheckAccountUpstreamManaged(ctx, s.accounts, accountID); err != nil {
+			if errors.Is(err, business.ErrUpstreamExcluded) {
+				continue
+			}
+			return nil, err
+		}
 		detail, err := s.accounts.Account(ctx, accountID)
 		if errors.Is(err, sql.ErrNoRows) || err == nil && detail == nil {
 			return nil, fmt.Errorf("账号 %s 不存在，请刷新账号列表后重试", accountID)
@@ -378,7 +385,7 @@ func (s *Service) execute(parent context.Context, task taskstore.Task, prepared 
 	if prepared.oauthTarget != nil {
 		ctx = targetguard.Expect(ctx, *prepared.oauthTarget)
 	}
-	guarded, release, err := s.acquirePreparedAccounts(ctx, prepared.accounts)
+	guarded, release, err := s.acquirePreparedAccounts(ctx, prepared.accounts, true)
 	if err != nil {
 		s.finishFailed(ctx, task, prepared.request.AccountIDs, err)
 		return
@@ -389,6 +396,22 @@ func (s *Service) execute(parent context.Context, task taskstore.Task, prepared 
 		}
 	}()
 	ctx = guarded
+	managed := make([]selectedAccount, 0, len(prepared.accounts))
+	for _, account := range prepared.accounts {
+		if err := business.CheckAccountUpstreamManaged(ctx, s.accounts, account.ID); err != nil {
+			if errors.Is(err, business.ErrUpstreamExcluded) {
+				continue
+			}
+			s.finishFailed(ctx, task, prepared.request.AccountIDs, err)
+			return
+		}
+		managed = append(managed, account)
+	}
+	prepared.accounts = managed
+	prepared.request.AccountIDs = make([]string, 0, len(managed))
+	for _, account := range managed {
+		prepared.request.AccountIDs = append(prepared.request.AccountIDs, account.ID)
+	}
 	if prepared.oauthTarget != nil {
 		ctx, err = targetguard.Pin(ctx, s.credentials.(targetguard.Store))
 		if err != nil {
@@ -540,7 +563,11 @@ func (s *Service) execute(parent context.Context, task taskstore.Task, prepared 
 func (s *Service) acquirePreparedAccounts(
 	ctx context.Context,
 	expected []selectedAccount,
+	skipExcluded ...bool,
 ) (context.Context, func() error, error) {
+	if len(expected) == 0 {
+		return ctx, func() error { return nil }, nil
+	}
 	resources := make([]string, 0, len(expected)*2)
 	for _, account := range expected {
 		resources = append(resources, mutationguard.Account(account.ID))
@@ -559,6 +586,12 @@ func (s *Service) acquirePreparedAccounts(
 		return nil, nil, err
 	}
 	for _, queued := range expected {
+		if err := business.CheckAccountUpstreamManaged(guarded, s.accounts, queued.ID); err != nil {
+			if len(skipExcluded) > 0 && skipExcluded[0] && errors.Is(err, business.ErrUpstreamExcluded) {
+				continue
+			}
+			return fail(err)
+		}
 		detail, readErr := s.accounts.Account(guarded, queued.ID)
 		if readErr != nil {
 			return fail(fmt.Errorf("获取模型检测租约后账号 %s 详情读取失败：%w", queued.ID, readErr))

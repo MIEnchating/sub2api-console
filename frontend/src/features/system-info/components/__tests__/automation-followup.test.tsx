@@ -33,7 +33,7 @@ afterEach(() => {
 
 it("计划运行尚在读取账号时展示实时进度和自动执行说明", () => {
   show(preview);
-  expect(screen.getAllByText("正在读取账号模型目录（12/257）").length).toBeGreaterThan(0);
+  expect(screen.getByText("正在读取账号模型目录（12/257）")).toBeVisible();
   expect(screen.getByText(/预览通过后将自动执行/)).toBeVisible();
   expect(screen.queryByText("模型上架预览（尚未执行）")).not.toBeInTheDocument();
   expect(screen.getByRole("heading", { name: "执行前检查" })).toBeVisible();
@@ -72,7 +72,7 @@ it("计划预览已关联正式任务时详情展示实际上架结果", async (
     result: { ...preview.result, execution_task_id: "execution" },
   });
   await waitFor(() => expect(screen.getByRole("region", { name: "运营执行结果" })).toBeVisible());
-  expect(screen.getByText("execution")).toBeVisible();
+  expect(screen.getByText("已上架 1 个模型")).toBeVisible();
   expect(screen.getByText(/已新增（1 个）/)).toBeVisible();
   expect(screen.queryByRole("region", { name: "运营预览结果" })).not.toBeInTheDocument();
 });
@@ -105,8 +105,7 @@ it("正式执行详情读取失败后可以重新读取并显示执行状态", a
   });
   await user.click(await screen.findByRole("button", { name: "重新读取" }));
   expect(await screen.findByRole("region", { name: "运营执行结果" })).toBeVisible();
-  expect(screen.getByText("execution")).toBeVisible();
-  expect(screen.getAllByText("正在上架所选模型").length).toBeGreaterThan(0);
+  expect(screen.getByText("正在上架所选模型")).toBeVisible();
   expect(screen.queryByRole("button", { name: "重新读取" })).not.toBeInTheDocument();
 });
 

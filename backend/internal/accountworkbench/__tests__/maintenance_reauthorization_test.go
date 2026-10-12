@@ -25,7 +25,11 @@ func TestMaintenanceDoesNotReuseDeletedLoginSource(t *testing.T) {
 	testMaintenanceRememberedLogin(t, true)
 }
 
-func testMaintenanceRememberedLogin(t *testing.T, deleteSource bool) {
+func TestMaintenanceReauthorizationAndDetectionUseCurrentPlatformProxy(t *testing.T) {
+	testMaintenanceRememberedLogin(t, false, true)
+}
+
+func testMaintenanceRememberedLogin(t *testing.T, deleteSource bool, useProxy ...bool) {
 	t.Helper()
 	service, private := fixture(t, `{}`)
 	owner, token := previewOwner(t, private)
@@ -42,17 +46,6 @@ func testMaintenanceRememberedLogin(t *testing.T, deleteSource bool) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	view := checker.Configuration()
-	payload := view.Active.Payload
-	payload.SolProfile.Quick = []modelcheck.ProbeDefinition{{ID: "number", Kind: "numeric", Question: "Return the number seven.", Clusters: []modelcheck.NumericClusterDefinition{{ID: "seven", Center: 7}}, Tolerance: &modelcheck.NumericTolerance{Value: 0, Mode: "absolute"}, Weights: map[string][]float64{"seven": {0, -10, -10}}}}
-	payload.SolProfile.Reserve = []modelcheck.ProbeDefinition{{ID: "reserve", Kind: "numeric", Question: "Return the number seven.", Clusters: []modelcheck.NumericClusterDefinition{{ID: "seven", Center: 7}}, Tolerance: &modelcheck.NumericTolerance{Value: 0, Mode: "absolute"}, Weights: map[string][]float64{"seven": {0, -10, -10}}}}
-	draft, err := checker.SaveDraft(context.Background(), modelcheck.SaveDraftRequest{ExpectedFingerprint: view.Active.Fingerprint, Payload: payload}, "test")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err = checker.PublishDraft(context.Background(), modelcheck.PublishRequest{ExpectedFingerprint: draft.Draft.Fingerprint}, "test"); err != nil {
-		t.Fatal(err)
-	}
 	checker.UseOAuthTransport(transportFunc(func(request *http.Request) (*http.Response, error) {
 		if request.URL.String() != "https://chatgpt.com/backend-api/codex/responses" {
 			return nil, errors.New("unexpected check endpoint")
@@ -60,7 +53,7 @@ func testMaintenanceRememberedLogin(t *testing.T, deleteSource bool) {
 		if request.Header.Get("Authorization") == "Bearer expired-access" {
 			return &http.Response{StatusCode: 401, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(`{"error":{"message":"unauthorized"}}`))}, nil
 		}
-		return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"text/event-stream"}}, Body: io.NopCloser(strings.NewReader("data: {\"type\":\"response.output_text.delta\",\"delta\":\"[\\\"7\\\"]\"}\n\ndata: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"model\":\"gpt-5.6-sol\"}}\n\n"))}, nil
+		return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"text/event-stream"}}, Body: io.NopCloser(strings.NewReader("data: {\"type\": \"response.completed\", \"response\": {\"status\": \"completed\", \"model\": \"gpt-6-astra\", \"output\": [{\"type\": \"message\", \"content\": [{\"type\": \"output_text\", \"text\": \"21\"}]}]}}\n\n"))}, nil
 	}))
 	protocol := &protocolFixture{t: t}
 	service.UseExecution(tasks, runner, checker, t.TempDir())
@@ -95,6 +88,9 @@ func testMaintenanceRememberedLogin(t *testing.T, deleteSource bool) {
 	var account map[string]any
 	refreshes := 0
 	service.UseTransport(transportFunc(func(request *http.Request) (*http.Response, error) {
+		if len(useProxy) > 0 && strings.HasSuffix(request.URL.Path, "/proxies/3") {
+			return upstreamResponse(map[string]any{"data": platformProxyFixture()}), nil
+		}
 		if request.URL.Host != "isolated.invalid" {
 			return nil, errors.New("unexpected site")
 		}
@@ -211,6 +207,9 @@ func testMaintenanceRememberedLogin(t *testing.T, deleteSource bool) {
 		}
 	}
 	account["status"] = "error"
+	if len(useProxy) > 0 {
+		account["proxy_id"] = json.Number("3")
+	}
 	account["schedulable"] = false
 	account["error_message"] = "HTTP 401"
 	plan, err := service.PreviewMaintenance(ctx, owner, accountworkbench.MaintenanceSettings{Enabled: true, IntervalMinutes: 5, CooldownMinutes: 10, CheckAfterRepair: true})
@@ -237,5 +236,8 @@ func testMaintenanceRememberedLogin(t *testing.T, deleteSource bool) {
 	}
 	if refreshes != 1 || exchanges != 2 || protocol.bootstraps != 2 {
 		t.Fatalf("unexpected refresh or login replay: refresh=%d exchanges=%d logins=%d", refreshes, exchanges, protocol.bootstraps)
+	}
+	if len(useProxy) > 0 && result.Results[0].Check["transport"] != "oauth-proxy" {
+		t.Fatal("maintenance detection bypassed account proxy")
 	}
 }

@@ -39,7 +39,7 @@ export function PricingSettingsPanel(props: {
             </label>
             <Badge
               id="pricing-enabled-status"
-              variant={props.value.enabled ? "default" : "secondary"}
+              variant={props.value.enabled ? "success" : "neutral"}
             >
               {props.value.enabled ? "已开启" : "默认关闭"}
             </Badge>

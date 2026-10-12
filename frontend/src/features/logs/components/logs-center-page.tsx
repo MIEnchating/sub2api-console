@@ -44,8 +44,8 @@ export function LogsCenterPage() {
   const [pageSize, setPageSize] = useState(20);
   const [selected, setSelected] = useState<UnifiedLogEntry | null>(null);
   const groups = useQuery({
-    queryKey: ["groups"],
-    queryFn: ({ signal }) => api.groups(signal),
+    queryKey: ["groups", "options"],
+    queryFn: ({ signal }) => api.groupOptions(signal),
     enabled: kind === "event",
   });
   const selectedGroupID = groups.data?.find((group) => group.name === eventGroup)?.id ?? "";

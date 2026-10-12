@@ -103,7 +103,7 @@ it("搜索邮箱缩小批次列表，删除记录先确认且取消不发写请�
   expect(fetcher).not.toHaveBeenCalled();
 });
 
-it("批次资料到期后保留结果和删除入口，禁用重试、启用与私有导出", () => {
+it("批次资料到期后保留结果和删除入口，禁用重试和启用且不再提供私有导出", () => {
   mount(
     vi.fn(async () => Response.json([])),
     { ...run, expires_at: "2000-01-01T00:00:00Z" },
@@ -112,7 +112,7 @@ it("批次资料到期后保留结果和删除入口，禁用重试、启用与�
   expect(screen.getByRole("button", { name: "继续 / 重试" })).toBeDisabled();
   for (const button of screen.getAllByRole("button", { name: "启用" }))
     expect(button).toBeDisabled();
-  expect(screen.getByRole("button", { name: "保存私有 JSON" })).toBeDisabled();
+  expect(screen.queryByRole("button", { name: "保存私有 JSON" })).not.toBeInTheDocument();
   expect(screen.getByRole("button", { name: "删除记录" })).toBeEnabled();
 });
 
@@ -189,4 +189,11 @@ it("手动启用成功后显示启用结果并可打开原检测错误报告", a
   expect(screen.queryByRole("button", { name: "启用" })).not.toBeInTheDocument();
   await userEvent.setup().click(screen.getByRole("button", { name: "检测详情" }));
   expect(within(screen.getByRole("dialog")).getByText("请求超时")).toBeVisible();
+});
+
+it("处理记录仅显示账号导入，旧独立导出记录不显示为导入", () => {
+  mount(vi.fn(), { ...run, action: "export", status: "exported" });
+  expect(screen.queryByRole("button", { name: /账号导入/ })).not.toBeInTheDocument();
+  expect(screen.queryByText("JSON 输出")).not.toBeInTheDocument();
+  expect(screen.getByText("暂无处理记录，请先导入账号资料")).toBeVisible();
 });

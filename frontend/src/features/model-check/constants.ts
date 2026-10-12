@@ -1,3 +1,4 @@
+import { statusToneClasses } from "@/lib/status-styles";
 import type { PrecheckQuestionID } from "@/api";
 import type { AccountSort } from "@/features/accounts/lib/account-sort";
 
@@ -66,10 +67,10 @@ export const detectionMissingResultStates = {
 } as const;
 
 export const detectionResultToneClasses: Record<DetectionResultTone, string> = {
-  success: "border-success/30 bg-success/10 text-success",
-  danger: "border-destructive/30 bg-destructive/10 text-destructive",
-  warning: "border-warning/30 bg-warning/10 text-warning",
-  muted: "border-border bg-muted/30 text-muted-foreground",
+  success: statusToneClasses.success,
+  danger: statusToneClasses.danger,
+  warning: statusToneClasses.warning,
+  muted: statusToneClasses.neutral,
 };
 
 export const precheckVerdictTones = {

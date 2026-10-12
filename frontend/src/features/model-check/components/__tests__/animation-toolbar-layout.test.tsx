@@ -93,6 +93,8 @@ it("提示词设置与账号选择共用下方操作栏，点击后才显示编�
   expect(operations).toHaveClass("flex-wrap", "items-center");
   const trigger = within(operations).getByRole("button", { name: "编辑动画提示词" });
   expect(trigger).toBeVisible();
+  expect(trigger).toHaveClass("text-foreground");
+  expect(trigger).not.toHaveClass("text-info", "text-success", "bg-primary");
   expect(screen.queryByRole("textbox", { name: "动画提示词" })).not.toBeInTheDocument();
   fireEvent.click(trigger);
   expect(screen.getByRole("dialog", { name: "动画提示词设置" })).toBeVisible();

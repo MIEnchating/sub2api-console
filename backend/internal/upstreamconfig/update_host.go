@@ -3,14 +3,9 @@ package upstreamconfig
 import (
 	"context"
 	"fmt"
-	"slices"
 
 	"github.com/MIEnchating/sub2api-console/backend/internal/configstore"
 )
-
-type catalogIdentityStore interface {
-	UpstreamCatalogIdentityID(context.Context, string) (string, error)
-}
 
 // resolveUpdateHost runs under the source and candidate mutation guards. An
 // existing connection address or an explicit stable alias updates the source
@@ -40,18 +35,6 @@ func (s *Service) resolveUpdateHost(ctx context.Context, previous Configuration,
 }
 
 func (s *Service) updateHostIdentity(ctx context.Context, host string) (string, bool, error) {
-	if store, ok := s.business.(catalogIdentityStore); ok {
-		identity, err := store.UpstreamCatalogIdentityID(ctx, host)
-		return identity, identity != "", err
-	}
-	summary, err := s.business.Upstreams(ctx)
-	if err != nil {
-		return "", false, err
-	}
-	for _, upstream := range summary.Hosts {
-		if upstream.Host == host || slices.Contains(upstream.Hosts, host) {
-			return upstream.UpstreamID, true, nil
-		}
-	}
-	return "", false, nil
+	identity, err := s.business.UpstreamCatalogIdentityID(ctx, host)
+	return identity, identity != "", err
 }

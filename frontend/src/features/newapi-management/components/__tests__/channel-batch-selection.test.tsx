@@ -53,7 +53,7 @@ function mount(): void {
   );
 }
 
-it("渠道行内、分页与批量操作使用全局描边图标按钮，键盘仍可打开维护弹窗", async () => {
+it("渠道操作按主次与危险语义着色，保持图标尺寸及键盘操作", async () => {
   vi.stubGlobal(
     "fetch",
     vi.fn(async () => Response.json({ items, total: 2 })),
@@ -68,12 +68,20 @@ it("渠道行内、分页与批量操作使用全局描边图标按钮，键盘�
     screen.getByRole("button", { name: "转到上一页" }),
     screen.getByRole("button", { name: "转到下一页" }),
   ]) {
-    expect(button).toHaveClass("size-8", "border-border");
+    expect(button).toHaveClass("size-8");
   }
+  expect(add).toHaveClass("bg-primary", "text-primary-foreground");
+  expect(within(row).getByRole("button", { name: "下架模型" })).toHaveClass("text-destructive");
+  expect(screen.getByRole("button", { name: "转到上一页" })).toHaveClass(
+    "border-border",
+    "text-muted-foreground",
+  );
   await user.click(screen.getByRole("checkbox", { name: "全选当前筛选渠道" }));
   for (const name of ["批量上架模型", "批量下架模型"]) {
-    expect(screen.getByRole("button", { name })).toHaveClass("size-8", "border-border");
+    expect(screen.getByRole("button", { name })).toHaveClass("size-8");
   }
+  expect(screen.getByRole("button", { name: "批量上架模型" })).toHaveClass("bg-primary");
+  expect(screen.getByRole("button", { name: "批量下架模型" })).toHaveClass("text-destructive");
   add.focus();
   await user.keyboard("{Enter}");
   expect(screen.getByRole("dialog", { name: "上架模型" })).toBeVisible();

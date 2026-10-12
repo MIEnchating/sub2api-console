@@ -14,8 +14,8 @@ export function ProbeModelInheritance(props: {
     queryFn: ({ signal }) => api.policy(signal),
   });
   const groups = useQuery({
-    queryKey: ["groups"],
-    queryFn: ({ signal }) => api.groups(signal),
+    queryKey: ["groups", "configuration"],
+    queryFn: ({ signal }) => api.groupConfigurations(signal),
     enabled: props.groupIds.length > 0,
   });
   const loading =

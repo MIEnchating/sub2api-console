@@ -802,7 +802,7 @@ describe("自动巡检页面", () => {
       <AutoInspectionHeartbeatDetails
         record={status.heartbeat_history[2]}
         task={legacyTask}
-        upstreams={currentUpstreams}
+        upstreams={currentUpstreams.hosts}
       />,
     );
 

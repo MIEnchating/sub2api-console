@@ -70,7 +70,7 @@ test("工作台五个功能页键盘切换同步选中状态且窄屏不撑宽�
       "true",
     );
     await expect(page.locator('[data-slot="skeleton"]')).toHaveCount(0);
-    const panel = page.getByRole("tabpanel");
+    const panel = page.getByRole("tabpanel").first();
     await expect(panel).toBeVisible();
     expect(await panel.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(
       true,
@@ -114,7 +114,7 @@ test("统一上传入口能选择 TXT 文件并把内容填入账号输入框", 
 test("导入页桌面分栏，窄屏滚动设置时解析按钮始终可见", async ({ page }, info) => {
   await page.goto("/account-workbench");
   const input = page.getByRole("textbox", { name: "账号资料", exact: true });
-  const action = page.getByRole("combobox", { name: "处理方式", exact: true });
+  const action = page.getByRole("combobox", { name: "配置模板", exact: true });
   const submit = page.getByRole("button", { name: "解析并预览" });
   await expect(input).toBeVisible();
   await expect(submit).toBeInViewport();
@@ -128,38 +128,36 @@ test("导入页桌面分栏，窄屏滚动设置时解析按钮始终可见", as
       .getByRole("region", { name: "账号资料", exact: true })
       .boundingBox();
     const settings = await page
-      .getByRole("region", { name: "处理设置", exact: true })
+      .getByRole("region", { name: "导入设置", exact: true })
       .boundingBox();
     expect(settings!.y).toBeGreaterThan(inputCard!.y + inputCard!.height);
     await input.click();
     await expect(input).toBeFocused();
   }
-  const proxy = page.getByRole("checkbox", { name: "使用登录 / 检测代理" });
+  const proxy = page.getByRole("combobox", { name: "统一平台代理" });
   await proxy.scrollIntoViewIfNeeded();
-  await proxy.check();
-  await expect(page.getByLabel("登录代理地址")).toBeVisible();
+  await expect(proxy).toBeVisible();
   await expect(submit).toBeInViewport();
   await input.fill("rt_" + "a".repeat(3000));
   await expect(submit).toBeInViewport();
   expect(
     await page
       .getByRole("tabpanel")
+      .first()
       .evaluate((element) => element.scrollWidth <= element.clientWidth),
   ).toBe(true);
 });
 
-test("低高度窗口展开检测设置后仍能操作，切换输出方式隐藏导入专属设置", async ({ page }) => {
+test("低高度窗口直接展示检测模型，关闭检测后禁用模型输入", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 640 });
   await page.goto("/account-workbench");
-  await page.getByText("检测设置", { exact: true }).click();
   const model = page.getByRole("textbox", { name: "检测模型" });
   await model.scrollIntoViewIfNeeded();
   await expect(model).toBeInViewport();
   await expect(page.getByRole("button", { name: "解析并预览" })).toBeInViewport();
-  await page.getByRole("combobox", { name: "处理方式", exact: true }).click();
-  await page.getByRole("option", { name: "独立 JSON 输出" }).click();
-  await expect(page.getByRole("combobox", { name: "配置模板" })).toHaveCount(0);
-  await expect(model).toHaveCount(0);
+  await page.getByRole("checkbox", { name: "导入后执行糖果题检测" }).uncheck();
+  await expect(model).toBeDisabled();
+  await expect(page.getByRole("combobox", { name: "处理方式" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "解析并预览" })).toBeInViewport();
 });
 
@@ -176,6 +174,7 @@ test("账号筛选显示名称，维护设置弹窗关闭后恢复结果表格�
   await page.getByRole("tab", { name: "自动维护", exact: true }).click();
   const results = page.getByRole("region", { name: "维护结果" });
   await expect(results).toBeVisible();
+  await page.getByRole("tab", { name: "运行状态", exact: true }).click();
   await expect(results.getByRole("table", { name: "维护运行状态" })).toBeVisible();
   const trigger = page.getByRole("button", { name: "维护设置", exact: true });
   await trigger.click();
@@ -268,7 +267,7 @@ test("多模板自适应排列，长名称和处理记录展开不会撑宽页�
   if (info.project.name === "desktop-light")
     expect(second!.x).toBeGreaterThan(first!.x + first!.width);
   else expect(second!.y).toBeGreaterThan(first!.y + first!.height);
-  const panel = page.getByRole("tabpanel");
+  const panel = page.getByRole("tabpanel").first();
   expect(await panel.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
   await page.screenshot({ path: test.info().outputPath("模板列表.png"), fullPage: true });
   await page.getByRole("tab", { name: "处理记录", exact: true }).click();
@@ -438,16 +437,18 @@ test("维护结果包含长邮箱时仅表格横向滚动，运行时间和停�
   await page.goto("/account-workbench");
   await page.getByRole("tab", { name: "自动维护", exact: true }).click();
   const results = page.getByRole("region", { name: "维护结果" });
+  await page.getByRole("tab", { name: "运行状态", exact: true }).click();
   await expect(results.getByRole("status")).toContainText("正在维护账号");
   await expect(results.getByText("上次检查", { exact: true })).toBeVisible();
   await expect(results.getByText("下次检查", { exact: true })).toBeVisible();
+  await page.getByRole("tab", { name: "账号结果", exact: true }).click();
   await expect(results.getByRole("cell", { name: email })).toBeVisible();
   expect(await results.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(
     true,
   );
   expect(
     await page
-      .getByRole("tabpanel")
+      .getByRole("tabpanel", { name: "自动维护", exact: true })
       .evaluate((element) => element.scrollWidth <= element.clientWidth),
   ).toBe(true);
   const stop = page.getByRole("button", { name: "停止维护" });
@@ -462,16 +463,11 @@ test("维护结果包含长邮箱时仅表格横向滚动，运行时间和停�
   await page.screenshot({ path: test.info().outputPath("维护运行结果.png"), fullPage: true });
 });
 
-test("窄屏工具栏说明与操作分行排列，筛选区和按钮保持在页面内", async ({ page }) => {
+test("紧凑工具栏在窄屏自动换行，筛选区和按钮保持在页面内", async ({ page }) => {
   await page.setViewportSize({ width: 320, height: 664 });
   await page.goto("/account-workbench?tab=templates");
   const toolbar = page.getByRole("group", { name: "工作台操作", exact: true });
   const actions = toolbar.getByRole("group", { name: "页面操作", exact: true });
-  const description = toolbar.getByText("复用账号配置，统一导入时的分组与调度设置。");
-  await expect(description).toBeVisible();
-  const descriptionBox = await description.boundingBox();
-  const actionsBox = await actions.boundingBox();
-  expect(actionsBox!.y).toBeGreaterThanOrEqual(descriptionBox!.y + descriptionBox!.height);
   for (const button of await actions.getByRole("button").all()) {
     await expect(button).toBeInViewport();
   }
@@ -498,11 +494,9 @@ test("导入设置展开且模板名称超长时分区不溢出，低高度窗�
   );
   await page.setViewportSize({ width: 1024, height: 600 });
   await page.goto("/account-workbench");
-  const settings = page.getByRole("region", { name: "处理设置", exact: true });
+  const settings = page.getByRole("region", { name: "导入设置", exact: true });
   await settings.getByRole("combobox", { name: "配置模板" }).click();
   await page.getByRole("option", { name: "工作台配置模板".repeat(30), exact: true }).click();
-  await settings.getByRole("checkbox", { name: "使用登录 / 检测代理" }).check();
-  await settings.getByText("检测设置", { exact: true }).click();
   const model = settings.getByRole("textbox", { name: "检测模型" });
   await model.scrollIntoViewIfNeeded();
   await expect(model).toBeInViewport();
@@ -517,4 +511,27 @@ test("导入设置展开且模板名称超长时分区不溢出，低高度窗�
   expect(await settings.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(
     true,
   );
+});
+
+test("保存检测模型后刷新页面沿用默认值，未保存的修改不覆盖默认值", async ({ page }) => {
+  let saved = { model: "gpt-6-astra", revision: 0 };
+  await page.route("**/api/account-workbench/import-model", async (route) => {
+    if (route.request().method() === "PUT") {
+      const body = route.request().postDataJSON() as { model: string; revision: number };
+      expect(body.revision).toBe(saved.revision);
+      saved = { model: body.model, revision: saved.revision + 1 };
+    }
+    await route.fulfill({ json: saved });
+  });
+  await page.goto("/account-workbench?tab=import");
+  const input = page.getByRole("textbox", { name: "检测模型" });
+  await expect(input).toHaveValue("gpt-6-astra");
+  await input.fill("chosen-model");
+  await page.getByRole("button", { name: "保存检测模型" }).click();
+  await expect(page.getByText("检测模型已保存", { exact: true })).toBeVisible();
+  await page.reload();
+  await expect(input).toHaveValue("chosen-model");
+  await input.fill("temporary-model");
+  await page.reload();
+  await expect(input).toHaveValue("chosen-model");
 });

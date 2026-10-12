@@ -921,7 +921,7 @@ function PricingCatalogTable(props: {
                   <TableCell>{group.rate_multiplier ?? "-"}</TableCell>
                   <TableCell>
                     {group.available ? (
-                      <Badge variant="outline">可用</Badge>
+                      <Badge variant="success">可用</Badge>
                     ) : (
                       <Badge variant="warning">{group.reason ?? "不可用"}</Badge>
                     )}
@@ -1059,7 +1059,7 @@ export function PricingPreviewTable(props: {
                 let statusBadge = <Badge variant="outline">无需调整</Badge>;
                 if (decision.skipped) statusBadge = <Badge variant="warning">无法判定</Badge>;
                 else if (decision.changed) {
-                  statusBadge = <Badge variant="secondary">将调整</Badge>;
+                  statusBadge = <Badge variant="info">将调整</Badge>;
                 }
                 return (
                   <Fragment key={decision.account_id}>

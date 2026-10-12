@@ -56,7 +56,7 @@ func (s *Store) ControlPolicy(ctx context.Context) (map[string]any, error) {
 }
 
 func (s *Store) ProbeCandidates(ctx context.Context, accountID, groupName, platform *string) ([]ProbeCandidate, error) {
-	clauses := []string{}
+	clauses := []string{"a.id NOT IN (" + excludedAccountIDsSQL + ")"}
 	arguments := []any{}
 	if accountID != nil {
 		clauses = append(clauses, "a.id=?")

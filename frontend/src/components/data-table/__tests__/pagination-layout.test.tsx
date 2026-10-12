@@ -5,6 +5,47 @@ import { describe, expect, it, vi } from "vitest";
 import { DataTablePagination } from "../pagination";
 
 describe("分页布局", () => {
+  it("紧凑分页只保留前后翻页且宽容器仍显示当前页数", async () => {
+    const change = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <DataTablePagination
+        compact
+        currentPage={2}
+        totalPages={3}
+        totalItems={60}
+        pageSize={20}
+        onPageChange={change}
+        onPageSizeChange={vi.fn()}
+      />,
+    );
+    expect(screen.getAllByRole("button")).toHaveLength(2);
+    expect(screen.getByLabelText("当前第 2 页，共 3 页")).not.toHaveClass("@lg/pagination:hidden");
+    await user.click(screen.getByRole("button", { name: "转到上一页" }));
+    expect(change).toHaveBeenLastCalledWith(1);
+    await user.click(screen.getByRole("button", { name: "转到下一页" }));
+    expect(change).toHaveBeenLastCalledWith(3);
+  });
+
+  it("紧凑分页允许修改每页条数", async () => {
+    const change = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <DataTablePagination
+        compact
+        currentPage={1}
+        totalPages={3}
+        totalItems={60}
+        pageSize={20}
+        onPageChange={vi.fn()}
+        onPageSizeChange={change}
+      />,
+    );
+    await user.click(screen.getByRole("combobox", { name: "每页行数" }));
+    await user.click(screen.getByRole("option", { name: "50" }));
+    expect(change).toHaveBeenCalledWith(50);
+  });
+
   it("远端未提供总数时不显示虚构页数和末页入口，仍可继续翻页", async () => {
     const change = vi.fn();
     render(
@@ -24,7 +65,7 @@ describe("分页布局", () => {
     expect(change).toHaveBeenCalledWith(3);
   });
 
-  it("读取远端分页期间禁用容量、页码及翻页，避免重复导航", () => {
+  it.each([false, true])("读取远端分页期间禁用容量、页码及翻页（compact=%s）", (compact) => {
     render(
       <DataTablePagination
         currentPage={2}
@@ -32,6 +73,7 @@ describe("分页布局", () => {
         totalItems={120}
         pageSize={50}
         disabled
+        compact={compact}
         onPageChange={vi.fn()}
         onPageSizeChange={vi.fn()}
       />,
@@ -61,12 +103,13 @@ describe("分页布局", () => {
     expect(onPageChange).toHaveBeenCalledWith(51);
   });
 
-  it("空数据分页保留页容量入口且前后翻页不可用", () => {
+  it.each([false, true])("空数据分页保留页容量入口且前后翻页不可用（compact=%s）", (compact) => {
     render(
       <DataTablePagination
         currentPage={1}
         totalPages={1}
         totalItems={0}
+        compact={compact}
         pageSize={10}
         onPageChange={vi.fn()}
         onPageSizeChange={vi.fn()}

@@ -11,3 +11,9 @@ it("读取失败可用键盘重试，重试进行中禁止重复触发", async (
   view.rerender(<ContentRetry onRetry={retry} pending />);
   expect(screen.getByRole("button", { name: "重新读取" })).toBeDisabled();
 });
+
+it("局部重试使用紧凑高度且保留标准按钮尺寸", () => {
+  const view = render(<ContentRetry compact onRetry={() => undefined} />);
+  expect(view.container.firstElementChild).toHaveClass("min-h-8", "p-0");
+  expect(screen.getByRole("button", { name: "重新读取" })).toHaveClass("h-8");
+});

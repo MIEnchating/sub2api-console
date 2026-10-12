@@ -19,15 +19,18 @@ func passedImportCheck(result map[string]any) bool {
 }
 
 func (s *Service) checkImportItem(ctx context.Context, value *privateRun, index int) error {
+	if err := s.executionAllowed(ctx, value); err != nil {
+		return err
+	}
 	row := &value.Public.Items[index]
 	stored := &value.Items[index]
 	row.Status = "checking"
-	row.Message = "账号已导入，正在执行智商检测"
+	row.Message = "账号已导入，正在执行糖果题检测"
 	row.Check = nil
 	if err := s.persistRun(value); err != nil {
 		return errors.New("检测阶段保存失败")
 	}
-	result, err := s.checker.CheckOAuthWithProxy(ctx, row.AccountID, stored.Item.Name, stored.Credentials, value.Settings.Model, 30, stored.ProxyURL)
+	result, err := s.checker.CheckOAuthCandyWithProxy(ctx, row.AccountID, stored.Item.Name, stored.Credentials, value.Settings.Model, 30, stored.ProxyURL)
 	if err != nil {
 		result = map[string]any{"verdict": "ERROR", "error": err.Error(), "claimed_model": value.Settings.Model}
 	}
@@ -41,12 +44,8 @@ func (s *Service) checkImportItem(ctx context.Context, value *privateRun, index 
 			switch text(row.Check["verdict"]) {
 			case "INCONCLUSIVE":
 				reason = "检测证据不足"
-			case "LUNA_LIKE", "LUNA_CONSISTENT":
-				reason = "检测结果更接近 Luna，未通过智商检测"
-			case "TERRA_LIKE", "TERRA_CONSISTENT":
-				reason = "检测结果更接近 Terra，未通过智商检测"
 			case "MISMATCH":
-				reason = "智商检测结果不匹配"
+				reason = "糖果题检测结果不匹配"
 			default:
 				reason = "检测未返回有效结果，请查看检测详情"
 				row.Check["verdict"] = "ERROR"

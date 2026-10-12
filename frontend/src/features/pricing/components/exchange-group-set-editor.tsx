@@ -111,9 +111,9 @@ export function ExchangeGroupSetEditor(props: {
               <TooltipTrigger
                 render={
                   <Button
-                    variant="ghost"
+                    variant="destructive"
                     size="icon"
-                    className="text-muted-foreground hover:text-destructive"
+
                     aria-label={`删除互换组 ${setNumber}`}
                     onClick={() => props.onRemove(props.setIndex)}
                   />
@@ -126,7 +126,7 @@ export function ExchangeGroupSetEditor(props: {
           </div>
         </div>
         <div className="flex min-w-0 flex-wrap items-center gap-2" data-slot="exchange-set-summary">
-          <Badge variant={complete ? "outline" : "warning"}>{statusLabel}</Badge>
+          <Badge variant={complete ? "success" : "warning"}>{statusLabel}</Badge>
           {selectedPlatform ? (
             <Badge variant="secondary">{platformLabel(selectedPlatform)}</Badge>
           ) : null}

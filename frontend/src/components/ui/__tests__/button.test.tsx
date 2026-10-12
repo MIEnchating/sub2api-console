@@ -27,3 +27,20 @@ describe("Button", () => {
     expect(onClick).not.toHaveBeenCalled();
   });
 });
+
+it.each([
+  ["outline", "border-border", "bg-background"],
+  ["secondary", "border-transparent", "bg-secondary"],
+] as const)("%s 辅助操作保持中性色，不冒充业务状态", (variant, border, background) => {
+  render(<Button variant={variant}>提示词设置</Button>);
+  expect(screen.getByRole("button", { name: "提示词设置" })).toHaveClass(
+    border,
+    background,
+    "text-foreground",
+  );
+  expect(screen.getByRole("button", { name: "提示词设置" })).not.toHaveClass(
+    "text-info",
+    "text-success",
+    "bg-primary",
+  );
+});

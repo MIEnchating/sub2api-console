@@ -6,12 +6,19 @@ import (
 	"time"
 
 	"github.com/MIEnchating/sub2api-console/backend/internal/adminclient"
+	"github.com/MIEnchating/sub2api-console/backend/internal/business"
 	"github.com/MIEnchating/sub2api-console/backend/internal/targetguard"
 )
 
 // CollectLive bypasses the inspection interval only for an actively watched account.
 // It preserves policy scope and uses the same validation/deduplication as inspection.
 func (s *Service) CollectLive(ctx context.Context, policy map[string]any, targets targetguard.Store, accountID string) error {
+	if err := business.CheckAccountUpstreamManaged(ctx, s.repository, accountID); err != nil {
+		if errors.Is(err, business.ErrUpstreamExcluded) {
+			return nil
+		}
+		return err
+	}
 	configured, err := parsePolicy(policy)
 	if err != nil {
 		return err
@@ -50,6 +57,12 @@ func (s *Service) CollectLive(ctx context.Context, policy map[string]any, target
 		return targetguard.ErrChanged
 	}
 	now := time.Now().UTC()
+	if err := business.CheckAccountUpstreamManaged(ctx, s.repository, accountID); err != nil {
+		if errors.Is(err, business.ErrUpstreamExcluded) {
+			return nil
+		}
+		return err
+	}
 	samples, _ := convertTrafficRows(accountID, memberships, rows, now.Add(-time.Duration(configured.lookbackMinutes)*time.Minute), now, 100)
 	if len(samples) > 0 {
 		if _, err := s.repository.PersistTrafficSamples(ctx, samples); err != nil {

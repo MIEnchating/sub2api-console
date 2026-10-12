@@ -30,7 +30,10 @@ export function DetectionTaskDetails(props: { id: string; onClose: () => void })
     queryFn: ({ signal }) => api.task(props.id, signal),
     refetchInterval: taskPollInterval,
   });
-  const groups = useQuery({ queryKey: ["groups"], queryFn: ({ signal }) => api.groups(signal) });
+  const groups = useQuery({
+    queryKey: ["groups", "options"],
+    queryFn: ({ signal }) => api.groupOptions(signal),
+  });
   const task = query.data;
   const state = collectAnimationTasks(task ? [task] : [], new Set<string>());
   const terminals = terminalContinuityResults(task ? [task] : []);

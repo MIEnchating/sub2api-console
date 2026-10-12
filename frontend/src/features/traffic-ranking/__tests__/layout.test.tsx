@@ -17,7 +17,7 @@ afterEach(() => {
 function renderRanking(): void {
   const client = new QueryClient({ defaultOptions: { queries: { staleTime: Infinity } } });
   clients.push(client);
-  client.setQueryData(["groups"], []);
+  client.setQueryData(["groups", "options"], []);
   client.setQueryData(["dictionaries", "platform"], { items: [] });
   client.setQueryData(["traffic-ranking", "24h", null, "traffic"], rankingFixture);
   render(

@@ -70,7 +70,7 @@ test("模板加载可继续编辑，读取失败可键盘重试且不丢失账�
   await expect(input).toHaveValue("rt_isolated");
 });
 
-test("独立输出隐藏模板等待，切回导入后重新读取并保留输入", async ({ page }) => {
+test("模板读取完成保留账号资料且没有独立输出入口", async ({ page }) => {
   await setup(page);
   const held: Route[] = [];
   await page.route("**/api/account-workbench/templates", (route) => {
@@ -81,16 +81,8 @@ test("独立输出隐藏模板等待，切回导入后重新读取并保留输�
   const input = page.getByRole("textbox", { name: "账号资料", exact: true });
   await input.fill("rt_isolated");
   await expect.poll(() => held.length).toBeGreaterThan(0);
-  await page.getByRole("combobox", { name: "处理方式" }).click();
-  await page.getByRole("option", { name: "独立 JSON 输出" }).click();
-  await expect(page.getByRole("status", { name: "正在读取配置模板" })).toHaveCount(0);
-  await expect(page.getByRole("combobox", { name: "配置模板" })).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "解析并预览" })).toBeEnabled();
-  const previousReads = held.length;
-  await page.getByRole("combobox", { name: "处理方式" }).click();
-  await page.getByRole("option", { name: "导入目标站点" }).click();
-  await expect.poll(() => held.length).toBeGreaterThan(previousReads);
-  for (const route of held.slice(previousReads))
+  await expect(page.getByRole("combobox", { name: "处理方式" })).toHaveCount(0);
+  for (const route of held)
     await route.fulfill({ json: { revision: 1, preferred_id: "", items: [] } });
   await expect(page.getByRole("combobox", { name: "配置模板" })).toBeEnabled();
   await expect(input).toHaveValue("rt_isolated");

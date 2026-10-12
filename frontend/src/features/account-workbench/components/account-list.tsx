@@ -2,6 +2,14 @@ import { useCallback, useEffect, useMemo, useState, type ReactElement } from "re
 import { useQuery } from "@tanstack/react-query";
 import { RefreshCw, Search, Users } from "lucide-react";
 import { api } from "@/api";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogBody,
+} from "@/components/ui/dialog";
+import { AccountCheckButton } from "./account-check-button";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -25,7 +33,12 @@ import { Badge } from "@/components/ui/badge";
 import { DataTablePanel } from "@/components/data-table/table-panel";
 import { DataTablePagination } from "@/components/data-table/pagination";
 import { useClientPagination } from "@/hooks/use-client-pagination";
-import { accountStatusLabels, subscriptionLabels, workbenchKeys } from "../constants";
+import {
+  accountStatusLabels,
+  accountStatusVariants,
+  subscriptionLabels,
+  workbenchKeys,
+} from "../constants";
 import { accountStatus, createAccountSearchIndex, filterAccountSearchIndex } from "../lib/accounts";
 import type { WorkbenchAccount } from "../types";
 import { WorkbenchToolbar, WorkbenchEmptyState } from "./workbench-section";
@@ -90,11 +103,10 @@ export function AccountList(props: { onStarted?: () => void }): ReactElement {
             </Button>
             <Button
               variant="outline"
-              aria-expanded={showRemembered}
-              aria-controls="remembered-accounts"
+              aria-haspopup="dialog"
               onClick={() => setShowRemembered((current) => !current)}
             >
-              {showRemembered ? "隐藏已记住账号" : "查看已记住账号"}
+              查看已记住账号
             </Button>
           </div>
         }
@@ -143,7 +155,18 @@ export function AccountList(props: { onStarted?: () => void }): ReactElement {
           <AccountGroupFilter accounts={accounts} value={group} onChange={changeGroup} />
         </div>
       </WorkbenchToolbar>
-      {showRemembered && <RememberedAccountList onStarted={props.onStarted} />}
+      {showRemembered && (
+        <Dialog open onOpenChange={setShowRemembered}>
+          <DialogContent width="wide" height="adaptive">
+            <DialogHeader>
+              <DialogTitle>已记住账号</DialogTitle>
+            </DialogHeader>
+            <DialogBody>
+              <RememberedAccountList onStarted={props.onStarted} />
+            </DialogBody>
+          </DialogContent>
+        </Dialog>
+      )}
       {query.isPending && (
         <div aria-label="正在读取账号" aria-busy="true" className="grid gap-3">
           {[0, 1, 2, 3].map((id) => (
@@ -176,12 +199,12 @@ export function AccountList(props: { onStarted?: () => void }): ReactElement {
           >
             <TableHeader>
               <TableRow>
-                <TableHead className="w-56">账号</TableHead>
-                <TableHead className="w-24">状态</TableHead>
-                <TableHead className="w-32">订阅</TableHead>
-                <TableHead className="w-40">分组</TableHead>
-                <TableHead>连接</TableHead>
-                <TableHead className="w-20">操作</TableHead>
+                <TableHead className="w-[25%]">账号</TableHead>
+                <TableHead className="w-[12%]">状态</TableHead>
+                <TableHead className="w-[16%]">订阅</TableHead>
+                <TableHead className="w-[16%]">分组</TableHead>
+                <TableHead className="w-[16%]">代理</TableHead>
+                <TableHead className="w-44">操作</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -200,7 +223,9 @@ export function AccountList(props: { onStarted?: () => void }): ReactElement {
                     <div className="text-xs text-muted-foreground">#{account.id}</div>
                   </TableCell>
                   <TableCell>
-                    <Badge variant="secondary">{accountStatusLabels[accountStatus(account)]}</Badge>
+                    <Badge variant={accountStatusVariants[accountStatus(account)] ?? "neutral"}>
+                      {accountStatusLabels[accountStatus(account)]}
+                    </Badge>
                     <div className="text-xs text-muted-foreground">
                       {account.schedulable ? "可调度" : "暂停调度"}
                     </div>
@@ -217,19 +242,18 @@ export function AccountList(props: { onStarted?: () => void }): ReactElement {
                   </TableCell>
                   <TableCell className="whitespace-normal wrap-anywhere" overflowTooltip={false}>
                     {account.proxy_name || "直连"}
-                    <div className="text-xs text-muted-foreground">
-                      并发 {account.concurrency || "未提供"} · 倍率{" "}
-                      {account.rate_multiplier || "未提供"}
-                    </div>
                   </TableCell>
                   <TableCell>
-                    <Button
-                      variant="ghost"
-                      onClick={() => setDetailsID(account.id)}
-                      aria-label={`查看 ${account.name || account.id} 配置`}
-                    >
-                      查看
-                    </Button>
+                    <div className="flex items-center gap-1">
+                      <AccountCheckButton account={account} />
+                      <Button
+                        variant="ghost"
+                        onClick={() => setDetailsID(account.id)}
+                        aria-label={`查看 ${account.name || account.id} 配置`}
+                      >
+                        查看
+                      </Button>
+                    </div>
                   </TableCell>
                 </TableRow>
               ))}

@@ -62,19 +62,11 @@ beforeEach(() => {
     ],
     sub2api_base_url: "",
   });
-  vi.spyOn(api, "groups").mockResolvedValue([
+  vi.spyOn(api, "groupMembershipOptions").mockResolvedValue([
     {
       id: "7",
       name: "生产分组",
       account_count: 1,
-      scheduling_open: 1,
-      scheduling_closed: 0,
-      scheduling_unknown: 0,
-      strategy: "default",
-      strategy_source: "global_default",
-      participation_status: "participating",
-      participation_reason: null,
-      status: "healthy",
     },
   ]);
   vi.spyOn(api, "accountModelAutomationSchedules").mockResolvedValue([schedule]);

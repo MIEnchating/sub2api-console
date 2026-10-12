@@ -32,7 +32,9 @@ func (s *Service) applyCurrentProtections(ctx context.Context, targets []Target,
 	for index := range result {
 		protection := protections[result[index].AccountID]
 		_, diagnostic := manualFusedDiagnostics[result[index].AccountID]
-		if protection.ManualPriority {
+		if protection.UpstreamExcluded {
+			result[index].SkipReason = textPointer("上游已排除管控，已跳过")
+		} else if protection.ManualPriority {
 			result[index].SkipReason = textPointer("账号在探测执行前进入手动控制，已跳过")
 		} else if protection.ManualFused && !diagnostic {
 			result[index].SkipReason = textPointer("账号在探测执行前被人工熔断，已跳过")

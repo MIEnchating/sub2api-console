@@ -63,7 +63,7 @@ function renderCard(
   });
   seedDictionaries(queryClient);
   queryClient.setQueryData(["account-creation-settings"], configuredSettings);
-  queryClient.setQueryData(["groups"], configuredGroups);
+  queryClient.setQueryData(["groups", "options"], configuredGroups);
   queryClient.setQueryData(["dictionaries", "group"], {
     items: (order.length
       ? order
@@ -75,7 +75,7 @@ function renderCard(
     })),
   });
   queryClient.setQueryData(
-    ["accounts"],
+    ["accounts", "options"],
     [
       { id: "41", name: "账号一" },
       { id: "42", name: "账号二" },
@@ -275,7 +275,7 @@ describe("账号创建设置卡片", () => {
       defaultOptions: { queries: { retry: false, staleTime: Number.POSITIVE_INFINITY } },
     });
     seedDictionaries(queryClient);
-    queryClient.setQueryData(["groups"], [group]);
+    queryClient.setQueryData(["groups", "options"], [group]);
     render(
       <QueryClientProvider client={queryClient}>
         <Toaster />

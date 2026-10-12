@@ -2,15 +2,15 @@ import type { AccountStatus } from "@/api";
 
 export function accountCheckStatus(account: AccountStatus): {
   label: string;
-  variant: "secondary" | "warning" | "destructive" | "outline";
+  variant: "success" | "info" | "warning" | "destructive" | "outline";
 } {
   switch (account.model_check_status) {
     case "loading":
-      return { label: "读取中", variant: "outline" };
+      return { label: "读取中", variant: "info" };
     case "unavailable":
       return { label: "结果读取失败", variant: "warning" };
     case "consistent":
-      return { label: "符合特征", variant: "secondary" };
+      return { label: "符合特征", variant: "success" };
     case "inconsistent":
       return { label: "不符合特征", variant: "destructive" };
     case "inconclusive":

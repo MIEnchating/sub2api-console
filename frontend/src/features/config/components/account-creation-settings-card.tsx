@@ -10,7 +10,7 @@ import {
   api,
   type AccountCreationPolicy,
   type AccountCreationSettings,
-  type GroupStatus,
+  type GroupOption as CatalogGroupOption,
   type RuntimeConfig,
   type Task,
 } from "@/api";
@@ -66,7 +66,7 @@ function fallbackSettings(concurrency: number, priority: number): AccountCreatio
 }
 
 function groupOptions(
-  groups: GroupStatus[] | undefined,
+  groups: CatalogGroupOption[] | undefined,
   settings: AccountCreationSettings,
 ): GroupOption[] {
   const names = new Map(
@@ -93,10 +93,13 @@ export function AccountCreationSettingsCard(props: {
     queryFn: ({ signal }) => api.accountCreationSettings(signal),
     placeholderData: placeholder,
   });
-  const groups = useQuery({ queryKey: ["groups"], queryFn: ({ signal }) => api.groups(signal) });
+  const groups = useQuery({
+    queryKey: ["groups", "options"],
+    queryFn: ({ signal }) => api.groupOptions(signal),
+  });
   const accounts = useQuery({
-    queryKey: ["accounts"],
-    queryFn: ({ signal }) => api.accounts(signal),
+    queryKey: ["accounts", "options"],
+    queryFn: ({ signal }) => api.accountOptions(signal),
   });
   const initialView: SettingsView =
     props.initialScope && props.initialScope !== defaultScope ? "groups" : "default";

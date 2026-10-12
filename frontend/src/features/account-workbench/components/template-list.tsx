@@ -171,10 +171,10 @@ export function TemplateList(): ReactElement {
                 </Button>
               )}
               <Button
-                variant="ghost"
+                variant="destructive"
                 disabled={pending}
                 onClick={() => setDeleting({ template: item, revision: query.data!.revision })}
-                className="ml-auto text-muted-foreground hover:text-destructive"
+                className="ml-auto"
                 aria-label={`删除模板 ${item.name}`}
               >
                 <Trash2 aria-hidden="true" />

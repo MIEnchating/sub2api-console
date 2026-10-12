@@ -351,6 +351,9 @@ func (s *Service) RecoverInvalid(ctx context.Context, hosts []string, actor stri
 // ResolveAuth provisions a missing exact-Host authorization only from an explicit,
 // unambiguous password-vault association.
 func (s *Service) ResolveAuth(ctx context.Context, host, actor string) (*configstore.AuthRecord, error) {
+	if err := business.CheckUpstreamManaged(ctx, s.repository, host); err != nil {
+		return nil, err
+	}
 	host = configstore.CanonicalHost(host)
 	if host == "" {
 		return nil, errors.New("上游 Host 不能为空")
@@ -578,10 +581,19 @@ func (s *Service) recoverRecords(ctx context.Context, records []configstore.Auth
 	outcomes := make([]business.AuthRecoveryOutcome, 0, len(records))
 	summary := business.AuthRecoverySummary{}
 	for _, record := range records {
+		if err := business.CheckUpstreamManaged(ctx, s.repository, record.Host); err != nil {
+			if errors.Is(err, business.ErrUpstreamExcluded) {
+				continue
+			}
+			return BatchResult{Summary: summary, Outcomes: outcomes}, err
+		}
 		if err := ctx.Err(); err != nil {
 			return BatchResult{Summary: summary, Outcomes: outcomes}, err
 		}
 		outcome := s.recover(ctx, record, "", false)
+		if outcome.Code != nil && *outcome.Code == "upstream_excluded" {
+			continue
+		}
 		outcomes = append(outcomes, outcome)
 		// Persist after every host. A cancellation or process restart can then
 		// recover the exact completed prefix instead of losing the whole batch.
@@ -621,6 +633,9 @@ func (s *Service) recoveryRecords(ctx context.Context, hosts []string) ([]config
 		seen[host] = struct{}{}
 		record, err := s.recoveryRecord(ctx, host)
 		if err != nil {
+			if errors.Is(err, business.ErrUpstreamExcluded) {
+				continue
+			}
 			return nil, fmt.Errorf("上游 %s 无法恢复：%w", host, err)
 		}
 		records = append(records, *record)
@@ -770,6 +785,9 @@ func (s *Service) finishCaptchaParent(parentTaskID *string, status, message stri
 }
 
 func (s *Service) recover(ctx context.Context, record configstore.AuthRecord, entry string, acceptLoginAgreement bool) business.AuthRecoveryOutcome {
+	if err := business.CheckUpstreamManaged(ctx, s.repository, record.Host); err != nil {
+		return failedOutcome(business.AuthRecoveryOutcome{Host: record.Host}, "upstream_excluded", err.Error(), false, nil, nil)
+	}
 	host := record.Host
 	expected := cloneAuthRecord(record)
 	outcome := business.AuthRecoveryOutcome{Host: host, Attempted: true}
@@ -937,6 +955,9 @@ func (s *Service) commitRecoveredAuth(ctx context.Context, record, expected conf
 			slog.Error("鉴权恢复租约释放失败", "host", record.Host, "error", err)
 		}
 	}()
+	if err := business.CheckUpstreamManaged(guarded, s.repository, record.Host); err != nil {
+		return err
+	}
 	current, err := s.private.AuthRecord(guarded, record.Host)
 	if err != nil {
 		return err
@@ -973,6 +994,9 @@ func (s *Service) commitRecoveredAuth(ctx context.Context, record, expected conf
 }
 
 func (s *Service) recoveryRecord(ctx context.Context, host string) (*configstore.AuthRecord, error) {
+	if err := business.CheckUpstreamManaged(ctx, s.repository, host); err != nil {
+		return nil, err
+	}
 	record, err := s.private.AuthRecord(ctx, host)
 	if err != nil || record != nil {
 		return record, err

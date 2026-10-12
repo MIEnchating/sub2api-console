@@ -53,7 +53,7 @@ function render(element: ReactElement, inheritedModel?: string) {
     client.setQueryDefaults(["policy"], { staleTime: Infinity });
     client.setQueryDefaults(["groups"], { staleTime: Infinity });
     client.setQueryData(["policy"], { available: true, probe_model: inheritedModel });
-    client.setQueryData(["groups"], [{ id: "3", name: "默认", override: null }]);
+    client.setQueryData(["groups", "configuration"], [{ id: "3", name: "默认", override: null }]);
   }
   clients.push(client);
   return renderView(element, {

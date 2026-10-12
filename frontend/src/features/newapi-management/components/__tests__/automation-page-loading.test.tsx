@@ -71,7 +71,7 @@ beforeEach(() => {
   vi.spyOn(api, "newAPIWorkspace").mockResolvedValue(workspace);
   vi.spyOn(api, "accountModelAutomationSchedules").mockResolvedValue([schedule]);
   vi.spyOn(api, "accountModelAutomationTaskGroups").mockResolvedValue([]);
-  vi.spyOn(api, "groups").mockResolvedValue([group]);
+  vi.spyOn(api, "groupMembershipOptions").mockResolvedValue([group]);
   vi.spyOn(globalThis, "fetch").mockImplementation(
     async () => new Response(JSON.stringify({ items: [], total: 0 }), { status: 200 }),
   );

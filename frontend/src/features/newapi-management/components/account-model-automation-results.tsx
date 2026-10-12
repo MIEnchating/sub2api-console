@@ -1,4 +1,7 @@
-import { useEffect, useMemo, useRef, type ReactElement } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactElement } from "react";
+import { CircleCheck, CircleX } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 import type { Task } from "@/api";
 import { DataTablePagination } from "@/components/data-table/pagination";
 import { useClientPagination } from "@/hooks/use-client-pagination";
@@ -57,7 +60,7 @@ function pricePlan(task: Task): PricePlan[] {
 }
 
 function accountOutcome(item: AutomationItem, preview: boolean): string {
-  if (item.status !== "succeeded") return "目录读取失败";
+  if (item.status !== "succeeded") return preview ? "目录读取失败" : "目录同步失败";
   return preview ? "目录已读取" : "目录已刷新";
 }
 
@@ -75,11 +78,16 @@ function ModelList(props: { label: string; models: string[] }): ReactElement | n
   );
 }
 
-export function AccountModelAutomationResults(props: { task: Task }): ReactElement {
-  return <AutomationResultsContent key={props.task.id} task={props.task} />;
+type AutomationResultsProps = {
+  task: Task;
+  showSummary?: boolean;
+};
+
+export function AccountModelAutomationResults(props: AutomationResultsProps): ReactElement {
+  return <AutomationResultsContent key={props.task.id} {...props} />;
 }
 
-function AutomationResultsContent(props: { task: Task }): ReactElement {
+function AutomationResultsContent(props: AutomationResultsProps): ReactElement {
   const task = props.task;
   const preview = task.result.dry_run === true;
   const scheduledPreview = preview && typeof task.result.schedule_id === "string";
@@ -92,7 +100,20 @@ function AutomationResultsContent(props: { task: Task }): ReactElement {
   const accounts = useMemo(() => items.filter((item) => item.account_id), [items]);
   const channels = useMemo(() => items.filter((item) => item.channel_id), [items]);
   const pricingPlan = useMemo(() => pricePlan(task), [task]);
-  const accountPagination = useResultPagination(accounts);
+  const [accountFilter, setAccountFilter] = useState<"all" | "failed" | "succeeded" | null>(null);
+  const failedAccounts = useMemo(
+    () => accounts.filter((item) => item.status === "failed"),
+    [accounts],
+  );
+  const successfulAccounts = useMemo(
+    () => accounts.filter((item) => item.status === "succeeded"),
+    [accounts],
+  );
+  const activeFilter = accountFilter ?? (failedAccounts.length > 0 ? "failed" : "all");
+  let filteredAccounts = accounts;
+  if (activeFilter === "failed") filteredAccounts = failedAccounts;
+  if (activeFilter === "succeeded") filteredAccounts = successfulAccounts;
+  const accountPagination = useResultPagination(filteredAccounts);
   const channelPagination = useResultPagination(channels);
   const pricingPagination = useResultPagination(pricingPlan);
   const models = useMemo(() => automationModels(task.result.models), [task.result.models]);
@@ -101,10 +122,7 @@ function AutomationResultsContent(props: { task: Task }): ReactElement {
     [task.result.selected_models],
   );
   return (
-    <section
-      aria-label={preview ? "运营预览结果" : "运营执行结果"}
-      className="grid min-w-0 gap-3 rounded-lg border bg-muted/20 p-4"
-    >
+    <section aria-label={preview ? "运营预览结果" : "运营执行结果"} className="grid min-w-0 gap-4">
       <div>
         <h3 className="text-sm font-semibold">{title}</h3>
         {preview && !scheduledPreview && (
@@ -113,7 +131,7 @@ function AutomationResultsContent(props: { task: Task }): ReactElement {
           </p>
         )}
       </div>
-      {(currentFormat || task.status !== "succeeded") && (
+      {props.showSummary !== false && (currentFormat || task.status !== "succeeded") && (
         <p role="status" className="text-sm break-all">
           {task.message}
         </p>
@@ -124,33 +142,86 @@ function AutomationResultsContent(props: { task: Task }): ReactElement {
       </p>
       {accounts.length > 0 && (
         <section aria-label="账号模型目录" className="grid min-w-0 gap-2">
-          <h4 className="text-sm font-medium">账号模型目录</h4>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h4 className="text-sm font-medium">账号模型目录</h4>
+            <div role="group" aria-label="账号结果筛选" className="flex flex-wrap gap-1">
+              {(
+                [
+                  { value: "all", label: "全部", count: accounts.length },
+                  { value: "failed", label: "失败", count: failedAccounts.length },
+                  { value: "succeeded", label: "成功", count: successfulAccounts.length },
+                ] as const
+              ).map((filter) => (
+                <Button
+                  key={filter.value}
+                  type="button"
+                  variant={activeFilter === filter.value ? "secondary" : "ghost"}
+                  aria-pressed={activeFilter === filter.value}
+                  onClick={() => {
+                    setAccountFilter(filter.value);
+                    accountPagination.setCurrentPage(1);
+                    if (accountPagination.scrollRef.current)
+                      accountPagination.scrollRef.current.scrollTop = 0;
+                  }}
+                >
+                  {filter.label} {filter.count}
+                </Button>
+              ))}
+            </div>
+          </div>
           <div
             ref={accountPagination.scrollRef}
             role="list"
-            className="max-h-52 overflow-y-auto rounded border"
+            className="max-h-96 overflow-y-auto rounded-lg border bg-background"
           >
+            {filteredAccounts.length === 0 && (
+              <p className="p-6 text-center text-sm text-muted-foreground">
+                {activeFilter === "failed" ? "没有失败的账号" : "没有成功的账号"}
+              </p>
+            )}
             {accountPagination.visibleItems.map((item, index) => (
               <div
                 role="listitem"
                 key={item.account_id + "-" + index}
                 className="min-w-0 border-b p-3 text-sm last:border-b-0"
               >
-                <p className="break-all">
-                  账号 {item.account_id} · {accountOutcome(item, preview)}
-                </p>
+                <div className="flex min-w-0 items-start gap-2">
+                  {item.status === "failed" ? (
+                    <CircleX
+                      className="mt-0.5 size-4 shrink-0 text-destructive"
+                      aria-hidden="true"
+                    />
+                  ) : (
+                    <CircleCheck
+                      className="mt-0.5 size-4 shrink-0 text-success"
+                      aria-hidden="true"
+                    />
+                  )}
+                  <p className="min-w-0 wrap-anywhere font-medium">
+                    账号 {item.account_id} · {accountOutcome(item, preview)}
+                  </p>
+                </div>
                 <ModelList label="查看账号可用模型" models={automationModels(item.models)} />
                 {item.message && (
-                  <p className="text-xs text-muted-foreground break-all">{item.message}</p>
+                  <p
+                    className={cn(
+                      "mt-1 text-xs leading-5 wrap-anywhere",
+                      item.status === "failed" ? "text-destructive" : "text-muted-foreground",
+                    )}
+                  >
+                    {item.message}
+                  </p>
                 )}
               </div>
             ))}
           </div>
-          {accounts.length > Math.min(automationResultPageSize, accountPagination.pageSize) && (
+          {filteredAccounts.length >
+            Math.min(automationResultPageSize, accountPagination.pageSize) && (
             <DataTablePagination
+              compact
               currentPage={accountPagination.currentPage}
               totalPages={accountPagination.totalPages}
-              totalItems={accounts.length}
+              totalItems={filteredAccounts.length}
               pageSize={accountPagination.pageSize}
               onPageChange={accountPagination.setCurrentPage}
               onPageSizeChange={accountPagination.setPageSize}
@@ -203,6 +274,7 @@ function AutomationResultsContent(props: { task: Task }): ReactElement {
           </div>
           {channels.length > Math.min(automationResultPageSize, channelPagination.pageSize) && (
             <DataTablePagination
+              compact
               currentPage={channelPagination.currentPage}
               totalPages={channelPagination.totalPages}
               totalItems={channels.length}
@@ -218,11 +290,14 @@ function AutomationResultsContent(props: { task: Task }): ReactElement {
           正在检查执行范围，渠道上架结果将在检查完成后显示。
         </p>
       )}
-      {channels.length === 0 && !running && (
-        <p className="text-xs text-muted-foreground">本次没有渠道上架记录。</p>
-      )}
-      {task.result.pricing_enabled === false && (
-        <p className="text-xs text-muted-foreground">本次不修改模型价格。</p>
+      {((channels.length === 0 && !running) || task.result.pricing_enabled === false) && (
+        <ul
+          aria-label="执行范围说明"
+          className="flex min-w-0 flex-wrap gap-x-4 gap-y-1 rounded-md bg-muted/30 px-3 py-2 text-xs leading-5 text-muted-foreground"
+        >
+          {channels.length === 0 && !running && <li>本次没有渠道上架记录。</li>}
+          {task.result.pricing_enabled === false && <li>本次不修改模型价格。</li>}
+        </ul>
       )}
       {typeof task.result.pricing_applied_models === "number" &&
         !preview &&

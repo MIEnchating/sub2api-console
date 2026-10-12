@@ -34,7 +34,7 @@ type AuthRecoverySummary struct {
 
 func (s *Store) AuthRecoveryRequiredHosts(ctx context.Context, retryBefore time.Time) ([]string, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT host,metadata_json FROM upstreams
-		WHERE auth_status IN (?,?) ORDER BY host`, UpstreamAuthStatusInvalid, UpstreamAuthStatusRecoveryTemporarilyFailed)
+		WHERE host NOT IN (SELECT h.host FROM upstream_identity_hosts h JOIN upstream_exclusions e ON e.upstream_id=h.upstream_id) AND auth_status IN (?,?) ORDER BY host`, UpstreamAuthStatusInvalid, UpstreamAuthStatusRecoveryTemporarilyFailed)
 	if err != nil {
 		return nil, err
 	}

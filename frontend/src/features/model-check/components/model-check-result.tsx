@@ -74,10 +74,16 @@ function percent(value: number | null): string {
   return value === null ? "-" : `${value.toFixed(1)}%`;
 }
 
+function verdictVariant(verdict: string): "success" | "destructive" | "warning" {
+  if (["MATCH", "GROUP_MATCH", "SOL_CONSISTENT"].includes(verdict)) return "success";
+  if (["MISMATCH", "LUNA_LIKE", "TERRA_LIKE", "ERROR"].includes(verdict)) return "destructive";
+  return "warning";
+}
+
 function verdictBadge(verdict: string) {
   if (["MATCH", "GROUP_MATCH", "SOL_CONSISTENT"].includes(verdict)) {
     return (
-      <Badge variant="secondary">
+      <Badge variant="success">
         <CheckCircle2 aria-hidden="true" />
         {verdictLabels[verdict]}
       </Badge>
@@ -140,7 +146,7 @@ function summaryBadges(summary: ResultRecord) {
     .filter((entry): entry is [string, number] => typeof entry[1] === "number" && entry[1] > 0)
     .sort(([left], [right]) => left.localeCompare(right))
     .map(([verdict]) => {
-      const variant = verdict === "ERROR" ? "destructive" : "outline";
+      const variant = verdictVariant(verdict);
       return (
         <Badge key={verdict} variant={variant}>
           {verdictLabels[verdict] ?? verdict}
@@ -390,7 +396,7 @@ export function ModelCheckResult(props: { task: Task }) {
   const profileVersion = textValue(props.task.result.profile_version);
   const profileFingerprint = textValue(props.task.result.profile_fingerprint);
   let heading = "检测完成";
-  let statusIcon = <CheckCircle2 className="text-primary size-4" aria-hidden="true" />;
+  let statusIcon = <CheckCircle2 className="text-success size-4" aria-hidden="true" />;
   if (props.task.status === "cancelled") {
     heading = "检测已取消";
     statusIcon = <CircleHelp className="text-muted-foreground size-4" aria-hidden="true" />;

@@ -2,6 +2,8 @@ import { useRef, useState } from "react";
 import { ChartNoAxesColumnIncreasing } from "lucide-react";
 
 import type { UpstreamAccountRequestUsage } from "@/api";
+import { ContentLoading } from "@/components/content-loading";
+import { ContentRetry } from "@/components/content-retry";
 import { Button } from "@/components/ui/button";
 import { DataTablePagination } from "@/components/data-table/pagination";
 import { useClientPagination } from "@/hooks/use-client-pagination";
@@ -27,7 +29,9 @@ import { formatUsageAmount } from "../lib/usage-totals";
 type Props = {
   name: string;
   spending?: { total: string; started_at: string; updated_at: string } | null;
-  requestCount: number;
+  requestCount?: number;
+  usagePending?: boolean;
+  onRetryUsage?: () => void;
   requestWindowDays: number;
   accountRequestUsage: UpstreamAccountRequestUsage[];
 };
@@ -52,14 +56,18 @@ export function UpstreamUsageSummary(props: Props) {
         <span aria-hidden="true" className="text-muted-foreground/50">
           ·
         </span>
-        <Tooltip>
-          <TooltipTrigger
-            render={<span tabIndex={0} className="text-muted-foreground truncate tabular-nums" />}
-          >
-            {props.requestCount.toLocaleString("zh-CN")} 次
-          </TooltipTrigger>
-          <TooltipContent>近 {props.requestWindowDays} 天请求数</TooltipContent>
-        </Tooltip>
+        {props.requestCount === undefined ? (
+          <UsageLoading pending={props.usagePending} onRetry={props.onRetryUsage} />
+        ) : (
+          <Tooltip>
+            <TooltipTrigger
+              render={<span tabIndex={0} className="text-muted-foreground truncate tabular-nums" />}
+            >
+              {props.requestCount.toLocaleString("zh-CN")} 次
+            </TooltipTrigger>
+            <TooltipContent>近 {props.requestWindowDays} 天请求数</TooltipContent>
+          </Tooltip>
+        )}
         <Button
           ref={trigger}
           type="button"
@@ -67,6 +75,7 @@ export function UpstreamUsageSummary(props: Props) {
           size="icon"
           aria-label={`查看${props.name}的账号使用率`}
           aria-haspopup="dialog"
+          disabled={props.requestCount === undefined}
           onClick={() => setOpen(true)}
         >
           <ChartNoAxesColumnIncreasing aria-hidden="true" />
@@ -99,7 +108,7 @@ export function UpstreamUsageSummary(props: Props) {
               <div className="min-w-0">
                 <dt className="text-muted-foreground">近 {props.requestWindowDays} 天请求</dt>
                 <dd className="mt-1 text-xl font-semibold break-all tabular-nums">
-                  {props.requestCount.toLocaleString("zh-CN")}
+                  {props.requestCount?.toLocaleString("zh-CN")}
                 </dd>
               </div>
             </dl>
@@ -112,6 +121,12 @@ export function UpstreamUsageSummary(props: Props) {
       </Dialog>
     </>
   );
+}
+
+function UsageLoading(props: { pending?: boolean; onRetry?: () => void }) {
+  if (props.pending) return <ContentLoading compact label="正在读取用量" />;
+  if (props.onRetry) return <ContentRetry compact onRetry={props.onRetry} />;
+  return null;
 }
 
 function AccountUsageTable(props: { accounts: UpstreamAccountRequestUsage[] }) {

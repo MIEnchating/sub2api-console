@@ -117,3 +117,25 @@ it("旧记录未保存接口地址时明确显示未记录", async () => {
   await setup("animation", "succeeded", true);
   expect(screen.getByRole("article")).toHaveTextContent("接口地址未记录");
 });
+
+it.each([
+  ["precheck", "succeeded"],
+  ["animation", "running"],
+] as const)("%s 为 %s 时结果卡片按内容排列，不拉满剩余高度", async (mode, status) => {
+  await setup(mode, status);
+  const card = screen.getByRole("article");
+  expect(card).toHaveClass("h-auto");
+  expect(card.parentElement).toHaveClass("items-start", "shrink-0");
+  expect(card.parentElement).not.toHaveClass("flex-1", "grid-rows-1");
+  if (status === "running") {
+    expect(within(card).getByRole("button", { name: "取消任务" })).toHaveClass("shrink-0");
+    expect(within(card).queryByRole("progressbar")).not.toBeInTheDocument();
+  }
+});
+
+it("成功动画使用有界预览，短窗口中结果操作不会被撑到页面底部", async () => {
+  await setup("animation", "succeeded");
+  const preview = screen.getByRole("button", { name: /放大查看/ });
+  expect(preview.parentElement).toHaveClass("h-56", "shrink-0");
+  expect(screen.getByLabelText("动画检测结果")).not.toHaveClass("h-full");
+});

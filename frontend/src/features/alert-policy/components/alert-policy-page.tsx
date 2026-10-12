@@ -51,7 +51,10 @@ export function AlertPolicyPage(props: AlertPolicyPageProps): ReactElement {
     queryKey: ["notification-status"],
     queryFn: ({ signal }) => api.notificationStatus(signal),
   });
-  const groups = useQuery({ queryKey: ["groups"], queryFn: ({ signal }) => api.groups(signal) });
+  const groups = useQuery({
+    queryKey: ["groups", "options"],
+    queryFn: ({ signal }) => api.groupOptions(signal),
+  });
   const orderedGroups = useDictionaryOrder("group", groups.data ?? [], (group) => group.id ?? "");
   const groupOptions = orderedGroups.map((group) => ({ value: group.name, label: group.name }));
   const form = useForm<AlertPolicyFormValues>({

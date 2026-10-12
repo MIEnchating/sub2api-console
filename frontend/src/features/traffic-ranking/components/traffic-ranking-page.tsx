@@ -41,7 +41,10 @@ export function TrafficRankingPage(): ReactElement {
   const [platform, setPlatform] = useState("all");
   const [sortBy, setSortBy] = useState<TrafficRankingSort>("traffic");
   const [search, setSearch] = useState("");
-  const groups = useQuery({ queryKey: ["groups"], queryFn: ({ signal }) => api.groups(signal) });
+  const groups = useQuery({
+    queryKey: ["groups", "options"],
+    queryFn: ({ signal }) => api.groupOptions(signal),
+  });
   const orderedGroups = useDictionaryOrder("group", groups.data ?? [], (group) => group.id ?? "");
   const platformDictionary = useQuery({
     queryKey: ["dictionaries", "platform"],

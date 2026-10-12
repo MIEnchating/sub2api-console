@@ -5,7 +5,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { Toaster, toast } from "sonner";
 import { createConsoleQueryClient } from "@/lib/query-client";
 import { ImportPanel } from "../components/import-panel";
-import { templateKeys } from "../constants";
+import { importModelKey, templateKeys } from "../constants";
 import { template } from "./template-fixture";
 
 const clients: ReturnType<typeof createConsoleQueryClient>[] = [];
@@ -20,6 +20,7 @@ function mount(): ReturnType<typeof createConsoleQueryClient> {
   vi.stubGlobal("PointerEvent", MouseEvent);
   const client = createConsoleQueryClient();
   client.setDefaultOptions({ queries: { retry: false, staleTime: Infinity } });
+  client.setQueryData(importModelKey, { model: "gpt-6-astra", revision: 0 });
   clients.push(client);
   render(
     <QueryClientProvider client={client}>
@@ -30,7 +31,7 @@ function mount(): ReturnType<typeof createConsoleQueryClient> {
   return client;
 }
 
-it("模板首次加载显示忙碌提示，切换独立输出取消读取并保留账号资料", async () => {
+it("模板首次加载显示忙碌提示，读取完成后保留账号资料", async () => {
   let signal: AbortSignal | null | undefined;
   let finish!: (response: Response) => void;
   const fetcher = vi.fn((_input: RequestInfo | URL, init?: RequestInit) => {
@@ -45,12 +46,16 @@ it("模板首次加载显示忙碌提示，切换独立输出取消读取并保�
   expect(screen.getByRole("combobox", { name: "配置模板" })).toBeDisabled();
   const user = userEvent.setup();
   await user.type(screen.getByRole("textbox", { name: "账号资料" }), "rt_isolated");
-  await user.click(screen.getByRole("combobox", { name: "处理方式" }));
-  await user.click(await screen.findByRole("option", { name: "独立 JSON 输出" }));
   await act(async () => finish(Response.json({ revision: 0, preferred_id: "", items: [] })));
-  expect(signal?.aborted).toBe(true);
-  expect(client.getQueryData(templateKeys.library)).toBeUndefined();
-  expect(screen.queryByRole("status", { name: "正在读取配置模板" })).not.toBeInTheDocument();
+  expect(signal?.aborted).toBe(false);
+  expect(client.getQueryData(templateKeys.library)).toEqual({
+    revision: 0,
+    preferred_id: "",
+    items: [],
+  });
+  await waitFor(() =>
+    expect(screen.queryByRole("status", { name: "正在读取配置模板" })).not.toBeInTheDocument(),
+  );
   expect(screen.getByRole("textbox", { name: "账号资料" })).toHaveValue("rt_isolated");
   expect(screen.getByRole("button", { name: "解析并预览" })).toBeEnabled();
   expect(fetcher).toHaveBeenCalledOnce();
@@ -90,7 +95,7 @@ it("模板首次读取失败仅通知一次，重试成功保留输入并恢复�
   expect(screen.queryByRole("button", { name: "重新读取" })).not.toBeInTheDocument();
 });
 
-it("模板后台刷新失败保留已选模板，独立输出往返后仍保留选择", async () => {
+it("模板后台刷新失败保留已选模板和可用入口", async () => {
   let fail = false;
   vi.stubGlobal(
     "fetch",
@@ -113,9 +118,5 @@ it("模板后台刷新失败保留已选模板，独立输出往返后仍保留�
   expect(screen.getByRole("combobox", { name: "配置模板" })).toHaveTextContent(template.name);
   expect(screen.getByRole("combobox", { name: "配置模板" })).toBeEnabled();
   expect(screen.queryByRole("button", { name: "重新读取" })).not.toBeInTheDocument();
-  await user.click(screen.getByRole("combobox", { name: "处理方式" }));
-  await user.click(await screen.findByRole("option", { name: "独立 JSON 输出" }));
-  await user.click(screen.getByRole("combobox", { name: "处理方式" }));
-  await user.click(await screen.findByRole("option", { name: "导入目标站点" }));
   expect(screen.getByRole("combobox", { name: "配置模板" })).toHaveTextContent(template.name);
 });

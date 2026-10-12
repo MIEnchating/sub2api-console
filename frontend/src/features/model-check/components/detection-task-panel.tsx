@@ -19,7 +19,10 @@ export function DetectionTaskPanel(): ReactElement {
     queryFn: ({ signal }) => api.detectionTasks(signal),
     refetchInterval: 5000,
   });
-  const groups = useQuery({ queryKey: ["groups"], queryFn: ({ signal }) => api.groups(signal) });
+  const groups = useQuery({
+    queryKey: ["groups", "options"],
+    queryFn: ({ signal }) => api.groupOptions(signal),
+  });
   const [edit, setEdit] = useState<DetectionTask | null | undefined>(undefined);
   const [remove, setRemove] = useState<DetectionTask | null>(null);
   const [details, setDetails] = useState<string | null>(null);
@@ -72,7 +75,7 @@ export function DetectionTaskPanel(): ReactElement {
             <div className="min-w-0 space-y-3 p-4">
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <h3 className="min-w-0 flex-1 font-medium wrap-anywhere">{plan.name}</h3>
-                <Badge variant={plan.running ? "default" : "secondary"}>
+                <Badge variant={plan.running ? "info" : "neutral"}>
                   {plan.running ? "执行中" : "未在执行"}
                 </Badge>
               </div>
