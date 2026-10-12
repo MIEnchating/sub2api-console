@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/MIEnchating/sub2api-console/backend/internal/business"
 	"maps"
 	"slices"
 	"sort"
@@ -466,17 +467,25 @@ func (s *Service) run(ctx context.Context, task taskstore.Task, request Request)
 		return
 	}
 	accountIDs, err := s.groups.AccountIDsByGroups(ctx, request.GroupIDs)
+	if err == nil {
+		accountIDs, err = s.managedAccountIDs(ctx, accountIDs)
+	}
 	if err != nil {
 		s.finish(ctx, &task, "failed", "分组账号读取失败："+err.Error(), nil)
 		return
 	}
 	if len(accountIDs) == 0 {
-		s.finish(ctx, &task, "failed", "所选分组当前没有账号", nil)
+		task.Result["account_ids"], task.Result["account_count"] = []string{}, 0
+		s.finish(ctx, &task, "succeeded", "所选分组没有参与管控的账号，本次无需执行", []ResultItem{})
 		return
 	}
 	if !request.DryRun {
 		preview, err := s.store.Get(ctx, request.PreviewTaskID)
-		if err != nil || !sameAccountIDs(preview.Result["account_ids"], accountIDs) {
+		matches := false
+		if err == nil {
+			matches, err = s.sameManagedAccountIDs(ctx, preview.Result["account_ids"], accountIDs)
+		}
+		if err != nil || !matches {
 			s.finish(ctx, &task, "failed", "账号范围与预览不一致，请重新预览", nil)
 			return
 		}
@@ -493,10 +502,20 @@ func (s *Service) run(ctx context.Context, task taskstore.Task, request Request)
 		}
 		var models []string
 		var err error
+		if checkErr := business.CheckAccountUpstreamManaged(ctx, s.groups, accountID); checkErr != nil {
+			if errors.Is(checkErr, business.ErrUpstreamExcluded) {
+				continue
+			}
+			s.finish(ctx, &task, "failed", "账号管控范围读取失败："+checkErr.Error(), items)
+			return
+		}
 		if request.DryRun {
 			models, err = s.accounts.PreviewModels(ctx, accountID)
 		} else {
 			models, err = s.accounts.Models(ctx, accountID)
+		}
+		if errors.Is(err, business.ErrUpstreamExcluded) {
+			continue
 		}
 		item := ResultItem{AccountID: accountID, Status: "succeeded", Models: append([]string{}, models...)}
 		item.Message = fmt.Sprintf("已刷新模型目录，共 %d 个模型", len(models))
@@ -525,6 +544,11 @@ func (s *Service) run(ctx context.Context, task taskstore.Task, request Request)
 			return
 		}
 	}
+	participating := make([]string, 0, len(items))
+	for _, item := range items {
+		participating = append(participating, item.AccountID)
+	}
+	task.Result["account_ids"], task.Result["account_count"] = participating, len(participating)
 	models := make([]string, 0, len(modelSet))
 	for _, model := range modelSet {
 		models = append(models, model)
@@ -533,6 +557,10 @@ func (s *Service) run(ctx context.Context, task taskstore.Task, request Request)
 	task.Result["models"] = models
 	if ctx.Err() != nil {
 		s.finish(ctx, &task, "cancelled", "任务已取消", items)
+		return
+	}
+	if len(items) == 0 {
+		s.finish(ctx, &task, "succeeded", "账号均已排除管控，本次无需执行", items)
 		return
 	}
 	if len(models) == 0 && failed > 0 {

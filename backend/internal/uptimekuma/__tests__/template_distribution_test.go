@@ -167,10 +167,9 @@ func TestTemplateDistributionEmptyScopeDoesNotWrite(t *testing.T) {
 	if len(preview.Items) != 0 {
 		t.Fatal("empty scope not represented")
 	}
-	runDistribution(t, f, preview)
-	final := f.completed(t)
-	if final.Status != "failed" || final.Result["error_code"] != "kuma_distribution_empty" {
-		t.Fatalf("empty scope accepted: %#v", final)
+	_, err := f.service.DistributeTemplate(f.ctx, template.ID, uptimekuma.TemplateDistributionInput{Revision: preview.Revision, Scope: preview.Scope, MonitorIDs: []int64{}})
+	if err == nil || uptimekuma.PublicError(err).Code != "kuma_distribution_empty" {
+		t.Fatalf("empty scope accepted: %v", err)
 	}
 	peer.mu.Lock()
 	defer peer.mu.Unlock()
@@ -211,7 +210,7 @@ func TestTemplateDistributionCancellationKeepsCompletedItemsAndStopsLaterWrites(
 		t.Fatal(err)
 	}
 	preview := distributionPreview(t, f, template)
-	queued, err := f.service.DistributeTemplate(f.ctx, template.ID, uptimekuma.TemplateDistributionInput{Revision: template.Revision, Scope: preview.Scope})
+	queued, err := f.service.DistributeTemplate(f.ctx, template.ID, uptimekuma.TemplateDistributionInput{Revision: template.Revision, Scope: preview.Scope, MonitorIDs: distributionSelectedIDs(preview)})
 	if err != nil {
 		t.Fatal(err)
 	}

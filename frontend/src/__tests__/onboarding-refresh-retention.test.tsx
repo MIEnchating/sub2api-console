@@ -48,14 +48,17 @@ it("已有分组的后台刷新失败时保留开户表单和已输入名称", a
     Response.json({ detail: "本地分组暂时不可用" }, { status: 503 }),
   );
   client = new QueryClient({ defaultOptions: { queries: { enabled: false, retry: false } } });
-  client.setQueryData(["groups"], []);
+  client.setQueryData(["groups", "options"], []);
   renderOnboarding();
   const user = userEvent.setup();
   await user.type(await screen.findByRole("textbox", { name: "名称" }), "待添加上游");
 
   await act(async () => {
     await expect(
-      client.fetchQuery({ queryKey: ["groups"], queryFn: ({ signal }) => api.groups(signal) }),
+      client.fetchQuery({
+        queryKey: ["groups", "options"],
+        queryFn: ({ signal }) => api.groupOptions(signal),
+      }),
     ).rejects.toThrow();
   });
   await screen.findByText("本地分组暂时不可用");
@@ -71,7 +74,10 @@ it("首次读取分组失败时提供重试入口并在恢复后显示开户表�
   );
   client = new QueryClient({ defaultOptions: { queries: { enabled: false, retry: false } } });
   await expect(
-    client.fetchQuery({ queryKey: ["groups"], queryFn: ({ signal }) => api.groups(signal) }),
+    client.fetchQuery({
+      queryKey: ["groups", "options"],
+      queryFn: ({ signal }) => api.groupOptions(signal),
+    }),
   ).rejects.toThrow();
   renderOnboarding();
   const retry = await screen.findByRole("button", { name: "重新读取" });

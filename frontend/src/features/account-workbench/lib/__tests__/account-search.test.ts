@@ -63,7 +63,7 @@ it.each([
   ["inactive", true, "inactive"],
   ["", true, "unknown"],
   ["UNKNOWN", true, "unknown"],
-  ["rate_limited", true, "error"],
+  ["rate_limited", true, "rate_limited"],
 ] as const)("状态 %s 调度 %s 按 %s 筛选", (status, schedulable, expected) => {
   const accounts = accountListFixture(1);
   accounts[0] = { ...accounts[0], status, schedulable };

@@ -21,20 +21,18 @@ import (
 func TestImportAppliesTemplateBeforeDetectionAndOnlyEnablesPassingAccounts(t *testing.T) {
 	for _, tc := range []struct {
 		name, answer, verdict, failure, model string
-		weights                               []float64
 		status                                int
 		transportError                        bool
-		partialError                          bool
 		existing                              bool
+		proxy                                 bool
 	}{
-		{name: "Sol match", answer: "7", verdict: "SOL_CONSISTENT", weights: []float64{0, -10, -10}, model: "gpt-5.6-sol"},
-		{name: "Sol match updates existing account and preserves template groups", existing: true, answer: "7", verdict: "SOL_CONSISTENT", weights: []float64{0, -10, -10}, model: "gpt-5.6-sol"},
-		{name: "Luna like still imports", answer: "7", verdict: "LUNA_LIKE", weights: []float64{-10, 0, -10}, model: "gpt-5.6-luna"},
-		{name: "insufficient evidence still imports", answer: "9", verdict: "INCONCLUSIVE", weights: []float64{0, -10, -10}, model: "gpt-5.6-sol"},
-		{name: "network failure keeps imported account paused", failure: "无法连接目标接口", transportError: true, weights: []float64{0, -10, -10}, model: "gpt-5.6-sol"},
-		{name: "partial request failure requires manual enable", answer: "7", failure: "无法连接目标接口", partialError: true, weights: []float64{0, -10, -10}, model: "gpt-5.6-sol"},
-		{name: "HTTP failure keeps template groups and reports reason", failure: "HTTP 429", status: 429, weights: []float64{0, -10, -10}, model: "gpt-5.6-sol"},
-		{name: "invalid model fails without fallback", failure: "所选模型", weights: []float64{0, -10, -10}, model: "unconfigured-model"},
+		{name: "candy passes", answer: "21", verdict: "MATCH", model: "gpt-6-astra"},
+		{name: "platform proxy shared", proxy: true, answer: "21", verdict: "MATCH", model: "custom-model"},
+		{name: "existing account preserves groups", existing: true, answer: "21", verdict: "MATCH", model: "gpt-6-astra"},
+		{name: "wrong answer stays paused", answer: "20", verdict: "MISMATCH", model: "gpt-6-astra"},
+		{name: "explanation stays paused", answer: "答案是21", verdict: "MISMATCH", model: "gpt-6-astra"},
+		{name: "network failure stays paused", failure: "无法连接目标接口", transportError: true, model: "gpt-6-astra"},
+		{name: "HTTP failure stays paused", failure: "HTTP 429", status: 429, model: "gpt-6-astra"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			service, private := fixture(t, `{"data":`+sourceAccount+`}`)
@@ -58,35 +56,32 @@ func TestImportAppliesTemplateBeforeDetectionAndOnlyEnablesPassingAccounts(t *te
 			if err != nil {
 				t.Fatal(err)
 			}
-			view := checker.Configuration()
-			config := view.Active.Payload
-			probe := modelcheck.ProbeDefinition{ID: "seven", Kind: "numeric", Question: "Return seven.", Clusters: []modelcheck.NumericClusterDefinition{{ID: "seven", Center: 7}}, Tolerance: &modelcheck.NumericTolerance{Value: 0, Mode: "absolute"}, Weights: map[string][]float64{"seven": tc.weights}}
-			config.SolProfile.Quick = []modelcheck.ProbeDefinition{probe}
-			probe.ID = "reserve"
-			config.SolProfile.Reserve = []modelcheck.ProbeDefinition{probe}
-			draft, err := checker.SaveDraft(context.Background(), modelcheck.SaveDraftRequest{ExpectedFingerprint: view.Active.Fingerprint, Payload: config}, "test")
-			if err != nil {
-				t.Fatal(err)
-			}
-			if _, err = checker.PublishDraft(context.Background(), modelcheck.PublishRequest{ExpectedFingerprint: draft.Draft.Fingerprint}, "test"); err != nil {
-				t.Fatal(err)
-			}
 			var current map[string]any
 			var calls atomic.Int32
 			checker.UseOAuthTransport(transportFunc(func(req *http.Request) (*http.Response, error) {
 				var body struct {
-					Model string `json:"model"`
+					Model     string `json:"model"`
+					Reasoning struct {
+						Effort string `json:"effort"`
+					} `json:"reasoning"`
+					Input []struct {
+						Content string `json:"content"`
+					} `json:"input"`
 				}
 				if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
 					t.Error(err)
 				}
+				calls.Add(1)
 				if body.Model != tc.model {
 					t.Errorf("selected model %s replaced with %s", tc.model, body.Model)
+				}
+				if body.Reasoning.Effort != "medium" || len(body.Input) != 1 || !strings.Contains(body.Input[0].Content, "圆形苹果") {
+					t.Error("expected shared candy question with medium reasoning")
 				}
 				if current == nil || current["schedulable"] != false || !slices.Equal(current["group_ids"].([]any), []any{json.Number("7")}) {
 					t.Error("detection ran before isolated import and template groups were confirmed")
 				}
-				if tc.transportError || (tc.partialError && calls.Add(1) == 1) {
+				if tc.transportError {
 					return nil, errors.New("private network details")
 				}
 				if tc.status != 0 {
@@ -94,7 +89,7 @@ func TestImportAppliesTemplateBeforeDetectionAndOnlyEnablesPassingAccounts(t *te
 					res.StatusCode = tc.status
 					return res, nil
 				}
-				raw, _ := json.Marshal(map[string]any{"type": "response.completed", "response": map[string]any{"status": "completed", "model": tc.model, "output": []any{map[string]any{"type": "message", "content": []any{map[string]any{"type": "output_text", "text": "[\"" + tc.answer + "\"]"}}}}}})
+				raw, _ := json.Marshal(map[string]any{"type": "response.completed", "response": map[string]any{"status": "completed", "model": tc.model, "output": []any{map[string]any{"type": "message", "content": []any{map[string]any{"type": "output_text", "text": tc.answer}}}}}})
 				return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"text/event-stream"}}, Body: io.NopCloser(strings.NewReader("data: " + string(raw) + "\n\n"))}, nil
 			}))
 			service.UseExecution(tasks, runner, checker, t.TempDir())
@@ -107,6 +102,9 @@ func TestImportAppliesTemplateBeforeDetectionAndOnlyEnablesPassingAccounts(t *te
 					return nil, errors.New("unexpected management host")
 				}
 				if req.Method == "GET" {
+					if tc.proxy && strings.HasSuffix(req.URL.Path, "/proxies/3") {
+						return upstreamResponse(map[string]any{"data": platformProxyFixture()}), nil
+					}
 					if strings.HasSuffix(req.URL.Path, "/accounts") {
 						items := []any{}
 						if current != nil {
@@ -144,7 +142,11 @@ func TestImportAppliesTemplateBeforeDetectionAndOnlyEnablesPassingAccounts(t *te
 				}
 				return upstreamResponse(map[string]any{"data": current}), nil
 			}))
-			preview, err := service.Preview(ctx, owner, accountworkbench.PreviewInput{Action: "import", Content: signedRunInput(t, service), TemplateID: library.PreferredID, Check: true, Promote: true, Model: tc.model})
+			proxyID := ""
+			if tc.proxy {
+				proxyID = "3"
+			}
+			preview, err := service.Preview(ctx, owner, accountworkbench.PreviewInput{Action: "import", Content: signedRunInput(t, service), TemplateID: library.PreferredID, Check: true, Promote: true, Model: tc.model, PlatformProxyID: proxyID})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -158,6 +160,12 @@ func TestImportAppliesTemplateBeforeDetectionAndOnlyEnablesPassingAccounts(t *te
 				t.Fatal(err)
 			}
 			row := run.Items[0]
+			if calls.Load() != 1 {
+				t.Fatalf("expected one candy request, got %d", calls.Load())
+			}
+			if tc.proxy && (current["proxy_id"] != json.Number("3") || row.Check["transport"] != "oauth-proxy") {
+				t.Fatal("detection and account did not share selected platform proxy")
+			}
 			public, _ := json.Marshal(run)
 			if strings.Contains(string(public), "private network details") || strings.Contains(string(public), "private upstream details") || strings.Contains(string(public), "rt_run-private") {
 				t.Fatal("private response or credentials exposed")
@@ -165,14 +173,14 @@ func TestImportAppliesTemplateBeforeDetectionAndOnlyEnablesPassingAccounts(t *te
 			if row.AccountID != "41" || !slices.Equal(current["group_ids"].([]any), []any{json.Number("7")}) {
 				t.Fatal("import did not preserve account ID and template groups")
 			}
-			if tc.failure != "" || tc.verdict != "SOL_CONSISTENT" {
+			if tc.failure != "" || tc.verdict != "MATCH" {
 				if run.Status != "needs_attention" || row.Status != "review" || current["schedulable"] != false {
 					t.Fatalf("failed detection enabled account: status=%s message=%s", row.Status, row.Message)
 				}
 				if tc.failure != "" && (!strings.Contains(row.Message, tc.failure) || row.Check["verdict"] != "ERROR") {
 					t.Fatalf("detection failure reason lost: %s", row.Message)
 				}
-				if tc.verdict == "INCONCLUSIVE" {
+				if tc.answer == "答案是21" {
 					beforeWrites := writes
 					if _, err := service.Retry(ctx, owner, accountworkbench.RunConfirmation{ID: run.ID, Revision: run.Revision}); err != nil {
 						t.Fatal(err)

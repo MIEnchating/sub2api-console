@@ -234,6 +234,7 @@ it("维护保存失败保留草稿与预览，重试成功采用确认结果且�
       interval_minutes: 12,
       cooldown_minutes: 10,
       check_after_repair: true,
+      check_enabled: false,
       group_ids: [],
     },
   });

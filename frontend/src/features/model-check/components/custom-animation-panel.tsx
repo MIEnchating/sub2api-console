@@ -13,20 +13,17 @@ import { useForm } from "react-hook-form";
 import { ConfirmActionDialog } from "@/components/confirm-action-dialog";
 import { ContentRetry } from "@/components/content-retry";
 import { AnimationHistorySkeleton } from "./animation-accounts-skeleton";
-import { TaskCancelButton, TaskStartupState } from "@/components/task-startup-state";
+import { TaskStartupState } from "@/components/task-startup-state";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useClientPagination } from "@/hooks/use-client-pagination";
 import { useIsMobile } from "@/hooks/use-mobile";
 import type { useAnimationTasks } from "../hooks/use-animation-tasks";
 import { customAnimationSchema, type CustomAnimationForm } from "../lib/animation-schema";
-import { animationActivityLabel } from "../lib/animation-task-results";
-import { AnimationAccountResult } from "./animation-account-result";
-import { AnimationEndpointDetails } from "./animation-endpoint-details";
+import { CustomAnimationRecord } from "./custom-animation-record";
 import { AnimationPromptDialog } from "./animation-prompt-dialog";
 import { CustomAnimationParameters } from "./custom-animation-parameters";
 import { CustomAnimationFields } from "./custom-animation-fields";
-import { PrecheckAccountResult } from "./precheck-account-result";
 import type { PrecheckQuestionID } from "@/api";
 import { allPrecheckQuestions, precheckQuestionSummary } from "../constants";
 import { PrecheckQuestionSelector } from "./precheck-question-selector";
@@ -221,65 +218,22 @@ export function CustomAnimationPanel(props: {
           </div>
         ) : null}
         {ids.length > 0 || props.tasks.historyLoading ? (
-          <div className="grid min-h-0 flex-1 grid-rows-1 gap-3 md:grid-cols-3">
+          <div className="grid shrink-0 grid-cols-[repeat(auto-fit,minmax(min(100%,20rem),1fr))] items-start gap-3">
             {props.tasks.historyLoading && ids.length === 0 ? <AnimationHistorySkeleton /> : null}
-            {pagination.visibleItems.map((id) => {
-              const activity = props.tasks.activities.get(id);
-              const result = props.tasks.results.get(id);
-              const precheckResult = props.tasks.precheckResults.get(id);
-              const isPrecheck = props.tasks.precheckStatuses.has(id);
-              const source = result ?? precheckResult ?? props.tasks.targets.get(id);
-              return (
-                <article
-                  key={id}
-                  aria-label={`自定义检测 ${source?.model ?? id}`}
-                  className="flex min-h-0 min-w-0 flex-col gap-2 rounded-lg border p-2"
-                >
-                  <dl className="grid shrink-0 grid-cols-[4rem_minmax(0,1fr)] gap-x-2 gap-y-1 text-xs">
-                    <AnimationEndpointDetails source={source ?? { account_id: id }} />
-                    {!result && source?.model ? (
-                      <>
-                        <dt className="text-muted-foreground">检测模型</dt>
-                        <dd className="min-w-0 wrap-anywhere">{source.model}</dd>
-                      </>
-                    ) : null}
-                  </dl>
-                  {activity ? (
-                    <>
-                      <TaskStartupState
-                        message={
-                          activity.mode === "precheck"
-                            ? "正在执行前置检测"
-                            : animationActivityLabel(activity.status)
-                        }
-                      />
-                      {activity.taskID ? <TaskCancelButton taskId={activity.taskID} /> : null}
-                    </>
-                  ) : null}
-                  {!activity && isPrecheck ? (
-                    <PrecheckAccountResult
-                      result={precheckResult}
-                      status={props.tasks.precheckStatuses.get(id)}
-                    />
-                  ) : null}
-                  {!activity && result ? (
-                    <AnimationAccountResult
-                      result={result}
-                      retryDisabled={pending}
-                      onRetry={() => {
-                        form.setValue("model", result.model);
-                        setMode("animation");
-                        form.setFocus("api_key");
-                        void form.handleSubmit(() => setConfirmation(true))();
-                      }}
-                    />
-                  ) : null}
-                  {!activity && !result && !isPrecheck ? (
-                    <p className="text-sm text-muted-foreground">检测已结束，未返回动画</p>
-                  ) : null}
-                </article>
-              );
-            })}
+            {pagination.visibleItems.map((id) => (
+              <CustomAnimationRecord
+                key={id}
+                id={id}
+                tasks={props.tasks}
+                retryDisabled={pending}
+                onRetry={(model) => {
+                  form.setValue("model", model);
+                  setMode("animation");
+                  form.setFocus("api_key");
+                  void form.handleSubmit(() => setConfirmation(true))();
+                }}
+              />
+            ))}
           </div>
         ) : null}
       </section>

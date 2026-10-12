@@ -27,6 +27,7 @@ func (s *Store) boundMaintenanceAccountIDs(ctx context.Context, host string, fil
 		JOIN binding_identities bi ON bi.binding_id=b.id
 		JOIN upstream_identity_hosts primary_host ON primary_host.upstream_id=bi.upstream_id AND primary_host.is_primary=1
 		JOIN upstreams u ON u.host=primary_host.host
+		WHERE a.id NOT IN (`+excludedAccountIDsSQL+`)
 		ORDER BY `+numericIDOrder(s.db.Driver(), "a.id")+`,a.id`)
 	if err != nil {
 		return nil, err

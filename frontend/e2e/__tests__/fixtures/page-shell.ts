@@ -34,6 +34,7 @@ export const workspace: NewAPIWorkspace = {
 };
 
 export const pageFixtures: Record<string, unknown> = {
+  "/api/account-workbench/import-model": { model: "gpt-6-astra", revision: 0 },
   "/api/newapi/platforms/layout/groups": {
     groups: [{ id: "default", name: "默认", ratio: "1" }],
   },

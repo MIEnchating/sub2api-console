@@ -22,7 +22,7 @@ const compactTimeFormat = new Intl.DateTimeFormat("zh-CN", {
 
 export const AnimationAccountResult = memo(function AnimationAccountResult(props: {
   result: AnimationResult;
-  layout?: "card" | "fill";
+  layout?: "card" | "fill" | "record";
   activity?: AnimationActivity;
   retryDisabled: boolean;
   onRetry: (target: AnimationTarget) => void;
@@ -49,8 +49,13 @@ export const AnimationAccountResult = memo(function AnimationAccountResult(props
   const modelMismatch = Boolean(result.response_model && result.response_model !== result.model);
   const completedAt = new Date(result.completed_at);
   return (
-    <div aria-label="动画检测结果" className="flex h-full min-h-0 min-w-0 flex-col gap-1.5">
-      <div className="min-h-[180px] flex-1 shrink-0">
+    <div
+      aria-label="动画检测结果"
+      className={cn("flex min-h-0 min-w-0 flex-col gap-1.5", props.layout !== "record" && "h-full")}
+    >
+      <div
+        className={props.layout === "record" ? "h-56 shrink-0" : "min-h-[180px] flex-1 shrink-0"}
+      >
         {result.status === "succeeded" && (result.html || result.svg) ? (
           <AnimationPreview result={result} />
         ) : (

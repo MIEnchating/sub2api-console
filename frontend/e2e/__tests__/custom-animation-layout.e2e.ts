@@ -48,6 +48,22 @@ test("自定义接口分区排列，模型输入可读且空记录与操作栏�
   expect((await empty.boundingBox())!.height).toBeLessThanOrEqual(180);
   await expect(operations.getByRole("button", { name: "编辑动画提示词" })).toBeVisible();
   await expect(page.getByText("暂无自定义接口检测记录")).toBeVisible();
+  const foreground = await page.evaluate(() => {
+    const sample = document.createElement("span");
+    sample.style.color = "var(--foreground)";
+    document.body.append(sample);
+    const color = getComputedStyle(sample).color;
+    sample.remove();
+    return color;
+  });
+  for (const name of ["账号管理", "编辑动画提示词", "清空配置"]) {
+    await expect(page.getByRole("button", { name, exact: true })).toHaveCSS("color", foreground);
+  }
+  await expect(operations.getByRole("button", { name: "开始检测", exact: true })).toHaveAttribute(
+    "data-variant",
+    "default",
+  );
+
   for (const button of await operations.getByRole("button").all()) {
     await expect(button).toHaveCSS("height", "32px");
   }

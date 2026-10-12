@@ -46,7 +46,7 @@ export function ModelCheckConfigurationEditor(props: {
       >
         <div className="flex min-w-0 flex-1 flex-col gap-1 sm:flex-row sm:items-center sm:gap-3">
           <div className="flex min-w-0 items-center gap-2 sm:max-w-xs">
-            <Badge variant={props.configuration.draft ? "warning" : "secondary"}>
+            <Badge variant={props.configuration.draft ? "warning" : "success"}>
               {props.configuration.draft ? "草稿" : "已发布"}
             </Badge>
             <Tooltip>

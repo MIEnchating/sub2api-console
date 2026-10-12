@@ -27,7 +27,10 @@ export function DetectionTaskEditor(props: {
   onClose: () => void;
 }): ReactElement {
   const client = useQueryClient();
-  const groups = useQuery({ queryKey: ["groups"], queryFn: ({ signal }) => api.groups(signal) });
+  const groups = useQuery({
+    queryKey: ["groups", "options"],
+    queryFn: ({ signal }) => api.groupOptions(signal),
+  });
   const [confirmation, setConfirmation] = useState<DetectionTaskForm | null>(null);
   const form = useForm<DetectionTaskForm>({
     resolver: zodResolver(detectionTaskSchema),

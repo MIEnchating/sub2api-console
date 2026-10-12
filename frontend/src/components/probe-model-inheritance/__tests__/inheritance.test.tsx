@@ -53,7 +53,7 @@ function mount(
   });
   clients.push(client);
   if (currentPolicy) client.setQueryData(["policy"], currentPolicy);
-  client.setQueryData(["groups"], groups);
+  client.setQueryData(["groups", "configuration"], groups);
   render(
     <QueryClientProvider client={client}>
       <ProbeModelInheritance groupIds={groupIds} metadata={metadata} />
@@ -132,7 +132,7 @@ it("离开页面时取消尚未完成的策略和分组读取", async () => {
     policySignal = signal;
     return new Promise(() => undefined);
   });
-  vi.spyOn(api, "groups").mockImplementation((signal) => {
+  vi.spyOn(api, "groupConfigurations").mockImplementation((signal) => {
     groupsSignal = signal;
     return new Promise(() => undefined);
   });
@@ -150,4 +150,19 @@ it("离开页面时取消尚未完成的策略和分组读取", async () => {
   view.unmount();
   expect(policySignal?.aborted).toBe(true);
   expect(groupsSignal?.aborted).toBe(true);
+});
+
+it("读取继承配置时不依赖分组健康统计接口", async () => {
+  const statistics = vi.spyOn(api, "groups").mockRejectedValue(new Error("统计不可用"));
+  vi.spyOn(api, "groupConfigurations").mockResolvedValue([group]);
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  clients.push(client);
+  client.setQueryData(["policy"], policy);
+  render(
+    <QueryClientProvider client={client}>
+      <ProbeModelInheritance groupIds={["6"]} />
+    </QueryClientProvider>,
+  );
+  expect(await screen.findByText(/继承全局模型：global-model/)).toBeVisible();
+  expect(statistics).not.toHaveBeenCalled();
 });

@@ -9,19 +9,23 @@ import (
 )
 
 type AccountMutationProtection struct {
-	GroupsLocked   bool
-	ManualPriority bool
-	Paused         bool
-	Excluded       bool
-	ManualFused    bool
+	UpstreamExcluded bool
+	GroupsLocked     bool
+	ManualPriority   bool
+	Paused           bool
+	Excluded         bool
+	ManualFused      bool
 }
 
 func (protection AccountMutationProtection) Protected() bool {
-	return protection.ManualPriority || protection.Paused || protection.Excluded || protection.ManualFused
+	return protection.UpstreamExcluded || protection.ManualPriority || protection.Paused || protection.Excluded || protection.ManualFused
 }
 
 func (protection AccountMutationProtection) Reasons() []string {
 	reasons := []string{}
+	if protection.UpstreamExcluded {
+		reasons = append(reasons, "上游排除")
+	}
 	if protection.ManualPriority {
 		reasons = append(reasons, "手动控制")
 	}
@@ -119,6 +123,27 @@ func (s *Store) AccountMutationProtections(ctx context.Context, accountIDs []str
 		return nil, err
 	}
 	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	excludedRows, err := tx.QueryContext(ctx, `SELECT id FROM (`+excludedAccountIDsSQL+`) excluded_accounts WHERE id IN (SELECT value FROM `+jsonScopeRows(tx.Driver())+` scope)`, string(encodedAccountIDs))
+	if err != nil {
+		return nil, err
+	}
+	for excludedRows.Next() {
+		var id string
+		if err := excludedRows.Scan(&id); err != nil {
+			excludedRows.Close()
+			return nil, err
+		}
+		protection := result[id]
+		protection.UpstreamExcluded = true
+		result[id] = protection
+	}
+	if err := excludedRows.Err(); err != nil {
+		excludedRows.Close()
+		return nil, err
+	}
+	if err := excludedRows.Close(); err != nil {
 		return nil, err
 	}
 	if err := tx.Commit(); err != nil {

@@ -95,5 +95,5 @@ export function cacheAlertPolicyPageData(
 ): void {
   queryClient.setQueryData(["alert-policy"], value);
   queryClient.setQueryData(["notification-status"], notificationStatus);
-  queryClient.setQueryData(["groups"], groups);
+  queryClient.setQueryData(["groups", "options"], groups);
 }

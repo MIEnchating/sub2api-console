@@ -23,7 +23,7 @@ function renderPage(cached = false): void {
   seedDictionaries(client);
   if (cached) cacheAlertPolicyPageData(client);
   else {
-    client.setQueryData(["groups"], groups);
+    client.setQueryData(["groups", "options"], groups);
     client.setQueryData(["notification-status"], notificationStatus);
   }
   render(

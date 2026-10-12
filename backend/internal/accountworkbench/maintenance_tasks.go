@@ -3,6 +3,7 @@ package accountworkbench
 import (
 	"context"
 	"errors"
+	"github.com/MIEnchating/sub2api-console/backend/internal/business"
 	"time"
 
 	"github.com/MIEnchating/sub2api-console/backend/internal/configstore"
@@ -26,9 +27,6 @@ func (s *Service) CheckMaintenance(ctx context.Context, owner string, revision i
 	}
 	if value.Public.Revision == 0 || value.Public.Revision != revision {
 		return Maintenance{}, configstore.ErrWorkbenchVersion
-	}
-	if value.Owner != owner {
-		return Maintenance{}, errors.New("请先预览并保存设置，将维护委托给当前登录会话")
 	}
 	return s.launchMaintenance(ctx, &value)
 }
@@ -73,7 +71,7 @@ func (s *Service) StopMaintenance(ctx context.Context, owner string, revision in
 	return value.Public, nil
 }
 func (s *Service) launchMaintenance(ctx context.Context, value *privateMaintenance) (Maintenance, error) {
-	if s.runner == nil || s.tasks == nil || (value.Public.CheckAfterRepair && s.checker == nil) {
+	if s.runner == nil || s.tasks == nil || ((value.Public.CheckAfterRepair || value.Public.CheckEnabled) && s.checker == nil) {
 		return Maintenance{}, errors.New("维护任务服务尚未就绪")
 	}
 	key := "maintenance:" + targetKey(value.Target)
@@ -130,9 +128,6 @@ func (s *Service) maintenanceAllowed(ctx context.Context, value *privateMaintena
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if err := s.checkOwner(ctx, value.Owner); err != nil {
-		return err
-	}
 	if _, err := targetguard.Pin(targetguard.Expect(ctx, value.Target), s.private); err != nil {
 		return err
 	}
@@ -165,7 +160,7 @@ func (s *Service) TickMaintenance(ctx context.Context) error {
 		if err := s.maintenanceAllowed(ctx, &value); err != nil {
 			value.Public.Enabled = false
 			value.Public.NextCheckAt = nil
-			value.Public.Message = "登录会话或目标已变化，请重新预览并保存维护设置"
+			value.Public.Message = "管理目标或维护配置已变化，请重新预览并保存维护设置"
 			return s.saveMaintenance(ctx, &value)
 		}
 		_, err := s.launchMaintenance(ctx, &value)
@@ -198,6 +193,13 @@ func (s *Service) executeMaintenance(parent context.Context, value *privateMaint
 				continue
 			}
 			id := text(account["id"])
+			if checkErr := s.requireAccountManaged(ctx, id); checkErr != nil {
+				if errors.Is(checkErr, business.ErrUpstreamExcluded) {
+					continue
+				}
+				err = checkErr
+				break
+			}
 			if id == "" || seen[id] || len(seen) >= 500 {
 				err = errors.New("维护账号范围无效，请缩小分组范围并重新确认")
 				break
@@ -220,7 +222,7 @@ func (s *Service) executeMaintenance(parent context.Context, value *privateMaint
 	value.Public.Message = "本轮维护已结束"
 	task.Status = "succeeded"
 	for _, row := range value.Public.Results {
-		if row.Status != "healthy" && row.Status != "repaired" {
+		if row.Status != "healthy" && row.Status != "repaired" && row.Status != "skipped" {
 			task.Status = "partial"
 		}
 	}
@@ -229,7 +231,6 @@ func (s *Service) executeMaintenance(parent context.Context, value *privateMaint
 		task.Status = "failed"
 	}
 	if ctx.Err() != nil {
-		value.Public.Enabled = false
 		task.Status = "cancelled"
 		value.Public.Message = "维护任务已停止"
 	}

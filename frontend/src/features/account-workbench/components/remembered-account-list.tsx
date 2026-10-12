@@ -112,7 +112,7 @@ export function RememberedAccountList(props: { onStarted?: () => void }): ReactE
                   </TableCell>
                   <TableCell className="font-mono text-xs">#{account.account_id}</TableCell>
                   <TableCell>
-                    <Badge variant={account.login_available ? "secondary" : "outline"}>
+                    <Badge variant={account.login_available ? "success" : "warning"}>
                       {account.login_available ? "可重新登录" : "需补充登录资料"}
                     </Badge>
                   </TableCell>
@@ -130,8 +130,8 @@ export function RememberedAccountList(props: { onStarted?: () => void }): ReactE
                         重新登录
                       </Button>
                       <Button
-                        variant="ghost"
-                        className="text-muted-foreground hover:text-destructive"
+                        variant="destructive"
+
                         aria-label={`删除 ${account.name || account.email || account.id}`}
                         disabled={remove.isPending}
                         onClick={() => setPendingDelete(account)}

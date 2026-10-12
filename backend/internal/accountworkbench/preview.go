@@ -17,23 +17,25 @@ const previewLifetime = 15 * time.Minute
 var ErrPreview = errors.New("导入预览已失效或不属于当前会话，请重新预览")
 
 type PreviewInput struct {
-	Content      string `json:"content"`
-	Action       string `json:"action"`
-	TemplateID   string `json:"template_id"`
-	Check        bool   `json:"check"`
-	Promote      bool   `json:"promote"`
-	Model        string `json:"model"`
-	ProxyEnabled bool   `json:"proxy_enabled"`
-	ProxyURL     string `json:"proxy_url"`
+	Content         string `json:"content"`
+	Action          string `json:"action"`
+	TemplateID      string `json:"template_id"`
+	Check           bool   `json:"check"`
+	Promote         bool   `json:"promote"`
+	Model           string `json:"model"`
+	PlatformProxyID string `json:"platform_proxy_id,omitempty"`
+	ProxyEnabled    bool   `json:"proxy_enabled"`
+	ProxyURL        string `json:"proxy_url"`
 }
 type Preview struct {
-	ID        string    `json:"id"`
-	Revision  int64     `json:"revision"`
-	ExpiresAt time.Time `json:"expires_at"`
-	Action    string    `json:"action"`
-	Check     bool      `json:"check"`
-	Promote   bool      `json:"promote"`
-	Template  *Template `json:"template"`
+	ID        string         `json:"id"`
+	Revision  int64          `json:"revision"`
+	ExpiresAt time.Time      `json:"expires_at"`
+	Action    string         `json:"action"`
+	Check     bool           `json:"check"`
+	Promote   bool           `json:"promote"`
+	Template  *Template      `json:"template"`
+	Proxy     *PlatformProxy `json:"proxy,omitempty"`
 	ParsedInput
 }
 type storedInput struct {
@@ -45,6 +47,7 @@ type storedInput struct {
 	ProxyURL         string         `json:"proxy_url,omitempty"`
 }
 type privatePreview struct {
+	ProxyBinding     *platformProxyBinding      `json:"proxy_binding,omitempty"`
 	RememberedSource *rememberedSource          `json:"remembered_source,omitempty"`
 	Scope            string                     `json:"scope"`
 	Public           Preview                    `json:"public"`
@@ -72,10 +75,17 @@ func (s *Service) Preview(ctx context.Context, owner string, input PreviewInput)
 	}
 	input.Model = strings.TrimSpace(input.Model)
 	if input.Model == "" {
-		input.Model = "gpt-5.6-sol"
+		settings, err := s.ImportModel(ctx)
+		if err != nil {
+			return Preview{}, err
+		}
+		input.Model = settings.Model
 	}
 	if len(input.Model) > 200 || strings.ContainsAny(input.Model, "\r\n\x00") {
 		return Preview{}, errors.New("检测模型无效")
+	}
+	if input.PlatformProxyID != "" && (input.Action != "import" || input.ProxyEnabled) {
+		return Preview{}, errors.New("平台代理仅用于站点导入，不能同时指定手动登录代理")
 	}
 	if !input.ProxyEnabled {
 		input.ProxyURL = ""
@@ -137,6 +147,11 @@ func (s *Service) Preview(ctx context.Context, owner string, input PreviewInput)
 		document.Settings.Check = false
 		document.Settings.Promote = false
 	}
+	if input.Action == "import" {
+		if err := s.bindPreviewProxy(ctx, &document, &result); err != nil {
+			return Preview{}, err
+		}
+	}
 	result.ID = newID()
 	result.ExpiresAt = time.Now().UTC().Add(previewLifetime)
 	for _, item := range parsed.Items {
@@ -184,6 +199,9 @@ func (s *Service) readPreview(ctx context.Context, owner, id string, revision in
 		if revision != document.TemplateRevision {
 			return privatePreview{}, errors.New("模板已变化，请重新预览")
 		}
+	}
+	if err := s.verifyPlatformProxy(ctx, document.Target, document.ProxyBinding); err != nil {
+		return privatePreview{}, err
 	}
 	return document, nil
 }

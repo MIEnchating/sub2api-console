@@ -342,17 +342,25 @@ func hasTextBlocks(blocks []any, matches func(any) bool) bool {
 	return false
 }
 
-// Formatting, punctuation and invisible characters cannot establish first text.
-// Letters/numbers cover multilingual prose and code; other symbols include emoji.
+// Only Han text, English letters, ASCII digits and emoji establish first text.
+// Empty protocol deltas are metadata; nonempty whitespace is a placeholder.
 func meaningfulText(value any) bool {
 	text, ok := value.(string)
-	return ok && strings.ContainsFunc(text, func(r rune) bool {
-		return unicode.IsLetter(r) || unicode.IsNumber(r) || unicode.Is(unicode.So, r)
-	})
+	if !ok {
+		return false
+	}
+	if strings.ContainsFunc(text, func(r rune) bool {
+		return unicode.Is(unicode.Han, r) || r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || probeEmoji(r)
+	}) {
+		return true
+	}
+	return strings.Contains(text, "#\u20e3") || strings.Contains(text, "#\ufe0f\u20e3") ||
+		strings.Contains(text, "*\u20e3") || strings.Contains(text, "*\ufe0f\u20e3")
 }
 
 func placeholderText(value any) bool {
-	return nonemptyText(value) && !meaningfulText(value)
+	text, ok := value.(string)
+	return ok && text != "" && !meaningfulText(text)
 }
 
 func nonemptyText(value any) bool {

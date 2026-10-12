@@ -191,7 +191,11 @@ func (s *Service) Collect(ctx context.Context, policy map[string]any, admin Admi
 				}
 				dueIDs = append(dueIDs, accountID)
 			}
-			for _, outcome := range fetchTrafficAccounts(ctx, admin, dueIDs, configured.lookbackMinutes, configured.maxSamples, configured.trafficConcurrency) {
+			for _, outcome := range s.fetchTrafficAccounts(ctx, admin, dueIDs, configured.lookbackMinutes, configured.maxSamples, configured.trafficConcurrency) {
+				if errors.Is(outcome.err, business.ErrUpstreamExcluded) {
+					delete(byAccount, outcome.accountID)
+					continue
+				}
 				accountID, rows, readErr := outcome.accountID, outcome.rows, outcome.err
 				var latencyErr *adminclient.LatencyEnrichmentError
 				partial := errors.As(readErr, &latencyErr)
@@ -225,6 +229,14 @@ func (s *Service) Collect(ctx context.Context, policy map[string]any, admin Admi
 		}
 		result.TrafficDurationSecond = time.Since(started).Seconds()
 	}
+	managedTargets := make([]business.EvidenceTarget, 0, len(targets))
+	for _, target := range targets {
+		if _, ok := byAccount[target.AccountID]; ok {
+			managedTargets = append(managedTargets, target)
+		}
+	}
+	targets = managedTargets
+	result.MonitoredAccounts = len(byAccount)
 	// All remote calls above finish before the local write transaction begins.
 	if err := s.repository.PersistTrafficFetches(ctx, successfulFetches, now); err != nil {
 		return Result{}, err
@@ -330,6 +342,9 @@ func (s *Service) freshTrafficCheck(
 	var persistenceMutex sync.Mutex
 
 	return func(ctx context.Context, accountID string) (bool, error) {
+		if err := business.CheckAccountUpstreamManaged(ctx, s.repository, accountID); err != nil {
+			return false, err
+		}
 		memberships := byAccount[accountID]
 		primary, found := primaryEvidenceMembership(memberships)
 		if !found || evidenceTargetFused(primary) {
@@ -568,7 +583,7 @@ type trafficFetchOutcome struct {
 	err       error
 }
 
-func fetchTrafficAccounts(ctx context.Context, admin Admin, accountIDs []string, lookbackMinutes, maxSamples, concurrency int) []trafficFetchOutcome {
+func (s *Service) fetchTrafficAccounts(ctx context.Context, admin Admin, accountIDs []string, lookbackMinutes, maxSamples, concurrency int) []trafficFetchOutcome {
 	result := make([]trafficFetchOutcome, len(accountIDs))
 	if len(accountIDs) == 0 {
 		return result
@@ -591,6 +606,10 @@ func fetchTrafficAccounts(ctx context.Context, admin Admin, accountIDs []string,
 					return
 				}
 				accountID := accountIDs[index]
+				if err := business.CheckAccountUpstreamManaged(ctx, s.repository, accountID); err != nil {
+					result[index] = trafficFetchOutcome{accountID: accountID, err: err}
+					continue
+				}
 				rows, err := admin.RequestDetails(ctx, accountID, lookbackMinutes, maxSamples)
 				result[index] = trafficFetchOutcome{accountID: accountID, rows: rows, err: err}
 			}

@@ -108,7 +108,12 @@ it("长任务消息打开详情后完整换行展示，关闭后回到查看按�
 
   const dialog = screen.getByRole("dialog", { name: "任务详情" });
   expect(dialog).toHaveAccessibleDescription("查看任务状态与执行结果");
-  expect(within(dialog).getByText(operation).closest("dd")).toBeInTheDocument();
+  expect(dialog.querySelector('[data-slot="dialog-footer"]')).toHaveClass("py-3");
+  expect(within(dialog).queryByText("任务类型")).not.toBeInTheDocument();
+  expect(within(dialog).queryByText("任务 ID")).not.toBeInTheDocument();
+  expect(within(dialog).queryByText("更新时间")).not.toBeInTheDocument();
+  expect(within(dialog).queryByText(operation)).not.toBeInTheDocument();
+  expect(within(dialog).queryByText(task.id)).not.toBeInTheDocument();
   expect(within(dialog).getByText(message)).toHaveClass("wrap-anywhere", "whitespace-pre-wrap");
   expect(within(dialog).getByRole("progressbar", { name: "任务详情进度" })).toHaveAttribute(
     "aria-valuenow",

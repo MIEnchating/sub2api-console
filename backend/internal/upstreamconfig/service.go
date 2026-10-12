@@ -29,7 +29,8 @@ func (e *InputError) Error() string { return e.Err.Error() }
 func (e *InputError) Unwrap() error { return e.Err }
 
 type Business interface {
-	Upstreams(context.Context) (business.UpstreamSummary, error)
+	UpstreamConfigurationHost(context.Context, string) (*business.UpstreamHost, error)
+	UpstreamCatalogIdentityID(context.Context, string) (string, error)
 	UpstreamGroups(context.Context, string, bool) ([]business.UpstreamGroup, error)
 	UpstreamExists(context.Context, string) (bool, error)
 	CreateUpstreamConfiguration(context.Context, business.UpstreamConfigurationWrite) (business.UpstreamConfigurationWriteResult, error)
@@ -69,10 +70,6 @@ type Service struct {
 
 type classificationStore interface {
 	UpdateUpstreamClassification(context.Context, string, string, string) error
-}
-
-type configurationHostStore interface {
-	UpstreamConfigurationHost(context.Context, string) (*business.UpstreamHost, error)
 }
 
 type hostRenamer interface {
@@ -190,19 +187,7 @@ func (s *Service) Get(ctx context.Context, host string) (Configuration, error) {
 }
 
 func (s *Service) configurationHost(ctx context.Context, host string) (*business.UpstreamHost, error) {
-	if store, ok := s.business.(configurationHostStore); ok {
-		return store.UpstreamConfigurationHost(ctx, host)
-	}
-	summary, err := s.business.Upstreams(ctx)
-	if err != nil {
-		return nil, err
-	}
-	for index := range summary.Hosts {
-		if summary.Hosts[index].Host == host {
-			return &summary.Hosts[index], nil
-		}
-	}
-	return nil, nil
+	return s.business.UpstreamConfigurationHost(ctx, host)
 }
 
 func (s *Service) Create(ctx context.Context, input Input, actor string) (Configuration, error) {

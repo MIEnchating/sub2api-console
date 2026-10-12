@@ -49,6 +49,7 @@ import (
 	"github.com/MIEnchating/sub2api-console/backend/internal/upstreamconfig"
 	"github.com/MIEnchating/sub2api-console/backend/internal/upstreamdelete"
 	"github.com/MIEnchating/sub2api-console/backend/internal/upstreamdetect"
+	"github.com/MIEnchating/sub2api-console/backend/internal/upstreamexclusion"
 	"github.com/MIEnchating/sub2api-console/backend/internal/upstreamsync"
 	"github.com/MIEnchating/sub2api-console/backend/internal/uptimekuma"
 	"golang.org/x/sys/unix"
@@ -265,6 +266,7 @@ func run() error {
 	)
 	upstreamSyncTasks.UseBalanceAlerts(alertService.EvaluateBalance)
 	upstreamDeleteService := upstreamdelete.New(businessStore, privateStore, taskStore)
+	upstreamExclusionService := upstreamexclusion.New(businessStore, privateStore, taskStore, accountTasks)
 	accountDeleteService := accountdelete.New(businessStore, privateStore, upstreamReader, taskStore)
 	onboardingService := onboarding.New(businessStore, privateStore, upstreamReader, taskStore)
 	onboardingService.UseAnimationService(modelChecks)
@@ -293,6 +295,7 @@ func run() error {
 	modelChecks.UseTaskRunner(modelChecksRunner)
 	upstreamSyncTasks.UseTaskRunner(upstreamSyncTasksRunner)
 	upstreamDeleteService.UseTaskRunner(upstreamDeleteTasksRunner)
+	upstreamExclusionService.UseTaskRunner(upstreamDeleteTasksRunner)
 	accountDeleteService.UseTaskRunner(accountDeleteTasksRunner)
 	onboardingService.UseTaskRunner(onboardingTasksRunner)
 	authRecoveryService.UseTaskRunner(authRecoveryTasksRunner)
@@ -302,6 +305,7 @@ func run() error {
 	accountDeleteService.SetAuthResolver(authRecoveryService)
 	modelChecks.UseUpstreamAuthResolver(authRecoveryService)
 	accountWorkbench := accountworkbench.New(privateStore)
+	modelChecks.UseOAuthCredentialSource(accountWorkbench)
 	accountWorkbench.UseAccountGroupProtection(businessStore)
 	accountWorkbench.UseExecution(taskStore, workbenchTasks, modelChecks, filepath.Join(cfg.DataDir, "account-workbench-private"))
 	if err := accountWorkbench.Recover(serviceContext); err != nil {
@@ -450,6 +454,7 @@ func run() error {
 		UpstreamConfigs:        upstreamConfigurations,
 		UpstreamSync:           upstreamSyncTasks,
 		UpstreamDelete:         upstreamDeleteService,
+		UpstreamExclusion:      upstreamExclusionService,
 		AuthRecovery:           authRecoveryService,
 		Onboarding:             onboardingService,
 		RequestTrace:           opsTrafficService,

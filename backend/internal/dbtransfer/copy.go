@@ -113,7 +113,12 @@ func copyTable(ctx context.Context, tx *dbconn.Tx, item table) (TableReport, err
 		count++
 	}
 	placeholders := strings.TrimSuffix(strings.Repeat("?,", count), ",")
-	insert := `INSERT INTO ` + quoted(item.name) + `(` + insertColumns + `) VALUES(` + placeholders + `)`
+	insert := `INSERT INTO ` + quoted(item.name) + `(` + insertColumns + `)`
+	if tx.Driver() == dbconn.Postgres && item.name == "account_workbench_documents" {
+		// Preserve legacy rowid order in the GENERATED ALWAYS identity column.
+		insert += ` OVERRIDING SYSTEM VALUE`
+	}
+	insert += ` VALUES(` + placeholders + `)`
 	for rows.Next() {
 		values, err := valuesFrom(rows, count)
 		if err != nil {

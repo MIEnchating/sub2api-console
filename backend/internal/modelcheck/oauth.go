@@ -28,6 +28,7 @@ const (
 
 type oauthCredential struct {
 	previewClient *adminclient.Client
+	proxyURL      string
 	accessToken   string
 	workspaceID   string
 	userAgent     string

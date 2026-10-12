@@ -198,21 +198,19 @@ func (s *Store) AccountIDsByGroups(ctx context.Context, groupIDs []string) ([]st
 		seen[groupID] = struct{}{}
 		uniqueGroupIDs = append(uniqueGroupIDs, groupID)
 	}
-	values := make([]string, len(uniqueGroupIDs))
-	for index := range values {
-		values[index] = "(?)"
+	raw, err := json.Marshal(uniqueGroupIDs)
+	if err != nil {
+		return nil, err
 	}
-	query := `WITH selected_group_ids(id) AS (VALUES ` + strings.Join(values, ",") + `)
-	SELECT DISTINCT ag.account_id
-		FROM account_groups ag
-		LEFT JOIN local_groups lg ON lg.name=ag.group_name
-		WHERE ag.group_id IN (SELECT id FROM selected_group_ids)
-		   OR (ag.group_id IS NULL AND lg.remote_id IN (SELECT id FROM selected_group_ids))
-		ORDER BY ` + numericIDOrder(s.db.Driver(), "ag.account_id") + `, ag.account_id`
-	args := make([]any, len(uniqueGroupIDs))
-	for index, groupID := range uniqueGroupIDs {
-		args[index] = groupID
-	}
+	query := `WITH selected_group_ids AS (SELECT value AS id FROM ` + jsonScopeRows(s.db.Driver()) + ` scope)
+	SELECT matched.account_id FROM (
+	 SELECT DISTINCT ag.account_id FROM account_groups ag
+	 LEFT JOIN local_groups lg ON lg.name=ag.group_name
+	 WHERE (ag.group_id IN (SELECT id FROM selected_group_ids)
+	 OR (ag.group_id IS NULL AND lg.remote_id IN (SELECT id FROM selected_group_ids)))
+	 AND ag.account_id NOT IN (` + excludedAccountIDsSQL + `)
+	) matched ORDER BY ` + numericIDOrder(s.db.Driver(), "matched.account_id") + `, matched.account_id`
+	args := []any{string(raw)}
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err

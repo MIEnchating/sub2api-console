@@ -19,10 +19,11 @@ import (
 )
 
 type UpstreamHost struct {
+	Excluded               bool                          `json:"excluded"`
 	Spending               *UpstreamSpending             `json:"spending"`
-	RequestCount           int64                         `json:"request_count"`
-	RequestWindowDays      int                           `json:"request_window_days"`
-	AccountRequestUsage    []UpstreamAccountRequestUsage `json:"account_request_usage"`
+	RequestCount           int64                         `json:"request_count,omitempty"`
+	RequestWindowDays      int                           `json:"request_window_days,omitempty"`
+	AccountRequestUsage    []UpstreamAccountRequestUsage `json:"account_request_usage,omitempty"`
 	UpstreamID             string                        `json:"upstream_id"`
 	Host                   string                        `json:"host"`
 	Hosts                  []string                      `json:"hosts"`
@@ -157,30 +158,32 @@ type GroupStatus struct {
 }
 
 func (s *Store) Upstreams(ctx context.Context) (UpstreamSummary, error) {
-	return s.readUpstreams(ctx, nil)
+	return s.readUpstreams(ctx, nil, true)
 }
 
 // UpstreamConfigurationHost shares the catalog's balance and capacity rules,
 // but does not aggregate traffic or unrelated upstreams for an editor read.
 func (s *Store) UpstreamConfigurationHost(ctx context.Context, host string) (*UpstreamHost, error) {
 	host = canonicalHost(host)
-	summary, err := s.readUpstreams(ctx, &host)
+	summary, err := s.readUpstreams(ctx, &host, false)
 	if err != nil || len(summary.Hosts) == 0 {
 		return nil, err
 	}
 	return &summary.Hosts[0], nil
 }
 
-func (s *Store) readUpstreams(ctx context.Context, configurationHost *string) (UpstreamSummary, error) {
+func (s *Store) readUpstreams(ctx context.Context, configurationHost *string, includeUsage bool) (UpstreamSummary, error) {
 	var requestUsage map[string][]UpstreamAccountRequestUsage
 	var requestCounts, accountCounts, groupCounts map[string]int64
 	var identityHosts map[string][]string
 	var upstreamID *string
 	var err error
 	if configurationHost == nil {
-		requestUsage, requestCounts, err = s.upstreamAccountRequestUsage(ctx)
-		if err != nil {
-			return UpstreamSummary{}, err
+		if includeUsage {
+			requestUsage, requestCounts, err = s.upstreamAccountRequestUsage(ctx)
+			if err != nil {
+				return UpstreamSummary{}, err
+			}
 		}
 		identityHosts, err = upstreamIdentityHostSets(ctx, s.db)
 		if err != nil {
@@ -208,7 +211,7 @@ func (s *Store) readUpstreams(ctx context.Context, configurationHost *string) (U
 	}
 	query := `SELECT h.upstream_id,u.host,u.base_url,u.upstream_type,u.auth_status,
 		u.balance,u.raw_balance,u.mapped_balance,u.checked_at,u.metadata_json,
-		COALESCE(r.recharge_rate,'1')
+		COALESCE(r.recharge_rate,'1'),EXISTS(SELECT 1 FROM upstream_exclusions e WHERE e.upstream_id=h.upstream_id)
 		FROM upstreams u JOIN upstream_identity_hosts h ON h.host=u.host
 		LEFT JOIN recharge_rates r ON r.host=u.host WHERE h.is_primary=1`
 	arguments := []any{}
@@ -237,7 +240,7 @@ func (s *Store) readUpstreams(ctx context.Context, configurationHost *string) (U
 		var metadataRaw string
 		if err := rows.Scan(
 			&item.UpstreamID, &item.Host, &item.BaseURL, &item.UpstreamType, &item.AuthStatus, &legacyBalance,
-			&rawBalance, &mappedBalance, &checkedAt, &metadataRaw, &item.RechargeRate,
+			&rawBalance, &mappedBalance, &checkedAt, &metadataRaw, &item.RechargeRate, &item.Excluded,
 		); err != nil {
 			return UpstreamSummary{}, err
 		}
@@ -254,7 +257,9 @@ func (s *Store) readUpstreams(ctx context.Context, configurationHost *string) (U
 			item.AccountRequestUsage = []UpstreamAccountRequestUsage{}
 		}
 		item.RequestCount = requestCounts[item.UpstreamID]
-		item.RequestWindowDays = 30
+		if includeUsage || configurationHost != nil {
+			item.RequestWindowDays = 30
+		}
 		concurrency := readUpstreamConcurrency(item.UpstreamType, metadata)
 		item.ConcurrencyLimit, item.ConcurrencyStatus, item.ConcurrencyCheckedAt = concurrency.limit, concurrency.status, concurrency.checkedAt
 		total := concurrencyTotals[item.UpstreamID]

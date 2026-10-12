@@ -268,6 +268,9 @@ func (s *Service) finishKeyCleanupFailure(ctx context.Context, task taskstore.Ta
 }
 
 func (s *Service) keyCleanupContext(ctx context.Context, host string) (configstore.AuthRecord, keyCleanupClient, error) {
+	if err := business.CheckUpstreamManaged(ctx, s.repository, host); err != nil {
+		return configstore.AuthRecord{}, nil, err
+	}
 	if strings.TrimSpace(host) == "" {
 		return configstore.AuthRecord{}, nil, errors.New("上游 Host 不能为空")
 	}

@@ -28,10 +28,11 @@ type RememberedAccount struct {
 // Records belong to a management target, not to the importing login session.
 // Only the public summary can be returned to the browser.
 type rememberedAccount struct {
-	TargetKey   string            `json:"target_key"`
-	SourceRunID string            `json:"source_run_id"`
-	Public      RememberedAccount `json:"public"`
-	Input       storedInput       `json:"input"`
+	TargetKey             string            `json:"target_key"`
+	SourceRunID           string            `json:"source_run_id"`
+	Public                RememberedAccount `json:"public"`
+	Input                 storedInput       `json:"input"`
+	GenerationCredentials map[string]any    `json:"generation_credentials,omitempty"`
 }
 
 func rememberedAccountID(target configstore.TargetSettings, accountID string) string {
@@ -55,13 +56,13 @@ func (s *Service) saveRememberedAccount(ctx context.Context, value *privateRun, 
 	s.rememberMu.Lock()
 	defer s.rememberMu.Unlock()
 	input := value.Items[index]
-	// Durable login material needs verified identity, not an old OAuth access or
-	// refresh token that a later maintenance task may already have rotated.
+	// Keep login identity separate from the generation-only access credential.
+	// Refresh tokens remain owned by the existing authorization workflow.
 	identity := map[string]any{}
 	copyInputIdentity(identity, input.Credentials)
 	input.Credentials = identity
 	input.Item.Credentials = nil
-	item := rememberedAccount{TargetKey: targetKey(value.Target), SourceRunID: value.Public.ID, Input: input,
+	item := rememberedAccount{TargetKey: targetKey(value.Target), SourceRunID: value.Public.ID, Input: input, GenerationCredentials: generationCredential(value.Items[index].Credentials),
 		Public: RememberedAccount{ID: rememberedAccountID(value.Target, row.AccountID), AccountID: row.AccountID, Name: row.Name, Email: row.Email, Plan: row.Plan, LoginAvailable: input.LoginSource != "", LastImportedAt: time.Now().UTC()}}
 	key := rememberedAccountKey(value.Target, item.Public.ID)
 	raw, revision, err := s.private.WorkbenchDocument(ctx, key)
@@ -83,7 +84,6 @@ func (s *Service) saveRememberedAccount(ctx context.Context, value *privateRun, 
 			item.Input.LoginSource = previous.Input.LoginSource
 			item.Input.LoginPassword = previous.Input.LoginPassword
 			item.Input.MailRefreshToken = previous.Input.MailRefreshToken
-			item.Input.ProxyURL = previous.Input.ProxyURL
 			item.Public.LoginAvailable = item.Input.LoginSource != ""
 		}
 	}

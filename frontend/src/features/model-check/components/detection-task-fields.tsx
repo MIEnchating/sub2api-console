@@ -6,14 +6,14 @@ import { AnimationPromptDialog } from "./animation-prompt-dialog";
 import { Checkbox } from "@/components/ui/checkbox";
 import { FieldError } from "@/components/field-error";
 import { MultiSelect } from "@/components/multi-select";
-import type { GroupStatus } from "@/api";
+import type { GroupOption } from "@/api";
 import type { DetectionTaskForm } from "../lib/detection-task-schema";
 import { DailyDetectionTimes } from "./daily-detection-times";
 import { DetectionTaskStages } from "./detection-task-stages";
 
 export function DetectionTaskFields(props: {
   form: UseFormReturn<DetectionTaskForm>;
-  groups: GroupStatus[];
+  groups: GroupOption[];
   pending: boolean;
 }): ReactElement {
   const form = props.form;

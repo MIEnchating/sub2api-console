@@ -3,21 +3,13 @@ import type * as React from "react";
 
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
+import { statusToneClasses, type StatusTone } from "@/lib/status-styles";
 
-const textColorMap = {
-  success: "text-success",
-  warning: "text-warning",
-  danger: "text-destructive",
-  info: "text-info",
-  purple: "text-purple-600 dark:text-purple-400",
-  neutral: "text-muted-foreground",
-} as const;
-
-export type StatusVariant = keyof typeof textColorMap;
+export type StatusVariant = StatusTone;
 
 const sizeMap = {
-  sm: "h-5 gap-1 px-1.5 text-sm leading-none",
-  md: "h-5 gap-1 px-1.5 text-sm leading-none",
+  sm: "h-5 gap-1 px-2 text-xs leading-4",
+  md: "h-5 gap-1 px-2 text-xs leading-4",
   lg: "h-6 gap-1.5 px-2 text-sm leading-none",
 } as const;
 
@@ -37,14 +29,14 @@ export function StatusBadge(props: StatusBadgeProps) {
       {...spanProps}
       data-slot="status-badge"
       className={cn(
-        "inline-flex w-fit max-w-full min-w-0 shrink items-center rounded-4xl font-medium tracking-normal whitespace-nowrap transition-colors",
+        "inline-flex w-fit max-w-full min-w-0 shrink items-center rounded-4xl border font-medium tracking-normal whitespace-nowrap transition-colors",
         sizeMap[size ?? "sm"],
-        textColorMap[variant ?? "neutral"],
+        statusToneClasses[variant ?? "neutral"],
         pulse && "animate-pulse",
         className,
       )}
     >
-      {Icon && <Icon className="size-3.5 shrink-0" aria-hidden="true" />}
+      {Icon && <Icon className="size-3 shrink-0" aria-hidden="true" />}
       <span className="min-w-0 truncate leading-normal">{label}</span>
     </span>
   );

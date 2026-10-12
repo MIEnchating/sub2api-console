@@ -57,7 +57,7 @@ function setup(value: Task = task): QueryClient {
   });
   clients.push(client);
   client.setQueryData(
-    ["groups"],
+    ["groups", "options"],
     [
       { id: "7", name: "主分组" },
       { id: "8", name: "备用分组" },

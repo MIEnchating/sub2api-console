@@ -130,9 +130,9 @@ export function ChannelGroupCard(props: {
                   )}
                   <Button
                     type="button"
-                    variant="ghost"
+                    variant="destructive"
                     size="icon"
-                    className="text-muted-foreground hover:text-destructive"
+
                     aria-label={`从 ${props.group.name} 移除渠道 ${id}`}
                     disabled={props.pending}
                     onClick={() =>

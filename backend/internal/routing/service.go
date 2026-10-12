@@ -97,6 +97,7 @@ type Service struct {
 }
 
 type engineConfig struct {
+	bindingCleanup           bindingCleanupConfig
 	abnormalCleanup          abnormalCleanupConfig
 	sampleClassification     scoringConfig
 	strategy                 string
@@ -508,6 +509,7 @@ func (s *Service) Calculate(ctx context.Context, scope Scope, persistDecisions b
 		}
 		cleanupWrites = append(cleanupWrites, abnormalWrites...)
 		runtimeEvents = append(runtimeEvents, abnormalEvents...)
+		runtimeEvents = append(runtimeEvents, applyBindingCleanup(byAccount, config)...)
 	}
 	for _, memberships := range byAccount {
 		for _, item := range memberships {
@@ -660,6 +662,9 @@ func routingStateTransitionEvents(
 }
 
 func accountMetadataManaged(account business.RoutingAccount, config engineConfig) bool {
+	if account.UpstreamExcluded {
+		return false
+	}
 	accountType := strings.ToLower(strings.TrimSpace(textMetadata(account.Metadata, "type", "account_type")))
 	if accountType == "" {
 		accountType = "apikey"
@@ -944,6 +949,10 @@ func parseEngineConfig(policy map[string]any) (engineConfig, error) {
 		cleanupMaxPerRound: reader.integer(cleanup, "cleanup.max_per_round", "max_per_round", 1, 1, 10000),
 		cleanupKeepLast:    reader.boolean(cleanup, "cleanup.keep_last_in_group", "keep_last_in_group", true),
 		cleanupOnlyAuth:    reader.boolean(cleanup, "cleanup.only_auth_errors", "only_auth_errors", true), cleanupStatusCodes: cleanupCodes,
+	}
+	config.bindingCleanup, err = parseBindingCleanup(policy)
+	if err != nil {
+		return engineConfig{}, err
 	}
 	config.abnormalCleanup, err = parseAbnormalCleanup(policy)
 	if err != nil {
@@ -2213,6 +2222,9 @@ func aggregateTargets(values map[string][]*candidate) map[string]business.Accoun
 			UpstreamAllocation:  primary.upstreamAllocation,
 			UpstreamReductionID: primary.upstreamReductionID, UpstreamReductionLimit: cloneInt64(primary.upstreamReductionLimit),
 		}
+		if primary.cleanupReason == business.MissingBindingCleanupReason {
+			target.MissingBindingFingerprint = primary.account.MissingBindingFingerprint
+		}
 		if primary.state != "excluded" {
 			schedulable := primary.schedulable
 			target.Schedulable = &schedulable
@@ -2414,6 +2426,9 @@ func strategyQuality(item *candidate, config engineConfig, benchmark strategyInp
 }
 
 func eligibleScope(account business.RoutingAccount, config engineConfig) (bool, string) {
+	if account.UpstreamExcluded {
+		return false, "上游已排除管控"
+	}
 	if _, found := config.excludedAccounts[account.ID]; found {
 		return false, "账号被排除"
 	}

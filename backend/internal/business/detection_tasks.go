@@ -82,7 +82,7 @@ func (s *Store) detectionTaskScope(ctx context.Context, groups []string) (Detect
 		}
 		scope.GroupNamesByID[id] = name
 	}
-	rows, err := s.db.QueryContext(ctx, "SELECT DISTINCT ag.account_id, ag.group_id FROM account_groups ag JOIN accounts a ON a.id=ag.account_id WHERE ag.group_id IN (SELECT value FROM "+jsonScopeRows(s.db.Driver())+" scope) ORDER BY ag.account_id, ag.group_id", string(raw))
+	rows, err := s.db.QueryContext(ctx, "SELECT DISTINCT ag.account_id, ag.group_id FROM account_groups ag JOIN accounts a ON a.id=ag.account_id WHERE a.id NOT IN ("+excludedAccountIDsSQL+") AND ag.group_id IN (SELECT value FROM "+jsonScopeRows(s.db.Driver())+" scope) ORDER BY ag.account_id, ag.group_id", string(raw))
 	if err != nil {
 		return scope, err
 	}

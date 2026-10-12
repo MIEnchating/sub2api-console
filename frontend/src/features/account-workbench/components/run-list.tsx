@@ -1,7 +1,7 @@
 import { useMemo, useState, type ReactElement } from "react";
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
-import { RefreshCw, ChevronDown, Trash2, FileDown, History, Search } from "lucide-react";
-import { toast } from "sonner";
+import { RefreshCw, ChevronDown, Trash2, History, Search } from "lucide-react";
+
 import { api } from "@/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -19,7 +19,7 @@ import { TaskStartupState } from "@/components/task-startup-state";
 import { notifyOperationError } from "@/lib/operation-feedback";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
-import { runKeys, runStatusLabels, workbenchKeys } from "../constants";
+import { runKeys, runStatusLabels, runStatusVariants, workbenchKeys } from "../constants";
 import type { WorkbenchRun } from "../types";
 import { WorkbenchToolbar, WorkbenchEmptyState } from "./workbench-section";
 import { RunItems } from "./run-items";
@@ -46,7 +46,10 @@ export function RunList(): ReactElement {
     queryFn: ({ signal }) => api.workbenchRuns(signal),
     refetchInterval: 30_000,
   });
-  const activeRuns = useMemo(() => (query.data ?? []).filter(active), [query.data]);
+  const activeRuns = useMemo(
+    () => (query.data ?? []).filter((run) => run.action === "import" && active(run)),
+    [query.data],
+  );
   const activeQueries = useQueries({
     queries: activeRuns.map((run) => ({
       queryKey: [...runKeys.list, "detail", run.id, run.revision],
@@ -75,17 +78,10 @@ export function RunList(): ReactElement {
     },
     onError: (error) => notifyOperationError(error, "记录操作失败"),
   });
-  const exportFile = useMutation({
-    mutationFn: (run: WorkbenchRun) => api.workbenchExport(run.id, run.revision),
-    onSuccess: (artifact) =>
-      toast.success(`已保存 ${artifact.count} 个账号的私有 JSON`, {
-        description: `文件 ID：${artifact.id}`,
-      }),
-    onError: (error) => notifyOperationError(error, "私有 JSON 保存失败"),
-  });
   const runs = useMemo(() => {
     const queryText = search.trim().toLowerCase();
     return (query.data ?? [])
+      .filter((run) => run.action === "import")
       .map((run) => {
         const updated = activeUpdates.get(run.id);
         return updated && updated.revision >= run.revision ? updated : run;
@@ -99,7 +95,7 @@ export function RunList(): ReactElement {
         );
       });
   }, [activeUpdates, query.data, search]);
-  const pending = update.isPending || exportFile.isPending;
+  const pending = update.isPending;
   return (
     <section aria-label="处理记录" className="grid min-w-0 gap-4">
       <WorkbenchToolbar
@@ -169,9 +165,11 @@ export function RunList(): ReactElement {
                   aria-hidden="true"
                   className={cn("transition-transform", !open && "-rotate-90")}
                 />
-                {run.action === "import" ? "账号导入" : "JSON 输出"} · {run.items.length} 项
+                账号导入 · {run.items.length} 项
               </Button>
-              <Badge variant="secondary">{runStatusLabels[run.status] || "状态待确认"}</Badge>
+              <Badge variant={runStatusVariants[run.status] ?? "neutral"}>
+                {runStatusLabels[run.status] || "状态待确认"}
+              </Badge>
               <span className="w-full pl-2 text-xs text-muted-foreground sm:ml-auto sm:w-auto sm:pl-0">
                 {new Date(run.created_at).toLocaleString("zh-CN")}
               </span>
@@ -199,34 +197,24 @@ export function RunList(): ReactElement {
                       取消任务
                     </Button>
                   ) : (
-                    <>
-                      <Button
-                        variant="outline"
-                        disabled={
-                          pending ||
-                          expired ||
-                          !run.items.some(
-                            (item) => item.status !== "completed" && item.status !== "exported",
-                          )
-                        }
-                        onClick={() => setConfirmation({ run, action: "retry" })}
-                      >
-                        继续 / 重试
-                      </Button>
-                      <Button
-                        variant="outline"
-                        disabled={pending || expired}
-                        onClick={() => exportFile.mutate(run)}
-                      >
-                        <FileDown aria-hidden="true" />
-                        保存私有 JSON
-                      </Button>
-                    </>
+                    <Button
+                      variant="outline"
+                      disabled={
+                        pending ||
+                        expired ||
+                        !run.items.some(
+                          (item) => item.status !== "completed" && item.status !== "exported",
+                        )
+                      }
+                      onClick={() => setConfirmation({ run, action: "retry" })}
+                    >
+                      继续 / 重试
+                    </Button>
                   )}
                   <Button
-                    variant="ghost"
+                    variant="destructive"
                     disabled={pending}
-                    className="ml-auto text-muted-foreground hover:text-destructive"
+                    className="ml-auto"
                     onClick={() => setConfirmation({ run, action: "delete" })}
                   >
                     <Trash2 aria-hidden="true" />
@@ -252,7 +240,7 @@ export function RunList(): ReactElement {
             <DialogBody>
               <p className="text-sm">
                 {confirmation.action === "enable"
-                  ? "所选账号的智商检测未通过，当前未开启调度。确认后将保留检测结果及模板分组，并手动开启调度。"
+                  ? "所选账号的糖果题检测未通过，当前未开启调度。确认后将保留检测结果及模板分组，并手动开启调度。"
                   : `${actionLabels[confirmation.action]}：${confirmation.run.items.length} 项账号，创建于 ${new Date(confirmation.run.created_at).toLocaleString("zh-CN")}。`}
               </p>
               {confirmation.action === "delete" && (

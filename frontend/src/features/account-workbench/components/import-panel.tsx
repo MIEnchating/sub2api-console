@@ -10,10 +10,10 @@ import { Textarea } from "@/components/ui/textarea";
 import { ArrowRight, FileText } from "lucide-react";
 import { ContentLoading } from "@/components/content-loading";
 import { notifyOperationError } from "@/lib/operation-feedback";
-import { runKeys } from "../constants";
+import { importModelKey, runKeys } from "../constants";
 import { importDefaults, importSchema, type ImportValues } from "../lib/import-schema";
 import { matchesImportPreviewSource } from "../lib/import-preview-source";
-import type { WorkbenchPreview } from "../types";
+import type { ImportModelSettings, WorkbenchPreview } from "../types";
 import { ImportPreview } from "./import-preview";
 import { ImportSettings } from "./import-settings";
 
@@ -26,6 +26,8 @@ export function ImportPanel(props: { onStarted: () => void }): ReactElement {
   const values = form.watch();
   const [fileName, setFileName] = useState("");
   const [reading, setReading] = useState(false);
+  const [modelReady, setModelReady] = useState(false);
+  const [proxyReady, setProxyReady] = useState(true);
   const [preview, setPreview] = useState<{ value: WorkbenchPreview; source: ImportValues } | null>(
     null,
   );
@@ -34,9 +36,10 @@ export function ImportPanel(props: { onStarted: () => void }): ReactElement {
     mutationFn: (input: ImportValues) =>
       api.workbenchPreview({
         ...input,
-        promote: input.action === "import",
-        template_id: input.action === "export" ? "" : input.template_id,
-        proxy_url: input.proxy_enabled ? input.proxy_url : "",
+        action: "import",
+        promote: true,
+        proxy_enabled: false,
+        proxy_url: "",
       }),
     onSuccess: (value, input) => setPreview({ value, source: { ...input } }),
     onError: (error) => notifyOperationError(error, "账号解析失败"),
@@ -45,7 +48,11 @@ export function ImportPanel(props: { onStarted: () => void }): ReactElement {
     mutationFn: (value: WorkbenchPreview) =>
       api.startWorkbenchRun({ id: value.id, revision: value.revision }),
     onSuccess: () => {
-      form.reset(importDefaults);
+      form.reset({
+        ...importDefaults,
+        model:
+          client.getQueryData<ImportModelSettings>(importModelKey)?.model ?? importDefaults.model,
+      });
       setPreview(null);
       parse.reset();
       void client.invalidateQueries({ queryKey: runKeys.list });
@@ -79,7 +86,9 @@ export function ImportPanel(props: { onStarted: () => void }): ReactElement {
   return (
     <section aria-label="导入账号" className="flex h-full min-h-0 min-w-0 flex-col gap-4">
       <form
-        onSubmit={form.handleSubmit((input) => parse.mutate(input))}
+        onSubmit={form.handleSubmit((input) => {
+          if (modelReady && proxyReady) parse.mutate(input);
+        })}
         className="flex min-h-0 min-w-0 flex-1 flex-col"
       >
         <div className="grid min-h-0 min-w-0 flex-1 auto-rows-max content-start gap-4 overflow-y-auto overscroll-contain pb-4 lg:auto-rows-auto lg:grid-cols-[minmax(0,1fr)_minmax(18rem,22rem)] lg:content-stretch">
@@ -134,7 +143,12 @@ export function ImportPanel(props: { onStarted: () => void }): ReactElement {
               />
             </div>
           </section>
-          <ImportSettings form={form} busy={busy} />
+          <ImportSettings
+            form={form}
+            busy={busy}
+            onProxyReadyChange={setProxyReady}
+            onModelReadyChange={setModelReady}
+          />
         </div>
         <div className="flex shrink-0 items-center justify-between gap-3 rounded-lg border bg-card p-3 shadow-xs sm:px-4">
           <div className="flex min-w-0 items-center gap-3 text-xs text-muted-foreground">
@@ -150,7 +164,7 @@ export function ImportPanel(props: { onStarted: () => void }): ReactElement {
               <span className="leading-5">先预览账号，确认后开始处理</span>
             )}
           </div>
-          <Button type="submit" disabled={busy}>
+          <Button type="submit" disabled={busy || !proxyReady || !modelReady}>
             解析并预览
             <ArrowRight aria-hidden="true" />
           </Button>

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/MIEnchating/sub2api-console/backend/internal/business"
 	"slices"
 	"sort"
 	"strings"
@@ -200,7 +201,9 @@ func (s *Service) RunDueAnimations(ctx context.Context, now time.Time) {
 		s.animation.scheduleMu.Unlock()
 		task, err := s.EnqueueAnimation(ctx, AnimationRequest{Prompt: schedule.Prompt, Targets: []AnimationTarget{{AccountID: schedule.AccountID, Model: schedule.Model}}, TimeoutSeconds: schedule.TimeoutSeconds, Mode: schedule.Mode, PrecheckQuestions: schedule.PrecheckQuestions})
 		s.animation.scheduleMu.Lock()
-		if err != nil {
+		if errors.Is(err, business.ErrUpstreamExcluded) {
+			delete(s.animation.lastError, key)
+		} else if err != nil {
 			s.animation.lastError[key] = safeCredentialError(err)
 		} else {
 			s.animation.lastTask[key] = task.ID

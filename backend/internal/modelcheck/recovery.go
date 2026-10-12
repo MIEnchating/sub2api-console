@@ -8,6 +8,8 @@ import (
 	"errors"
 	"time"
 
+	"github.com/MIEnchating/sub2api-console/backend/internal/business"
+
 	"github.com/MIEnchating/sub2api-console/backend/internal/targetguard"
 	"github.com/MIEnchating/sub2api-console/backend/internal/taskrecovery"
 	"github.com/MIEnchating/sub2api-console/backend/internal/taskstore"
@@ -152,7 +154,7 @@ func (s *Service) resumeManagedTask(ctx context.Context, task taskstore.Task, in
 	// Validate legacy checkpoints without changing the queued snapshot. The
 	// execution path persists newly established bindings after it reloads scope.
 	validationTask := task
-	if err := bindDetectionRecovery(&validationTask, accounts); err != nil {
+	if err := s.bindDetectionRecovery(ctx, &validationTask, accounts); err != nil {
 		releaseState()
 		return err
 	}
@@ -201,7 +203,22 @@ func animationResultKey(accountID, mode string) string {
 	return accountID + ":" + mode
 }
 
-func bindDetectionRecovery(task *taskstore.Task, accounts []selectedAccount) error {
+// Completed results remain part of task history after an account is excluded.
+func historicalAnimationUnits(accounts []selectedAccount, results []AnimationResult) int {
+	current := make(map[string]bool, len(accounts))
+	for _, account := range accounts {
+		current[account.ID] = true
+	}
+	count := 0
+	for _, result := range results {
+		if !current[result.AccountID] && (result.Phase == "" || result.Phase == "completed") {
+			count++
+		}
+	}
+	return count
+}
+
+func (s *Service) bindDetectionRecovery(ctx context.Context, task *taskstore.Task, accounts []selectedAccount) error {
 	if task.Recovery == nil {
 		return nil
 	}
@@ -210,6 +227,15 @@ func bindDetectionRecovery(task *taskstore.Task, accounts []selectedAccount) err
 		return err
 	}
 	if len(input.Bindings) > 0 {
+		for id := range input.Bindings {
+			if err := business.CheckAccountUpstreamManaged(ctx, s.accounts, id); err != nil {
+				if errors.Is(err, business.ErrUpstreamExcluded) {
+					delete(input.Bindings, id)
+					continue
+				}
+				return err
+			}
+		}
 		if len(input.Bindings) != len(accounts) {
 			return errors.New("检测分组成员在中断后已变化，请重新提交")
 		}

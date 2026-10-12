@@ -57,7 +57,7 @@ func (s *Store) HasFreshTraffic(ctx context.Context, accountID string, since, un
 }
 
 func (s *Store) EvidenceTargets(ctx context.Context, accountID, groupName *string) ([]EvidenceTarget, error) {
-	clauses := []string{}
+	clauses := []string{"a.id NOT IN (" + excludedAccountIDsSQL + ")"}
 	arguments := []any{time.Now().UTC().Add(time.Minute).Format(healthSampleTimeLayout)}
 	if accountID != nil {
 		clauses = append(clauses, "a.id=?")

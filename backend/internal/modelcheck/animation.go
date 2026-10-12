@@ -12,6 +12,8 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/MIEnchating/sub2api-console/backend/internal/business"
+
 	"github.com/MIEnchating/sub2api-console/backend/internal/targetguard"
 	"github.com/MIEnchating/sub2api-console/backend/internal/taskrunner"
 	"github.com/MIEnchating/sub2api-console/backend/internal/taskstore"
@@ -121,6 +123,17 @@ func (s *Service) prepareAnimation(ctx context.Context, request AnimationRequest
 	if err != nil {
 		return request, nil, err
 	}
+	managed := make(map[string]bool, len(accounts))
+	for _, account := range accounts {
+		managed[account.ID] = true
+	}
+	filteredTargets := make([]AnimationTarget, 0, len(accounts))
+	for _, target := range request.Targets {
+		if managed[target.AccountID] {
+			filteredTargets = append(filteredTargets, target)
+		}
+	}
+	request.Targets = filteredTargets
 	for _, account := range accounts {
 		if account.AccountType == "oauth" {
 			if account.Platform != "openai" {
@@ -254,6 +267,7 @@ func (s *Service) executeAnimation(parent context.Context, task taskstore.Task, 
 	}
 	total := len(accounts) * len(modes)
 	completed := previousResults[AnimationResult](task, "animations")
+	total += historicalAnimationUnits(accounts, completed)
 	done := map[string]bool{}
 	succeeded := 0
 	for _, result := range completed {
@@ -303,6 +317,11 @@ func (s *Service) executeAnimation(parent context.Context, task taskstore.Task, 
 				if err != nil && taskstore.Interrupted(ctx) {
 					return
 				}
+				if errors.Is(err, business.ErrUpstreamExcluded) {
+					result.Phase = "excluded"
+					results <- cloneAnimationResult(result)
+					continue
+				}
 				result.CompletedAt = time.Now().UTC().Format(time.RFC3339Nano)
 				if err != nil {
 					if request.Custom != nil {
@@ -327,7 +346,10 @@ func (s *Service) executeAnimation(parent context.Context, task taskstore.Task, 
 	}
 	for result := range results {
 		key := animationResultKey(result.AccountID, result.Mode)
-		if result.Phase == "completed" {
+		if result.Phase == "excluded" {
+			total--
+			delete(activeResults, key)
+		} else if result.Phase == "completed" {
 			activeResults[key] = cloneAnimationResult(result)
 			if err := s.persistAnimationEvidence(ctx, task.ID, []AnimationResult{result}); err != nil {
 				slog.Error("保存动画检测证据失败", "task_id", task.ID, "account_id", result.AccountID, "mode", result.Mode, "error", err)
@@ -344,7 +366,7 @@ func (s *Service) executeAnimation(parent context.Context, task taskstore.Task, 
 					succeeded++
 				}
 			}
-			task.Progress = len(completed) * 100 / total
+			task.Progress = len(completed) * 100 / max(total, 1)
 			task.Message = fmt.Sprintf("%s已完成 %d/%d %s", animationModeLabel(request.Mode), len(completed), total, unit)
 		} else {
 			activeResults[key] = result
@@ -363,12 +385,13 @@ func (s *Service) executeAnimation(parent context.Context, task taskstore.Task, 
 		taskstore.PersistProgress(s.tasks, task)
 	}
 	task.Status = "succeeded"
-	if succeeded == 0 {
+	if succeeded == 0 && total > 0 {
 		task.Status = "failed"
 	} else if succeeded < total {
 		task.Status = "partial"
 	}
 	task.Message = fmt.Sprintf("%s完成：成功 %d，失败 %d", animationModeLabel(request.Mode), succeeded, total-succeeded)
+	task.Progress = 100
 	setRunTiming(time.Now())
 	taskstore.MarkCancelled(ctx, &task, animationModeLabel(request.Mode)+"已取消")
 	taskstore.PersistFinal(s.tasks, task)

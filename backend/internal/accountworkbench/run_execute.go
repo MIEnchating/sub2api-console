@@ -13,13 +13,27 @@ import (
 )
 
 func (s *Service) executionAllowed(ctx context.Context, value *privateRun) error {
+	if value.ProxyBinding == nil && value.Template != nil && value.Template.Config.ProxyID != nil {
+		return errors.New("旧任务缺少平台代理绑定，请重新预览后执行")
+	}
 	if (value.Public.Action == "export" && value.Scope != "local-export") || (value.Public.Action != "export" && value.Scope != "managed") {
 		return errors.New("账号处理范围无效，请重新预览")
 	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if err := s.checkOwner(ctx, value.Owner); err != nil {
+	if value.Automatic && value.Public.Action == "maintenance" {
+		maintenance, err := s.readMaintenance(ctx, value.Target)
+		if err != nil {
+			return err
+		}
+		if !maintenance.Public.Running {
+			return errors.New("维护任务已停止")
+		}
+		if err := s.maintenanceAllowed(ctx, &maintenance); err != nil {
+			return err
+		}
+	} else if err := s.checkOwner(ctx, value.Owner); err != nil {
 		return err
 	}
 	if err := s.rememberedSourceAllowed(ctx, value); err != nil {
@@ -40,7 +54,7 @@ func (s *Service) executionAllowed(ctx context.Context, value *privateRun) error
 			return errors.New("模板已变化，请重新预览")
 		}
 	}
-	return nil
+	return s.verifyPlatformProxy(ctx, value.Target, value.ProxyBinding)
 }
 func (s *Service) execute(parent context.Context, value *privateRun, task taskstore.Task, active *activeRun) {
 	ctx, cancel := context.WithDeadline(parent, value.Public.ExpiresAt)
@@ -151,6 +165,9 @@ func runWorkIndices(value *privateRun) []int {
 
 func (s *Service) processItem(ctx context.Context, value *privateRun, index int, active *activeRun) error {
 	row := &value.Public.Items[index]
+	if err := s.requireAccountManaged(ctx, row.AccountID); err != nil {
+		return err
+	}
 	stored := &value.Items[index]
 	phase := value.Phases[row.ID]
 	switch phase {

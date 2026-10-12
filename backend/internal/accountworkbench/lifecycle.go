@@ -101,7 +101,7 @@ func (s *Service) cleanup(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		if live && value.Public.ExpiresAt.After(now) {
+		if (live || value.Automatic) && value.Public.ExpiresAt.After(now) {
 			return nil
 		}
 		s.activeMu.Lock()
@@ -128,6 +128,7 @@ func (s *Service) cleanup(ctx context.Context) error {
 		value.Exports = nil
 		value.Target = configstore.TargetSettings{}
 		value.Settings = PreviewInput{}
+		value.ProxyBinding = nil
 		value.AccountVersions = nil
 		value.ManualIDs = nil
 		value.SecretsCleared = true

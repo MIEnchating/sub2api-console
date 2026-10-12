@@ -36,6 +36,9 @@ func (s *Service) PreviewRememberedLogin(ctx context.Context, owner, id string, 
 	if revision < 1 || saved.Public.Revision != revision {
 		return Preview{}, configstore.ErrWorkbenchVersion
 	}
+	if err := s.requireAccountManaged(ctx, saved.Public.AccountID); err != nil {
+		return Preview{}, err
+	}
 	if saved.Input.LoginSource == "" {
 		return Preview{}, errors.New("该账号未保存邮箱登录资料，请从导入页补充登录资料")
 	}
@@ -70,8 +73,17 @@ func (s *Service) PreviewRememberedLogin(ctx context.Context, owner, id string, 
 	result := Preview{ID: newID(), ExpiresAt: time.Now().UTC().Add(previewLifetime), Action: "import", Promote: true, Check: s.checker != nil,
 		Template:    &Template{Name: "账号当前配置", SourceID: saved.Public.AccountID, Config: config, Summary: publicAccount(account)},
 		ParsedInput: ParsedInput{Items: []InputItem{input.Item}, Errors: []InputError{}}}
+	modelSettings, err := s.ImportModel(ctx)
+	if err != nil {
+		return Preview{}, err
+	}
 	document := privatePreview{Scope: "managed", Owner: owner, Target: target, TemplateRevision: templateRevision, Public: result, Items: []storedInput{input}, RememberedSource: source,
-		Settings: PreviewInput{Action: "import", Promote: true, Check: result.Check, Model: "gpt-5.6-sol"}}
+		Settings: PreviewInput{Action: "import", Promote: true, Check: result.Check, Model: modelSettings.Model}}
+	if err = s.bindPreviewProxy(ctx, &document, &result); err != nil {
+		return Preview{}, err
+	}
+	document.Items[0].ProxyURL = document.Settings.ProxyURL
+	document.Public = result
 	if _, err = targetguard.Pin(targetguard.Expect(ctx, target), s.private); err != nil {
 		return Preview{}, err
 	}
@@ -92,6 +104,9 @@ func (s *Service) rememberedSourceAllowed(ctx context.Context, value *privateRun
 	source := value.RememberedSource
 	if source == nil {
 		return nil
+	}
+	if err := s.requireAccountManaged(ctx, source.AccountID); err != nil {
+		return err
 	}
 	revision, err := s.private.WorkbenchDocumentRevision(ctx, rememberedAccountKey(value.Target, source.ID))
 	if err != nil {

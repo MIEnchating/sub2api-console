@@ -17,6 +17,10 @@ CREATE TABLE IF NOT EXISTS app_state ("key" TEXT PRIMARY KEY,value_json TEXT NOT
 CREATE TABLE IF NOT EXISTS upstream_identities (
  upstream_id TEXT PRIMARY KEY,created_at TEXT NOT NULL,updated_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS upstream_exclusions (
+ upstream_id TEXT PRIMARY KEY,updated_at TEXT NOT NULL,
+ FOREIGN KEY(upstream_id) REFERENCES upstream_identities(upstream_id) ON DELETE CASCADE
+);
 CREATE TABLE IF NOT EXISTS upstream_identity_hosts (
  host TEXT PRIMARY KEY,upstream_id TEXT NOT NULL,is_primary INTEGER NOT NULL DEFAULT 0,updated_at TEXT NOT NULL,
  FOREIGN KEY(upstream_id) REFERENCES upstream_identities(upstream_id) ON DELETE CASCADE
@@ -328,7 +332,7 @@ const businessSchemaVersion = 12
 
 func (s *Store) ensureSchema(ctx context.Context) error {
 	if s.db.Driver() != dbconn.SQLite {
-		return s.db.Migrate(ctx, "business", []dbconn.Migration{{Version: 1, Statements: map[dbconn.Driver][]string{dbconn.Postgres: businessPostgresSchema, dbconn.MySQL: businessMySQLSchema}}})
+		return s.db.Migrate(ctx, "business", businessServerMigrations())
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -631,6 +635,7 @@ func initialControlPolicy() map[string]any {
 		"degrade":          map[string]any{"enabled": true, "score_threshold": int64(75), "priority_step": int64(10), "load_factor_ratio": 0.5, "min_load_factor": int64(1)},
 		"recovery":         map[string]any{"enabled": true, "probe_interval_seconds": int64(180), "target_score": int64(75), "success_count": int64(2), "hold_seconds": int64(60)},
 		"scaling":          map[string]any{"enabled": false, "global_max_concurrency": int64(900), "min_per_account": int64(3), "max_per_account": int64(250), "scale_up_ratio": 0.8, "step_up": int64(5), "step_down": int64(5), "cooldown_seconds": int64(60)},
+		"binding_cleanup":  map[string]any{"enabled": false, "max_per_round": int64(1)},
 		"abnormal_cleanup": map[string]any{"enabled": false, "action": "pause", "duration_minutes": int64(1440), "max_per_round": int64(1), "keep_last_in_group": true},
 		"cleanup":          map[string]any{"enabled": false, "action": "pause", "occurrences": int64(3), "window": int64(5), "min_fused_minutes": int64(30), "max_per_round": int64(1), "keep_last_in_group": true, "only_auth_errors": true, "trigger_status_codes": []any{int64(401), int64(403)}},
 		"classify": map[string]any{"fatal_patterns": []any{

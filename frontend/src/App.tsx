@@ -1,3 +1,5 @@
+import { BindingCleanupCard } from "./features/policy/components/binding-cleanup-card";
+import { bindingCleanupSchema } from "./features/policy/lib/binding-cleanup-schema";
 import { DictionaryReadState } from "@/components/dictionary-read-state";
 import { LogCleanupAction } from "./features/config/components/log-cleanup-action";
 import { AbnormalCleanupCard } from "./features/policy/components/abnormal-cleanup-card";
@@ -29,6 +31,7 @@ import { useConfigurationResults } from "@/features/accounts/hooks/use-configura
 import { refreshAccountManualPriority } from "@/features/accounts/lib/manual-priority-refresh";
 import { GroupsPageActions } from "./features/groups/components/groups-page-actions";
 import { UpstreamsPageActions } from "./features/upstreams/components/upstreams-page-actions";
+import { UpstreamActionsMenu } from "./features/upstreams/components/upstream-actions-menu";
 import { UpstreamUsageSummary } from "./features/upstreams/components/upstream-usage-summary";
 import {
   PolicyCategoryNavigation,
@@ -69,10 +72,8 @@ import {
   CircleHelp,
   Eye,
   ExternalLink,
-  FolderOpen,
   Gauge,
   LoaderCircle,
-  MoreHorizontal,
   Pause,
   Pencil,
   RefreshCw,
@@ -196,12 +197,7 @@ import {
   operationDialogHeight,
   operationDialogWidth,
 } from "./components/ui/dialog";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "./components/ui/dropdown-menu";
+import { DropdownMenuItem } from "./components/ui/dropdown-menu";
 import {
   Table,
   TableBody,
@@ -776,6 +772,8 @@ function policyAdvancedDraft(value: Record<string, unknown>): Record<string, unk
   return draft;
 }
 export function policyPayload(value: PolicyDraft): PolicyUpdate | null {
+  if (!bindingCleanupSchema.safeParse(value.advanced_policy.binding_cleanup ?? {}).success)
+    return null;
   if (!abnormalCleanupSchema.safeParse(value.advanced_policy.abnormal_cleanup ?? {}).success)
     return null;
   const pauseWindow = policyAdvancedValue(value, "probe", "pause_window");
@@ -981,6 +979,16 @@ export function UpstreamsPage() {
     queryFn: ({ signal }) => api.upstreams(signal),
     refetchInterval: 30_000,
   });
+  const upstreamUsage = useQuery({
+    queryKey: ["upstreams", "usage"],
+    queryFn: ({ signal }) => api.upstreamUsage(signal),
+    enabled: Boolean(upstreams.data?.hosts.length),
+    refetchInterval: 30_000,
+  });
+  const usageByUpstream = useMemo(
+    () => new Map(upstreamUsage.data?.map((item) => [item.upstream_id, item])),
+    [upstreamUsage.data],
+  );
   const config = useQuery({
     queryKey: ["config"],
     queryFn: ({ signal }) => api.config(signal),
@@ -1219,8 +1227,8 @@ export function UpstreamsPage() {
     });
   }
   const localBindingGroups = useQuery({
-    queryKey: ["groups"],
-    queryFn: ({ signal }) => api.groups(signal),
+    queryKey: ["groups", "options"],
+    queryFn: ({ signal }) => api.groupOptions(signal),
     enabled: Boolean(selectedHost),
   });
   const saveGroupBindings = useMutation({
@@ -1499,7 +1507,10 @@ export function UpstreamsPage() {
             syncPending={syncPending}
             auditPending={groupAuditPending}
             auditDisabled={groupAuditPending || !upstreams.data?.hosts.length}
-            onRefresh={() => void upstreams.refetch()}
+            onRefresh={() => {
+              void upstreams.refetch();
+              if (upstreams.data?.hosts.length) void upstreamUsage.refetch();
+            }}
             onAdd={() =>
               navigate({
                 to: "/onboarding",
@@ -1691,6 +1702,7 @@ export function UpstreamsPage() {
                 const authStatus = upstreamAuthStatusMeta(host.auth_status);
                 const auditedGroups = groupAuditItemsByHost.get(host.host) ?? [];
                 const auditSummary = summarizeUpstreamGroupBindings(auditedGroups);
+                const usage = usageByUpstream.get(host.upstream_id);
                 return (
                   <TableRow
                     key={host.host}
@@ -1723,9 +1735,11 @@ export function UpstreamsPage() {
                         <UpstreamUsageSummary
                           name={host.name || host.host}
                           spending={host.spending}
-                          requestCount={host.request_count ?? 0}
-                          requestWindowDays={host.request_window_days ?? 30}
-                          accountRequestUsage={host.account_request_usage ?? []}
+                          requestCount={usage?.request_count}
+                          requestWindowDays={usage?.request_window_days ?? 30}
+                          accountRequestUsage={usage?.account_request_usage ?? []}
+                          usagePending={upstreamUsage.isPending || upstreamUsage.isFetching}
+                          onRetryUsage={() => void upstreamUsage.refetch()}
                         />
                       </div>
                     </TableCell>
@@ -1778,6 +1792,7 @@ export function UpstreamsPage() {
                         className="grid min-w-0 gap-0.5 overflow-hidden"
                       >
                         <StatusPill label={authStatus.label} tone={authStatus.tone} />
+                        {host.excluded && <StatusPill label="已排除管控" tone="neutral" />}
                         <span className="text-muted-foreground block truncate text-xs">
                           最近方式：
                           {authMethodSummary(
@@ -1831,77 +1846,61 @@ export function UpstreamsPage() {
                         >
                           <UserPlus />
                         </TableActionButton>
-                        <TableActionButton
-                          label="查看分组"
-                          onClick={() => {
+                        <TableActionButton label="编辑上游" onClick={() => setEditHost(host.host)}>
+                          <Pencil />
+                        </TableActionButton>
+                        <UpstreamActionsMenu
+                          host={host.host}
+                          excluded={host.excluded === true}
+                          onViewGroups={() => {
                             setGroupDialogView("catalog");
                             setSelectedHost(host.host);
                           }}
                         >
-                          <FolderOpen />
-                        </TableActionButton>
-                        <TableActionButton label="编辑上游" onClick={() => setEditHost(host.host)}>
-                          <Pencil />
-                        </TableActionButton>
-                        <DropdownMenu>
-                          <DropdownMenuTrigger
-                            render={
-                              <Button
-                                variant="outline"
-                                size="icon"
-                                className="data-popup-open:bg-muted"
-                                aria-label="更多操作"
-                              />
-                            }
+                          <DropdownMenuItem
+                            disabled={recovering || actionPending || batchRecoveryPending}
+                            onClick={() => {
+                              recover.reset();
+                              setActionTaskId(null);
+                              setRecoveryEntry("");
+                              setRecoveryAcceptLoginAgreement(false);
+                              setActionDialog({
+                                host: host.host,
+                                kind: "auth",
+                              });
+                            }}
                           >
-                            <MoreHorizontal className="size-4" />
-                          </DropdownMenuTrigger>
-                          <DropdownMenuContent align="end" className="w-48">
-                            <DropdownMenuItem
-                              disabled={recovering || actionPending || batchRecoveryPending}
-                              onClick={() => {
-                                recover.reset();
-                                setActionTaskId(null);
-                                setRecoveryEntry("");
-                                setRecoveryAcceptLoginAgreement(false);
-                                setActionDialog({
-                                  host: host.host,
-                                  kind: "auth",
-                                });
-                              }}
-                            >
-                              <ShieldCheck />
-                              {recovering ? "恢复鉴权中…" : "恢复鉴权"}
-                            </DropdownMenuItem>
-                            <DropdownMenuItem
-                              disabled={readingBalance || actionPending}
-                              onClick={() => {
-                                refreshBalance.reset();
-                                setActionTaskId(null);
-                                setActionDialog({
-                                  host: host.host,
-                                  kind: "balance",
-                                });
-                                refreshBalance.mutate(host.host);
-                              }}
-                            >
-                              <WalletCards />
-                              {readingBalance ? "同步中…" : "同步余额"}
-                            </DropdownMenuItem>
-                            <DropdownMenuItem
-                              className="text-destructive focus:text-destructive"
-                              disabled={actionPending || deletePending}
-                              onClick={() => {
-                                setDeleteTaskId(null);
-                                deleteUpstream.reset();
-                                setDeleteHost(host.host);
-                              }}
-                            >
-                              <Trash2 />
-                              删除
-                            </DropdownMenuItem>
-                          </DropdownMenuContent>
-                        </DropdownMenu>
+                            <ShieldCheck />
+                            {recovering ? "恢复鉴权中…" : "恢复鉴权"}
+                          </DropdownMenuItem>
+                          <DropdownMenuItem
+                            disabled={readingBalance || actionPending}
+                            onClick={() => {
+                              refreshBalance.reset();
+                              setActionTaskId(null);
+                              setActionDialog({
+                                host: host.host,
+                                kind: "balance",
+                              });
+                              refreshBalance.mutate(host.host);
+                            }}
+                          >
+                            <WalletCards />
+                            {readingBalance ? "同步中…" : "同步余额"}
+                          </DropdownMenuItem>
+                          <DropdownMenuItem
+                            className="text-destructive focus:text-destructive"
+                            disabled={actionPending || deletePending}
+                            onClick={() => {
+                              setDeleteTaskId(null);
+                              deleteUpstream.reset();
+                              setDeleteHost(host.host);
+                            }}
+                          >
+                            <Trash2 />
+                            删除
+                          </DropdownMenuItem>
+                        </UpstreamActionsMenu>
                       </div>
                     </TableCell>
                   </TableRow>
@@ -5817,8 +5816,8 @@ export function OnboardingPage() {
     setCandidateSearch("");
   }, [form, onboardingSearch.host, onboardingSearch.upstream_type]);
   const groups = useQuery({
-    queryKey: ["groups"],
-    queryFn: ({ signal }) => api.groups(signal),
+    queryKey: ["groups", "options"],
+    queryFn: ({ signal }) => api.groupOptions(signal),
     refetchOnMount: "always",
   });
   const accountDefaults = useQuery({
@@ -5832,8 +5831,8 @@ export function OnboardingPage() {
     }
   }, [accountDefaults.data, form]);
   const upstreams = useQuery({
-    queryKey: ["upstreams"],
-    queryFn: ({ signal }) => api.upstreams(signal),
+    queryKey: ["upstreams", "options"],
+    queryFn: ({ signal }) => api.upstreamOptions(signal),
   });
   const entryConfiguration = useQuery({
     queryKey: ["upstream-configuration", entryHost],
@@ -6084,9 +6083,7 @@ export function OnboardingPage() {
     }
     const normalizedHost = target.host;
     const baseUrl = target.baseUrl;
-    const existing = upstreams.data?.hosts.find(
-      (item) => item.host.toLowerCase() === normalizedHost,
-    );
+    const existing = upstreams.data?.find((item) => item.host.toLowerCase() === normalizedHost);
     if (existing) {
       const authReady = upstreamAuthStatusIsReady(existing.auth_status);
       if (!authReady) {
@@ -6580,7 +6577,7 @@ export function OnboardingPage() {
   const onboardingMaintenancePending =
     onboardingMaintenance.isPending ||
     taskIsPending(onboardingMaintenanceTaskId, onboardingMaintenanceTask);
-  const adjacentUpstreams = adjacentOnboardingUpstreams(upstreams.data?.hosts ?? [], entryHost);
+  const adjacentUpstreams = adjacentOnboardingUpstreams(upstreams.data ?? [], entryHost);
   function switchOnboardingUpstream(target: NonNullable<typeof adjacentUpstreams.previous>) {
     setTaskId(null);
     setBalanceTaskId(null);
@@ -8035,6 +8032,9 @@ export function OnboardingTaskProgress(props: { task: Task }) {
   if (failed) title = batch && succeeded > 0 ? "部分账号绑定变更失败" : "账号绑定变更失败";
   if (cancelled) title = "账号绑定变更已取消";
   const bindingUpdate = props.task.result.operation === "account.groups";
+  const message = displayTaskMessage(props.task.message);
+  const failureReason = String(props.task.result.error ?? props.task.message ?? "账号绑定变更失败");
+  const summaryInFailure = !batch && failed && message === displayTaskMessage(failureReason);
   let iconContainerClassName = "bg-success/10 text-success";
   let statusIcon = <Check size={16} />;
   let statusLabel = "成功";
@@ -8072,9 +8072,9 @@ export function OnboardingTaskProgress(props: { task: Task }) {
             <strong className="text-sm">{title}</strong>
             <StatusPill label={statusLabel} tone={statusTone} />
           </div>
-          <p className="text-muted-foreground mt-1 text-xs leading-5">
-            {displayTaskMessage(props.task.message)}
-          </p>
+          {!summaryInFailure && (
+            <p className="text-muted-foreground mt-1 text-xs leading-5">{message}</p>
+          )}
         </div>
         {pending ? (
           <span className="text-muted-foreground shrink-0 text-xs tabular-nums">
@@ -8185,21 +8185,12 @@ export function OnboardingTaskProgress(props: { task: Task }) {
 
       {!pending && !batch && failed ? (
         <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-3">
-          <TaskFailureDetail
-            reason={String(props.task.result.error ?? props.task.message ?? "账号绑定变更失败")}
-          />
-          {String(props.task.result.error ?? props.task.message).includes(
-            "续办参数与首次冻结的开户意图不一致",
-          ) ? (
+          <TaskFailureDetail reason={failureReason} />
+          {failureReason.includes("续办参数与首次冻结的开户意图不一致") ? (
             <p className="text-muted-foreground mt-2 text-sm">
               取消或失败后，系统会保留首次开户记录。请按原参数重试；若仍提示不一致，需要核对首次参数和远端创建状态。
             </p>
           ) : null}
-        </div>
-      ) : null}
-      {!pending && !batch && cancelled ? (
-        <div className="text-muted-foreground rounded-lg border p-3 text-sm">
-          {displayTaskMessage(props.task.message)}
         </div>
       ) : null}
     </div>
@@ -10177,11 +10168,11 @@ function inspectionResultCount(value: Record<string, unknown>, key: string): num
 
 function legacyInspectionAccountCounts(
   result: Record<string, unknown>,
-  upstreams?: UpstreamSummary,
+  upstreams?: import("@/api").UpstreamOption[],
 ): { total: number; succeeded: number; failed: number } | null {
   if (!upstreams || !Array.isArray(result.hosts)) return null;
   const currentCounts = new Map(
-    upstreams.hosts.map((host) => [host.host.trim().toLowerCase(), host.account_count]),
+    upstreams.map((host) => [host.host.trim().toLowerCase(), host.account_count]),
   );
   let total = 0;
   let succeeded = 0;
@@ -10202,7 +10193,7 @@ function legacyInspectionAccountCounts(
 
 function inspectionUpstreamSyncSummary(
   task?: Task,
-  upstreams?: UpstreamSummary,
+  upstreams?: import("@/api").UpstreamOption[],
 ): InspectionUpstreamSyncSummary | null {
   const raw = task?.result.upstream_sync;
   if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return null;
@@ -10800,7 +10791,7 @@ export function AutoInspectionHeartbeatDetails(props: {
   taskLoading?: boolean;
   taskFetching?: boolean;
   onTaskRetry?: () => void;
-  upstreams?: UpstreamSummary;
+  upstreams?: import("@/api").UpstreamOption[];
   accounts?: Pick<AccountStatus, "id" | "name">[];
   upstreamSyncTask?: Task;
   accountRateSyncTask?: Task;
@@ -11234,14 +11225,14 @@ function AutoInspectionCard() {
     refetchInterval: taskPollInterval,
   });
   const heartbeatUpstreams = useQuery({
-    queryKey: ["upstreams"],
-    queryFn: ({ signal }) => api.upstreams(signal),
+    queryKey: ["upstreams", "options"],
+    queryFn: ({ signal }) => api.upstreamOptions(signal),
     enabled: selectedHeartbeat !== null,
     staleTime: 30_000,
   });
   const heartbeatAccounts = useQuery({
-    queryKey: ["accounts"],
-    queryFn: ({ signal }) => api.accounts(signal),
+    queryKey: ["accounts", "options"],
+    queryFn: ({ signal }) => api.accountOptions(signal),
     enabled:
       selectedHeartbeat !== null && inspectionWritebackFailures(heartbeatTask.data).length > 0,
     retry: false,
@@ -11667,8 +11658,8 @@ export function PolicyPage() {
         allocationOverrides((allocationScope as Record<string, unknown>).account_overrides),
       ).length > 0);
   const accounts = useQuery({
-    queryKey: ["accounts"],
-    queryFn: ({ signal }) => api.accounts(signal),
+    queryKey: ["accounts", "options"],
+    queryFn: ({ signal }) => api.accountOptions(signal),
     enabled: category === "scope" || (category === "routing" && selectingAllocationAccounts),
   });
   const selectingAllocationUpstreams =
@@ -11680,8 +11671,8 @@ export function PolicyPage() {
         allocationOverrides((allocationScope as Record<string, unknown>).upstream_overrides),
       ).length > 0);
   const allocationUpstreams = useQuery({
-    queryKey: ["upstreams"],
-    queryFn: ({ signal }) => api.upstreams(signal),
+    queryKey: ["upstreams", "options"],
+    queryFn: ({ signal }) => api.upstreamOptions(signal),
     enabled: category === "routing" && selectingAllocationUpstreams,
   });
   const [dangerousSaveOpen, setDangerousSaveOpen] = useState(false);
@@ -11780,7 +11771,14 @@ export function PolicyPage() {
         ? (cleanup as Record<string, unknown>)
         : null;
     const destructiveCleanup = cleanupConfig?.enabled === true && cleanupConfig.action === "delete";
-    if (destructiveCleanup || abnormalDelete) {
+    const bindingCleanup = bindingCleanupSchema.safeParse(
+      update.advanced_policy?.binding_cleanup ?? {},
+    );
+    if (
+      destructiveCleanup ||
+      abnormalDelete ||
+      (bindingCleanup.success && bindingCleanup.data.enabled)
+    ) {
       setPendingPolicySave(attempt);
       setDangerousSaveOpen(true);
       return;
@@ -12013,7 +12011,7 @@ export function PolicyPage() {
               {current ? (
                 <PolicyOperationsEditor
                   section="routing"
-                  upstreams={allocationUpstreams.data?.hosts}
+                  upstreams={allocationUpstreams.data}
                   upstreamsPending={allocationUpstreams.isLoading}
                   upstreamsFailed={allocationUpstreams.isError && !allocationUpstreams.data}
                   onRetryUpstreams={() => void allocationUpstreams.refetch()}
@@ -12080,7 +12078,9 @@ export function PolicyPage() {
             <DialogTitle>确认启用自动删除</DialogTitle>
             <DialogDescription>
               已启用的自动删除规则达到条件后，将先摘除流量，再从 Sub2API
-              删除受管账号。人工保护与分组保底仍生效；删除后无法由 Console 重建。
+              删除受管账号。人工保护仍生效；失效绑定删除仅处理稳定绑定已确认缺失的账号，
+              每轮按配置数量执行，允许删除分组最后一个失效账号；其他规则保留各自的分组保底。
+              不删除上游 Key；删除后无法由 Console 重建。
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
@@ -12134,11 +12134,14 @@ type PolicyEditorProps = {
 };
 
 type PolicyOperationsEditorProps = PolicyEditorProps & {
-  upstreams?: UpstreamSummary["hosts"];
+  upstreams?: Pick<
+    UpstreamSummary["hosts"][number],
+    "upstream_id" | "host" | "name" | "upstream_type"
+  >[];
   upstreamsPending?: boolean;
   upstreamsFailed?: boolean;
   onRetryUpstreams?: () => void;
-  accounts?: AccountStatus[];
+  accounts?: import("@/api").AccountOption[];
   accountsPending?: boolean;
   accountsFailed?: boolean;
   onRetryAccounts?: () => void;
@@ -12712,6 +12715,12 @@ export function PolicyOperationsEditor(props: PolicyOperationsEditorProps) {
             onChange={(value) => set("weights", "speed_exp", value)}
           />
         </PolicyConfigCard>
+      ) : null}
+      {props.section === "health" ? (
+        <BindingCleanupCard
+          value={(key) => policyAdvancedValue(props.value, "binding_cleanup", key)}
+          onChange={(key, value) => set("binding_cleanup", key, value)}
+        />
       ) : null}
       {props.section === "health" ? (
         <AbnormalCleanupCard
@@ -13336,7 +13345,7 @@ function policyScopeEntityOptions(
 
 type PolicyScopeEditorProps = PolicyEditorProps & {
   groups: import("./api").PolicySnapshot["group_strategies"];
-  accounts: AccountStatus[];
+  accounts: import("@/api").AccountOption[];
   accountsPending?: boolean;
   onRestoreControl: () => void;
   restorePending: boolean;
@@ -13665,13 +13674,13 @@ function RunRow(props: {
 }) {
   const failed = props.status === "failed" || props.status === "error" || props.status === "fused";
   let iconClassName = "bg-muted text-muted-foreground";
-  let badgeVariant: "destructive" | "secondary" | "outline" = "outline";
+  let badgeVariant: "destructive" | "success" | "neutral" = "neutral";
   if (failed) {
     iconClassName = "bg-destructive/10 text-destructive";
     badgeVariant = "destructive";
   } else if (props.status === "succeeded" || props.status === "healthy") {
     iconClassName = "bg-success/10 text-success";
-    if (props.status === "succeeded") badgeVariant = "secondary";
+    badgeVariant = "success";
   }
   return (
     <div className="console-list-row box-border flex min-h-16 items-center gap-3 border-b border-border/70 px-4 py-3 last:border-b-0">

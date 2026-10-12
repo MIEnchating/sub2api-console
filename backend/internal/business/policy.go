@@ -642,6 +642,9 @@ var advancedRules = map[string]map[string]advancedRule{
 		"scale_up_ratio": {kind: "ratio"}, "step_up": {kind: "int", minimum: 1, maximum: 1_000_000},
 		"step_down": {kind: "int", minimum: 1, maximum: 1_000_000}, "cooldown_seconds": {kind: "int", minimum: 0, maximum: 86400},
 	},
+	"binding_cleanup": {
+		"enabled": {kind: "bool"}, "max_per_round": {kind: "int", minimum: 1, maximum: 10000},
+	},
 	"abnormal_cleanup": {
 		"enabled": {kind: "bool"}, "action": {kind: "enum", allowed: valueStringSet("pause", "disable", "delete")},
 		"duration_minutes": {kind: "int", minimum: 1, maximum: 525600},
@@ -955,6 +958,7 @@ var advancedPolicyCoreFields = map[string]map[string]struct{}{
 	"recovery":             {},
 	"scaling":              {},
 	"cleanup":              {},
+	"binding_cleanup":      {},
 	"abnormal_cleanup":     {},
 	"upstream_multiplier":  {},
 	"upstream_concurrency": {},

@@ -18,6 +18,8 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/google/uuid"
+
 	"github.com/MIEnchating/sub2api-console/backend/internal/adminclient"
 	"github.com/MIEnchating/sub2api-console/backend/internal/business"
 	"github.com/MIEnchating/sub2api-console/backend/internal/configstore"
@@ -510,7 +512,7 @@ func (s *Service) Onboard(ctx context.Context, request Request) (map[string]any,
 			}
 		}
 	}
-	keyMarker, markerRotated := pendingKeyMarker(pending, onboardingKeyMarker(operationID))
+	keyMarker, markerRotated := pendingKeyMarker(pending, upstreamOnboardingKeyMarker(operationID, validated.candidate.GroupName, validated.auth.UpstreamType))
 	if markerRotated {
 		pending.UpstreamKeyName = &keyMarker
 		pending.Reason = "旧版 Key marker 已在明确未写入远端时安全更新"
@@ -910,6 +912,9 @@ func createKey(ctx context.Context, client KeyClient, record configstore.AuthRec
 }
 
 func (s *Service) validate(ctx context.Context, request Request) (validatedRequest, error) {
+	if err := business.CheckUpstreamManaged(ctx, s.repository, request.Host); err != nil {
+		return validatedRequest{}, err
+	}
 	for _, accountID := range request.AccountIDs {
 		protection, err := s.repository.AccountMutationProtection(ctx, accountID)
 		if err != nil {
@@ -920,6 +925,9 @@ func (s *Service) validate(ctx context.Context, request Request) (validatedReque
 		}
 		if protection.GroupsLocked {
 			return validatedRequest{}, business.ErrAccountGroupsLocked
+		}
+		if protection.UpstreamExcluded {
+			return validatedRequest{}, business.ErrUpstreamExcluded
 		}
 		if protection.ManualPriority {
 			return validatedRequest{}, errors.New("账号处于手动控制，请先取消手动控制再切换分组")
@@ -1437,9 +1445,9 @@ func accountCreationMarker(operationID string) string {
 
 const legacyOnboardingKeyMarkerPrefix = "account-onboarding-"
 
-func onboardingKeyMarker(operationID string) string {
+func onboardingKeyMarker(operationID, groupName string) string {
 	suffix := strings.TrimPrefix(strings.TrimSpace(operationID), legacyOnboardingKeyMarkerPrefix)
-	return "console-" + suffix
+	return strings.TrimSpace(groupName) + "-" + suffix
 }
 
 func pendingKeyMarker(pending *business.PendingOnboarding, next string) (string, bool) {
@@ -1454,7 +1462,11 @@ func pendingKeyMarker(pending *business.PendingOnboarding, next string) (string,
 		return next, false
 	}
 	legacy := strings.TrimSpace(pending.OperationID)
-	canRotate := current == legacy && strings.HasPrefix(legacy, legacyOnboardingKeyMarkerPrefix) &&
+	legacyConsoleName := "console-" + strings.TrimPrefix(legacy, legacyOnboardingKeyMarkerPrefix)
+	nameLimit := newAPITokenNameLimit(pending.UpstreamType)
+	overlongGeneratedName := nameLimit > 0 && len(current) > nameLimit &&
+		current == onboardingKeyMarker(legacy, pending.UpstreamGroupName)
+	canRotate := (current == legacy || current == legacyConsoleName || overlongGeneratedName) && strings.HasPrefix(legacy, legacyOnboardingKeyMarkerPrefix) &&
 		strings.TrimSpace(pending.UpstreamKeyID) == "" && strings.TrimSpace(pending.UpstreamAccountID) == "" &&
 		!pending.KeyCommitUnknown && !pending.AccountCommitUnknown
 	if canRotate && current != next {
@@ -1505,11 +1517,11 @@ func stableID(value string) bool {
 }
 
 func operationID() (string, error) {
-	id, err := randomID(8)
+	id, err := uuid.NewRandom()
 	if err != nil {
 		return "", err
 	}
-	return "account-onboarding-" + id, nil
+	return legacyOnboardingKeyMarkerPrefix + id.String(), nil
 }
 
 func randomID(bytesCount int) (string, error) {

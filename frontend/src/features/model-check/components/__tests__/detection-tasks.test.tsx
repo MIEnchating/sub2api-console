@@ -38,7 +38,7 @@ function setup(values: DetectionTask[] = [plan], failSave = false) {
   seedDictionaries(client, { group: [{ value: "7", name: "测试分组" }] });
   clients.push(client);
   client.setQueryData(["model-detection-tasks"], values);
-  client.setQueryData(["groups"], [{ id: "7", name: "测试分组" }]);
+  client.setQueryData(["groups", "options"], [{ id: "7", name: "测试分组" }]);
   const requests: { url: string; method?: string; body: unknown }[] = [];
   vi.stubGlobal(
     "fetch",

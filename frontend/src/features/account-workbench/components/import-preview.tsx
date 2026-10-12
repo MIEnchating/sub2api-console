@@ -29,7 +29,6 @@ export function ImportPreview(props: {
   onClose: () => void;
   onConfirm: () => void;
 }): ReactElement {
-  const isImport = props.preview.action === "import";
   return (
     <Dialog
       open
@@ -39,21 +38,19 @@ export function ImportPreview(props: {
     >
       <DialogContent width="wide">
         <DialogHeader>
-          <DialogTitle>确认本批{isImport ? "导入" : "输出"}</DialogTitle>
+          <DialogTitle>确认本批导入</DialogTitle>
         </DialogHeader>
         <DialogBody className="grid gap-4">
           <p className="text-sm">
             共 {props.preview.items.length} 项，已合并 {props.preview.duplicate_count} 项重复资料。
-            {isImport
-              ? "先套用模板并校验账号，有错误则停止；校验通过后以暂停调度状态导入。"
-              : "本批将生成服务器私有 JSON。"}
           </p>
-          {isImport && (
-            <p className="text-sm text-muted-foreground">
-              模板：{props.preview.template?.name || "默认配置"} ·{" "}
-              {props.preview.check
-                ? "导入后检测，通过才开启调度；未通过保留分组并提供手动启用入口"
-                : "不执行智商检测，导入后直接开启调度"}
+          <p className="text-sm text-muted-foreground">
+            模板：{props.preview.template?.name || "默认配置"} ·{" "}
+            {props.preview.check ? "糖果题通过后开启调度" : "不执行糖果题检测，导入后直接开启调度"}
+          </p>
+          {props.preview.proxy && (
+            <p className="text-sm wrap-anywhere">
+              登录、检测与账号调用代理：{props.preview.proxy.name}（#{props.preview.proxy.id}）
             </p>
           )}
           {props.preview.errors.length > 0 && (

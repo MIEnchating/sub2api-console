@@ -19,7 +19,7 @@ import {
   api,
   type AccountModelAutomationSchedule,
   type AccountModelAutomationScheduleInput,
-  type GroupStatus,
+  type GroupMembershipOption,
   type NewAPIChannel,
   type Task,
 } from "@/api";
@@ -68,8 +68,8 @@ export function AccountModelAutomationDialog(props: {
 }): ReactElement {
   const client = useQueryClient();
   const groups = useQuery({
-    queryKey: ["groups"],
-    queryFn: ({ signal }) => api.groups(signal),
+    queryKey: ["groups", "memberships"],
+    queryFn: ({ signal }) => api.groupMembershipOptions(signal),
     enabled: props.open,
   });
   const workspace = useQuery({
@@ -387,7 +387,7 @@ export function AccountModelAutomationDialog(props: {
             <fieldset className="grid min-w-0 content-start gap-2" disabled={busy}>
               <legend className="text-sm font-medium">账号分组</legend>
               <div className="grid h-40 content-start gap-1 overflow-auto overscroll-contain rounded-md border bg-muted/20 p-1">
-                {boundGroups.map((group: GroupStatus) => (
+                {boundGroups.map((group: GroupMembershipOption) => (
                   <label
                     key={group.id ?? group.name}
                     className="flex min-h-9 items-center gap-2 rounded px-2 text-sm hover:bg-background has-[[data-checked]]:bg-primary/10"

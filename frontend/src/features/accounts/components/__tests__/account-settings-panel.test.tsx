@@ -360,7 +360,7 @@ it("账号留空显示绑定分组继承模型，保存不会固化继承值", a
   });
   client.setQueryData(["policy"], { available: true, probe_model: "global-model" });
   client.setQueryData(
-    ["groups"],
+    ["groups", "configuration"],
     [{ id: "7", name: "codex", override: { probe_model: "group-model" } }],
   );
   const save = vi

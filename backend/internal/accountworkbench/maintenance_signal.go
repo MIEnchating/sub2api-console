@@ -2,6 +2,7 @@ package accountworkbench
 
 import (
 	"encoding/json"
+	"github.com/MIEnchating/sub2api-console/backend/internal/business"
 	"regexp"
 	"strconv"
 	"strings"
@@ -97,6 +98,14 @@ func collectMaintenanceSignal(value any, depth int, parts *[]string, statuses ma
 }
 
 func maintenanceCondition(account map[string]any, now time.Time, interval int) MaintenanceCondition {
+	switch business.AccountUpstreamBlock(account, nil, now) {
+	case business.AccountBlockRateLimited:
+		return MaintenanceCondition{"transient", "rate_limited"}
+	case business.AccountBlockOverloaded, business.AccountBlockTempUnschedulable:
+		return MaintenanceCondition{"transient", "upstream_unavailable"}
+	case business.AccountBlockExpired:
+		return MaintenanceCondition{"manual", "account_expired"}
+	}
 	condition := ClassifyMaintenanceSignal(account)
 	if condition.Kind != "healthy" {
 		return condition

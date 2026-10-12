@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { api, type KumaTemplate } from "@/api";
@@ -17,12 +18,14 @@ import { notifyOperationError } from "@/lib/operation-feedback";
 import { kumaMonitorsKey, kumaTemplatesKey } from "../constants";
 import { useTaskCompletion } from "../hooks/use-task-completion";
 import { OperationDialogFooter } from "./operation-dialog-footer";
+import { TemplateDistributionSelection } from "./template-distribution-selection";
 import { TemplateDistributionResults } from "./template-distribution-results";
 import { isKumaTaskCancellation } from "../lib/task-cancellation";
 
 export function TemplateDistributionDialog(props: { item: KumaTemplate; onClose: () => void }) {
   const client = useQueryClient();
   const completion = useTaskCompletion();
+  const [selection, setSelection] = useState<number[] | null>(null);
   const preview = useQuery({
     queryKey: ["uptime-kuma", "template-distribution", props.item.id, props.item.revision],
     queryFn: ({ signal }) =>
@@ -32,14 +35,20 @@ export function TemplateDistributionDialog(props: { item: KumaTemplate; onClose:
     staleTime: 0,
     refetchOnWindowFocus: false,
   });
+  const eligibleItems = preview.data?.items.filter((item) => !item.reason) ?? [];
+  const selectedIDs = eligibleItems
+    .filter((item) => selection === null || selection.includes(item.monitor_id))
+    .map((item) => item.monitor_id);
   const mutation = useMutation({
     mutationFn: async () => {
       if (!preview.data) throw new Error("请先读取影响范围");
+      if (!selectedIDs.length) throw new Error("请至少选择一个可下发的监控项");
       completion.prepare();
       return completion.wait(
         await api.distributeKumaTemplate(props.item.id, {
           revision: preview.data.revision,
           scope: preview.data.scope,
+          monitor_ids: selectedIDs,
         }),
       );
     },
@@ -55,7 +64,6 @@ export function TemplateDistributionDialog(props: { item: KumaTemplate; onClose:
       ]);
     },
   });
-  const eligible = preview.data?.items.filter((item) => !item.reason).length ?? 0;
   const submitted = mutation.isSuccess || mutation.isError;
   return (
     <Dialog
@@ -73,7 +81,7 @@ export function TemplateDistributionDialog(props: { item: KumaTemplate; onClose:
           <DialogTitle>参数下发</DialogTitle>
           <DialogDescription>
             将「{props.item.name}」第 {props.item.revision}{" "}
-            版参数下发到关联监控项。请核对以下影响范围后确认。
+            版参数下发到选中的关联监控项。默认全选可下发项，请核对后确认。
           </DialogDescription>
         </DialogHeader>
         <DialogBody className="space-y-4">
@@ -86,27 +94,12 @@ export function TemplateDistributionDialog(props: { item: KumaTemplate; onClose:
             <ContentRetry pending={preview.isFetching} onRetry={() => void preview.refetch()} />
           )}
           {preview.data && (
-            <>
-              <p className="text-sm">
-                关联 {preview.data.items.length} 项，可下发 {eligible} 项。
-              </p>
-              {preview.data.items.length === 0 && (
-                <p className="text-sm text-muted-foreground">暂无使用此模板的监控项。</p>
-              )}
-              <ul aria-label="参数下发影响范围" className="space-y-2">
-                {preview.data.items.map((item) => (
-                  <li key={item.monitor_id} className="rounded-md border p-3 text-sm break-words">
-                    <span className="font-medium">
-                      {item.name}（#{item.monitor_id}）
-                    </span>
-                    <p className="text-muted-foreground">
-                      {item.reason ||
-                        `模板版本 ${item.template_revision} → ${preview.data.revision}`}
-                    </p>
-                  </li>
-                ))}
-              </ul>
-            </>
+            <TemplateDistributionSelection
+              preview={preview.data}
+              selectedIDs={selectedIDs}
+              disabled={mutation.isPending || submitted || preview.isFetching || preview.isError}
+              onChange={setSelection}
+            />
           )}
           {submitted && <TemplateDistributionResults task={completion.result} />}
         </DialogBody>
@@ -121,7 +114,10 @@ export function TemplateDistributionDialog(props: { item: KumaTemplate; onClose:
           {!submitted && (
             <Button
               disabled={
-                mutation.isPending || preview.isFetching || preview.isError || eligible === 0
+                mutation.isPending ||
+                preview.isFetching ||
+                preview.isError ||
+                selectedIDs.length === 0
               }
               onClick={() => mutation.mutate()}
             >

@@ -13,6 +13,7 @@ import (
 )
 
 type RoutingAccount struct {
+	UpstreamExcluded          bool
 	ID                        string
 	Name                      string
 	GroupName                 string
@@ -44,6 +45,7 @@ type RoutingAccount struct {
 	Paused                    bool
 	PausedReason              *string
 	EffectiveState            string
+	MissingBindingFingerprint string
 	CatalogBindingState       string
 	CatalogBindingReason      *string
 	Metadata                  map[string]any
@@ -127,6 +129,7 @@ type AccountRoutingTarget struct {
 	AbandonControl              bool     `json:"abandon_control,omitempty"`
 	CleanupAction               *string  `json:"cleanup_action,omitempty"`
 	CleanupReason               string   `json:"cleanup_reason,omitempty"`
+	MissingBindingFingerprint   string   `json:"missing_binding_fingerprint,omitempty"`
 	ConfigurationError          *string  `json:"configuration_error,omitempty"`
 	UpstreamAllocation          bool     `json:"upstream_allocation,omitempty"`
 	UpstreamReductionID         string   `json:"upstream_reduction_id,omitempty"`
@@ -211,11 +214,35 @@ func (s *Store) RoutingAccounts(ctx context.Context, accountID, groupName *strin
 	if err != nil {
 		return nil, err
 	}
+	missingBindings, err := s.ConfirmedMissingBindings(ctx, accountID)
+	if err != nil {
+		return nil, err
+	}
 	capacity, err := s.routingCapacityInventoryForAccount(ctx, accountID)
 	if err != nil {
 		return nil, err
 	}
+	excluded, err := s.db.QueryContext(ctx, excludedAccountIDsSQL)
+	if err != nil {
+		return nil, err
+	}
+	excludedIDs := map[string]bool{}
+	for excluded.Next() {
+		var id string
+		if err := excluded.Scan(&id); err != nil {
+			excluded.Close()
+			return nil, err
+		}
+		excludedIDs[id] = true
+	}
+	if err := excluded.Err(); err != nil {
+		excluded.Close()
+		return nil, err
+	}
+	excluded.Close()
 	for index := range result {
+		result[index].MissingBindingFingerprint = missingBindings[result[index].ID]
+		result[index].UpstreamExcluded = excludedIDs[result[index].ID]
 		if account, found := capacity[result[index].ID]; found {
 			result[index].UpstreamID = account.UpstreamID
 			if account.UpstreamType != nil {
