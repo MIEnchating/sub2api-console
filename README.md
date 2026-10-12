@@ -96,6 +96,8 @@ health_samples -> account_health_evaluations -> routing_decisions -> routing.wri
 
 当前支持 API Key 账号的 OpenAI Responses、Anthropic Messages、Gemini GenerateContent，以及智谱/Kimi/DeepSeek/Grok 的 Chat Completions；明确配置 `api_protocol`、`api_base_urls` 时按配置选择。OAuth、配置代理、无效模型映射、缺少凭据或管理详情读取失败会显示跳过原因，不生成健康失败证据，也不退回测试接口。直连请求禁止重定向和隐式切换 Host 或协议，保留已配置的有限重试；收到实际正文时只记录首字时间，继续读取至协议终止事件后才判为通过，不主动截断生成。Responses 等待 `response.completed` 或明确因 `max_output_tokens` 结束的 `response.incomplete`，Anthropic 等待 `message_stop`，Gemini 等待正常或 `MAX_TOKENS` 的 `finishReason`；Chat Completions 读取至 `[DONE]`，或已有正常或 `length` 的 `finish_reason` 后的正常 EOF，期间继续检查用量块和错误。探活只验证可用性：已有有效正文且协议正常终止时，`max_tokens`、`length`、`MAX_TOKENS`、`max_output_tokens` 等明确的输出额度耗尽可判通过，不追加生成请求、不提高输出额度。元数据、思考或工具参数不算回复；没有正文的额度耗尽、正文后的业务错误、内容拦截、原因不明的未完成、缺少终止事件、读取中断及超时均不产生成功证据，已收到正文后的失败不自动重放。首字计时从上游生成请求开始，在第一段正文到达时固定，不包含管理详情读取，也不将完整生成耗时当作首字；上游忽略流式请求而返回完整 JSON 时，可按文本判定通过，但不记录首字延迟。自动巡检保留无法执行的账号及原因；直连结果表示该账号上游凭据与模型接口的可用性，不验证 Sub2API 的转发和调度链路。
 
+主动探活会忽略有效正文到达前的纯标点、格式符号和不可见占位内容（例如 `_`、`__-`）；首字延迟仍从请求发出计算，直到包含文字、数字或可见内容符号的正文到达才固定，不因占位块提前取得速度优势。仅有占位内容时不生成成功或速度证据，继续等待至协议结束或原有超时。发现此类前缀时，任务结果与探活证据保存 `ignored_placeholder`，并按稳定账号 ID 持久记录最近发现时间；账号列表显示“探活异常首字”，后续正常探活和目录同步不会自动清除，删除账号时清理。该标记用于排查，不单凭格式前缀认定恶意，也不自动熔断账号。
+
 真实请求从 `GET /api/v1/admin/ops/requests` 采集结果与错误，并通过 `GET /api/v1/admin/usage` 按账号 ID、请求 ID 补充成功请求的 `first_token_ms`。总耗时与首字分开保存；使用记录接口失败时保留运维证据并报告首字采集失败，后续重试可以为已有样本补齐首字。
 
 `Our servers are currently overloaded`、`The service is busy` 和模型 `at capacity` 等满载错误按临时网关失败计分，不归入余额耗尽或凭据失效。HTTP 200 的流式响应中出现 `response.failed` 同样视为失败；主动探活保留内层错误状态码，没有状态码但明确表示满载时按 503 处理，仅在尚未收到正文且配置允许时进行有限重试。反复满载沿用异常确认、健康降级及网关错误处置，不直接删除账号。控制台只调整后续请求的账号调度；正在转发的请求由 Sub2API 网关负责输出前重试或切换账号，已经输出文本或工具调用后不能透明重放。

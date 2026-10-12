@@ -100,7 +100,7 @@ func TestSelectionChangeInvalidatesPreview(t *testing.T) {
 	}
 }
 
-func TestUnavailableSelectedModelFailsPreview(t *testing.T) {
+func TestUnavailableSelectedModelIsSkippedInPreview(t *testing.T) {
 	service, _, management, store, request := automationFixture()
 	request.SelectedModels = []string{"model-removed"}
 	preview, err := service.Enqueue(context.Background(), request)
@@ -108,7 +108,7 @@ func TestUnavailableSelectedModelFailsPreview(t *testing.T) {
 		t.Fatal(err)
 	}
 	result := store.items[preview.ID]
-	if result.Status != "failed" || !strings.Contains(result.Message, "model-removed") || management.publishCalls != 0 {
+	if result.Status != "succeeded" || !strings.Contains(result.Message, "model-removed") || management.publishCalls != 0 {
 		t.Fatalf("missing selection was substituted: %#v", result)
 	}
 }

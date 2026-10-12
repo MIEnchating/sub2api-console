@@ -367,8 +367,8 @@ func (s *Service) enqueueOwned(ctx context.Context, request Request, scheduleID 
 		if err != nil || preview.Operation != Operation || preview.Status != "succeeded" || preview.Result["dry_run"] != true || preview.Result["scope"] != requestScope(request) {
 			return taskstore.Task{}, errors.New("预览已失效，请先重新预览并确认影响范围")
 		}
-		previewModels, ok := preview.Result["models"].([]any)
-		if !ok || len(previewModels) == 0 {
+		_, ok := preview.Result["models"].([]any)
+		if !ok {
 			return taskstore.Task{}, errors.New("预览缺少模型结果，请重新预览")
 		}
 		created, err := time.Parse(time.RFC3339Nano, preview.CreatedAt)
@@ -531,19 +531,12 @@ func (s *Service) run(ctx context.Context, task taskstore.Task, request Request)
 	}
 	sort.Slice(models, func(i, j int) bool { return strings.ToLower(models[i]) < strings.ToLower(models[j]) })
 	task.Result["models"] = models
-	if !request.DryRun {
-		preview, err := s.store.Get(ctx, request.PreviewTaskID)
-		if err != nil || !sameModels(preview.Result["models"], models) {
-			s.finish(ctx, &task, "failed", "账号模型目录与预览不一致，请重新预览", items)
-			return
-		}
-	}
 	if ctx.Err() != nil {
 		s.finish(ctx, &task, "cancelled", "任务已取消", items)
 		return
 	}
-	if len(models) == 0 {
-		s.finish(ctx, &task, "failed", "未同步到可用模型", items)
+	if len(models) == 0 && failed > 0 {
+		s.finish(ctx, &task, "failed", "账号模型目录读取失败，请查看明细后重试", items)
 		return
 	}
 	if failed > 0 && !request.DryRun {
@@ -551,16 +544,17 @@ func (s *Service) run(ctx context.Context, task taskstore.Task, request Request)
 		return
 	}
 	selectedModels := []string{}
+	skippedModels := []string{}
 	if request.PublishMissing {
 		for _, selected := range request.SelectedModels {
-			model, exists := modelSet[modelKey(selected)]
-			if !exists {
-				s.finish(ctx, &task, "failed", "所选模型已不在账号目录中："+selected+"，请重新读取并选择模型", items)
-				return
+			if _, exists := modelSet[modelKey(selected)]; !exists {
+				skippedModels = append(skippedModels, selected)
+				continue
 			}
-			selectedModels = append(selectedModels, model)
+			selectedModels = append(selectedModels, selected)
 		}
 	}
+	task.Result["skipped_models"] = skippedModels
 	var channels newapimanagement.ChannelPage
 	if len(request.Channels) > 0 {
 		channels, err = s.manager.ChannelsByID(ctx, request.PlatformID, channelIDs(request.Channels), 0, len(request.Channels))
@@ -599,7 +593,7 @@ func (s *Service) run(ctx context.Context, task taskstore.Task, request Request)
 		}
 	}
 	var plannedPrices []newapimanagement.ModelPriceInput
-	if request.PriceEnabled {
+	if request.PriceEnabled && len(plannedModels) > 0 {
 		catalog, catalogErr := s.manager.ModelPriceCatalog(ctx, request.PlatformID, request.PricingSource == "official")
 		if catalogErr != nil {
 			s.finish(ctx, &task, "failed", "模型价格目录读取失败："+catalogErr.Error(), items)
@@ -612,7 +606,7 @@ func (s *Service) run(ctx context.Context, task taskstore.Task, request Request)
 		task.Result["pricing_missing"] = len(plannedModels) - len(plannedPrices)
 		if !request.DryRun {
 			preview, err := s.store.Get(ctx, request.PreviewTaskID)
-			if err != nil || preview.Result["price_plan_digest"] != digest {
+			if err != nil || !matchesPreviewPrices(preview, plannedPrices, plannedModels) {
 				s.finish(ctx, &task, "failed", "模型价格与预览不一致，请重新预览", items)
 				return
 			}
@@ -701,7 +695,7 @@ func (s *Service) run(ctx context.Context, task taskstore.Task, request Request)
 			return
 		}
 	}
-	if request.PriceEnabled && ctx.Err() == nil {
+	if request.PriceEnabled && len(plannedModels) > 0 && ctx.Err() == nil {
 		task.Result["phase"] = "pricing"
 		if !s.persist(ctx, task) {
 			return
@@ -743,6 +737,9 @@ func (s *Service) run(ctx context.Context, task taskstore.Task, request Request)
 	message := fmt.Sprintf("执行完成：已刷新账号模型目录，渠道共新增 %d 项模型；价格已同步 %v 个模型", addedCount, task.Result["pricing_applied_models"])
 	if request.DryRun {
 		message = fmt.Sprintf("预览完成：读取到 %d 个模型，渠道待上架 %d 项；未写入任何配置", len(models), plannedCount)
+	}
+	if len(skippedModels) > 0 {
+		message += "；已跳过当前账号目录中不存在的所选模型：" + strings.Join(skippedModels, "、")
 	}
 	if failed > 0 {
 		status = "partial"
@@ -850,17 +847,21 @@ func requestScope(request Request) string {
 	return hex.EncodeToString(digest[:])
 }
 
-func sameModels(raw any, models []string) bool {
-	stored, ok := raw.([]any)
-	if !ok || len(stored) != len(models) {
+// Compare only prices that will actually be written. Missing selected models
+// shrink the write scope without invalidating the remaining confirmed prices.
+func matchesPreviewPrices(preview taskstore.Task, current []newapimanagement.ModelPriceInput, models []string) bool {
+	raw, err := json.Marshal(preview.Result["pricing_plan"])
+	if err != nil {
 		return false
 	}
-	for index, model := range models {
-		if stored[index] != model {
-			return false
-		}
+	var prices []newapimanagement.ModelPriceInput
+	if err := json.Unmarshal(raw, &prices); err != nil {
+		return false
 	}
-	return true
+	if preview.Result["price_plan_digest"] != pricePlanDigest(prices) {
+		return false
+	}
+	return pricePlanDigest(filterPrices(prices, models)) == pricePlanDigest(current)
 }
 
 func pricePlanDigest(prices []newapimanagement.ModelPriceInput) string {

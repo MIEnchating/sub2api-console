@@ -113,10 +113,37 @@ func (r *Reader) ReadCatalog(ctx context.Context, record configstore.AuthRecord)
 	if len(rows) == 0 {
 		return business.UpstreamCatalogSnapshot{}, errors.New("上游分组目录返回为空或格式不可读")
 	}
-	userRates, err := r.sub2APIUserGroupRates(ctx, record)
-	if err != nil {
-		return business.UpstreamCatalogSnapshot{}, err
+	// The group catalog is needed before parsing rows, but the authenticated
+	// user overrides and the Key inventory are independent reads. Keep them on
+	// the same request critical path while allowing slow upstream endpoints to
+	// overlap instead of adding their latencies together.
+	type userRatesResult struct {
+		value map[string]string
+		err   error
 	}
+	type keysResult struct {
+		value []business.UpstreamCatalogKey
+		err   error
+	}
+	userRatesCh := make(chan userRatesResult, 1)
+	keysCh := make(chan keysResult, 1)
+	go func() {
+		value, err := r.sub2APIUserGroupRates(ctx, record)
+		userRatesCh <- userRatesResult{value: value, err: err}
+	}()
+	go func() {
+		value, err := r.readKeys(ctx, record)
+		keysCh <- keysResult{value: value, err: err}
+	}()
+	userRatesResultValue := <-userRatesCh
+	keysResultValue := <-keysCh
+	if userRatesResultValue.err != nil {
+		return business.UpstreamCatalogSnapshot{}, userRatesResultValue.err
+	}
+	if keysResultValue.err != nil {
+		return business.UpstreamCatalogSnapshot{}, keysResultValue.err
+	}
+	userRates := userRatesResultValue.value
 	groups := make([]business.UpstreamCatalogGroup, 0, len(rows))
 	for _, row := range rows {
 		if isNewAPI(record.UpstreamType) && virtualAutoGroup(row) {
@@ -143,10 +170,7 @@ func (r *Reader) ReadCatalog(ctx context.Context, record configstore.AuthRecord)
 			Platform: optionalText(firstPresent(row, "platform", "provider", "type")), Status: status, RawRate: rate,
 		})
 	}
-	keys, err := r.readKeys(ctx, record)
-	if err != nil {
-		return business.UpstreamCatalogSnapshot{}, err
-	}
+	keys := keysResultValue.value
 	keys = slices.DeleteFunc(keys, func(key business.UpstreamCatalogKey) bool {
 		return strings.HasPrefix(strings.ToLower(strings.TrimSpace(key.Name)), "console-probe-")
 	})

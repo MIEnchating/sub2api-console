@@ -53,6 +53,9 @@ func (s *Store) pruneManagementDeletedAccounts(
 		if _, err := tx.ExecContext(ctx, `DELETE FROM bindings WHERE local_account_id=?`, id); err != nil {
 			return nil, err
 		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM operational_snapshots WHERE namespace='probe-placeholder' AND state_key=?`, id); err != nil {
+			return nil, err
+		}
 		if _, err := tx.ExecContext(ctx, `DELETE FROM accounts WHERE id=?`, id); err != nil {
 			return nil, err
 		}

@@ -1081,6 +1081,7 @@ export type AccountRecovery = {
 };
 
 export type AccountStatus = {
+  probe_placeholder_at?: string | null;
   ignore_cost_wall?: boolean;
   id: string;
   name: string;

@@ -22,6 +22,7 @@ type ProbeCandidate struct {
 }
 
 type ProbeSample struct {
+	IgnoredPlaceholder      bool
 	AccountID               string
 	GroupName               string
 	Result                  string
@@ -155,10 +156,19 @@ func (s *Store) PersistProbeSamples(ctx context.Context, samples []ProbeSample) 
 			"probe_protocol": sample.ProbeProtocol, "probe_prompt_fingerprint": sample.ProbePromptFingerprint,
 			"probe_request_fingerprint": sample.ProbeRequestFingerprint, "measured_first_token": sample.MeasuredFirstToken,
 			"performance_eligible": probePerformanceEligible(sample),
+			"ignored_placeholder":  sample.IgnoredPlaceholder,
 		}
 		if sample.Attempts > 1 || len(sample.AttemptStatusCodes) > 1 {
 			payloadValue["attempt_status_codes"] = sample.AttemptStatusCodes
 			payloadValue["retry_recovered"] = sample.RetryRecovered
+		}
+		if sample.IgnoredPlaceholder {
+			if _, err := tx.ExecContext(ctx, `INSERT INTO operational_snapshots(namespace,state_key,value_json,observed_at,updated_at)
+    SELECT 'probe-placeholder',id,'{}',?,? FROM accounts WHERE id=?
+    ON CONFLICT(namespace,state_key) DO UPDATE SET observed_at=excluded.observed_at,updated_at=excluded.updated_at
+    WHERE excluded.observed_at>operational_snapshots.observed_at`, sample.ObservedAt, sample.ObservedAt, sample.AccountID); err != nil {
+				return 0, err
+			}
 		}
 		payload, err := json.Marshal(payloadValue)
 		if err != nil {

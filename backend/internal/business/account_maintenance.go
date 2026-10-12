@@ -475,6 +475,9 @@ func (s *Store) CleanupMissingBindings(ctx context.Context, accountIDs []string,
 		if _, err := tx.ExecContext(ctx, `DELETE FROM bindings WHERE local_account_id=?`, accountID); err != nil {
 			return MissingBindingCleanupResult{}, err
 		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM operational_snapshots WHERE namespace='probe-placeholder' AND state_key=?`, accountID); err != nil {
+			return MissingBindingCleanupResult{}, err
+		}
 		if _, err := tx.ExecContext(ctx, `DELETE FROM accounts WHERE id=?`, accountID); err != nil {
 			return MissingBindingCleanupResult{}, err
 		}

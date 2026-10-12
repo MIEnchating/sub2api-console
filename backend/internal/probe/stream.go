@@ -11,20 +11,22 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/MIEnchating/sub2api-console/backend/internal/adminclient"
 	"github.com/MIEnchating/sub2api-console/backend/internal/upstreamerror"
 )
 
 type attemptOutcome struct {
-	firstTokenAt    time.Time
-	receivedContent bool
-	failureCode     string
-	status          *int
-	content         bool
-	reason          string
-	model           string
-	unavailable     bool
+	ignoredPlaceholder bool
+	firstTokenAt       time.Time
+	receivedContent    bool
+	failureCode        string
+	status             *int
+	content            bool
+	reason             string
+	model              string
+	unavailable        bool
 }
 
 func probeAttempt(ctx context.Context, account *adminclient.AccountProbe, target Target, config Config, protocol string) attemptOutcome {
@@ -126,6 +128,9 @@ func readProbeResponse(body io.Reader, contentType, protocol string) attemptOutc
 		}
 		eventType = ""
 		event := probeEventOutcome(payload)
+		if !result.receivedContent && event.ignoredPlaceholder {
+			result.ignoredPlaceholder = true
+		}
 		if event.model != "" {
 			result.model = event.model
 		}
@@ -199,6 +204,9 @@ func readProbeResponse(body io.Reader, contentType, protocol string) attemptOutc
 func finishProbeResponse(result attemptOutcome) attemptOutcome {
 	if !result.content && result.reason == "" {
 		result.reason = "上游探活流未返回有效文本，请检查模型和接口配置"
+		if result.ignoredPlaceholder {
+			result.reason = "上游探活仅返回占位字符，未收到有效正文，请检查上游响应后重试"
+		}
 	}
 	if result.reason != "" {
 		result.content = false
@@ -212,7 +220,7 @@ func probeEventOutcome(value any) attemptOutcome {
 		reason = probeTerminationError(value)
 	}
 	content := eventHasContent(value)
-	result := attemptOutcome{model: eventModel(value), reason: reason, receivedContent: content, content: reason == "" && content}
+	result := attemptOutcome{ignoredPlaceholder: eventHasText(value, placeholderText), model: eventModel(value), reason: reason, receivedContent: content, content: reason == "" && content}
 	if reason != "" {
 		result.status = eventErrorStatus(value)
 	}
@@ -257,40 +265,44 @@ func eventModel(value any) string {
 }
 
 func eventHasContent(value any) bool {
+	return eventHasText(value, meaningfulText)
+}
+
+func eventHasText(value any, matches func(any) bool) bool {
 	object, ok := value.(map[string]any)
 	if !ok {
 		return false
 	}
-	if response, ok := object["response"]; ok && eventHasContent(response) {
+	if response, ok := object["response"]; ok && eventHasText(response, matches) {
 		return true
 	}
-	if nonemptyText(object["output_text"]) {
+	if matches(object["output_text"]) {
 		return true
 	}
 	switch object["type"] {
 	case "response.output_text.delta":
-		return nonemptyText(object["delta"])
+		return matches(object["delta"])
 	case "response.output_text.done":
-		return nonemptyText(object["text"])
+		return matches(object["text"])
 	case "content_block_delta":
 		delta, _ := object["delta"].(map[string]any)
-		return delta["type"] == "text_delta" && nonemptyText(delta["text"])
+		return delta["type"] == "text_delta" && matches(delta["text"])
 	case "content_block_start":
 		block, _ := object["content_block"].(map[string]any)
-		return block["type"] == "text" && nonemptyText(block["text"])
+		return block["type"] == "text" && matches(block["text"])
 	}
 	if choices, ok := object["choices"].([]any); ok {
 		for _, value := range choices {
 			choice, _ := value.(map[string]any)
 			for _, key := range []string{"delta", "message"} {
 				message, _ := choice[key].(map[string]any)
-				if nonemptyText(message["content"]) {
+				if matches(message["content"]) {
 					return true
 				}
 			}
 		}
 	}
-	if content, ok := object["content"].([]any); ok && hasTextBlocks(content) {
+	if content, ok := object["content"].([]any); ok && hasTextBlocks(content, matches) {
 		return true
 	}
 	if output, ok := object["output"].([]any); ok {
@@ -299,7 +311,7 @@ func eventHasContent(value any) bool {
 			if item["type"] != "message" {
 				continue
 			}
-			if blocks, ok := item["content"].([]any); ok && hasTextBlocks(blocks) {
+			if blocks, ok := item["content"].([]any); ok && hasTextBlocks(blocks, matches) {
 				return true
 			}
 		}
@@ -311,7 +323,7 @@ func eventHasContent(value any) bool {
 			parts, _ := content["parts"].([]any)
 			for _, value := range parts {
 				part, _ := value.(map[string]any)
-				if part["thought"] != true && nonemptyText(part["text"]) {
+				if part["thought"] != true && matches(part["text"]) {
 					return true
 				}
 			}
@@ -320,14 +332,27 @@ func eventHasContent(value any) bool {
 	return false
 }
 
-func hasTextBlocks(blocks []any) bool {
+func hasTextBlocks(blocks []any, matches func(any) bool) bool {
 	for _, value := range blocks {
 		block, _ := value.(map[string]any)
-		if (block["type"] == "text" || block["type"] == "output_text") && nonemptyText(block["text"]) {
+		if (block["type"] == "text" || block["type"] == "output_text") && matches(block["text"]) {
 			return true
 		}
 	}
 	return false
+}
+
+// Formatting, punctuation and invisible characters cannot establish first text.
+// Letters/numbers cover multilingual prose and code; other symbols include emoji.
+func meaningfulText(value any) bool {
+	text, ok := value.(string)
+	return ok && strings.ContainsFunc(text, func(r rune) bool {
+		return unicode.IsLetter(r) || unicode.IsNumber(r) || unicode.Is(unicode.So, r)
+	})
+}
+
+func placeholderText(value any) bool {
+	return nonemptyText(value) && !meaningfulText(value)
 }
 
 func nonemptyText(value any) bool {

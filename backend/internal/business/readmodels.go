@@ -33,6 +33,7 @@ type AccountRecentResult struct {
 }
 
 type AccountStatus struct {
+	ProbePlaceholderAt          *string                    `json:"probe_placeholder_at,omitempty"`
 	ManualFused                 bool                       `json:"manual_fused"`
 	GroupsLocked                bool                       `json:"groups_locked"`
 	IgnoreCostWall              bool                       `json:"ignore_cost_wall"`
@@ -343,7 +344,7 @@ func (s *Store) accountProjectionsWithOptions(ctx context.Context, options accou
 		ownership.upstream_host,ownership.upstream_id,COALESCE(ownership.identity_count,0),COALESCE(u.upstream_type,a.upstream_type),u.base_url,a.schedulable,a.priority,
 		a.load_factor,a.concurrency,a.multiplier,a.balance,a.paused,a.paused_reason,a.routing_state,a.health_status,
 		a.failure_streak,a.recovery_pass_streak,a.target_priority,a.target_load_factor,a.target_schedulable,
-		a.target_concurrency,a.metadata_json,m.priority,m.sync_balance_multiplier FROM accounts a
+		a.target_concurrency,a.metadata_json,m.priority,m.sync_balance_multiplier,placeholder.observed_at FROM accounts a
 		LEFT JOIN (
 			SELECT b.local_account_id,MIN(COALESCE(primary_host.host,b.upstream_host)) AS upstream_host,
 				MIN(bi.upstream_id) AS upstream_id,
@@ -353,7 +354,8 @@ func (s *Store) accountProjectionsWithOptions(ctx context.Context, options accou
 			WHERE TRIM(b.upstream_host)<>''` + ownershipFilter + ` GROUP BY b.local_account_id
 		) ownership ON ownership.local_account_id=a.id
 		LEFT JOIN upstreams u ON u.host=COALESCE(ownership.upstream_host,a.upstream_host)
-		LEFT JOIN manual_priority_accounts m ON m.account_id=a.id`
+		LEFT JOIN manual_priority_accounts m ON m.account_id=a.id
+		LEFT JOIN operational_snapshots placeholder ON placeholder.namespace='probe-placeholder' AND placeholder.state_key=a.id`
 	if options.groupName != nil {
 		query += " WHERE " + groupProjectionPredicate("a.id")
 		arguments = append(arguments, *options.groupName)
@@ -370,6 +372,7 @@ func (s *Store) accountProjectionsWithOptions(ctx context.Context, options accou
 	projections := make([]accountProjection, 0)
 	for rows.Next() {
 		var item accountProjection
+		var placeholderAt sql.NullString
 		var upstreamID, upstreamHost, recordedUpstreamHost, bindingUpstreamHost sql.NullString
 		var upstreamType, upstreamBaseURL, loadFactor, multiplier, balance sql.NullString
 		var pausedReason, routingState, healthStatus, targetLoadFactor sql.NullString
@@ -381,10 +384,11 @@ func (s *Store) accountProjectionsWithOptions(ctx context.Context, options accou
 			&upstreamType, &upstreamBaseURL, &schedulable, &priority,
 			&loadFactor, &concurrency, &multiplier, &balance, &paused, &pausedReason, &routingState,
 			&healthStatus, &failureStreak, &recoveryPassStreak, &targetPriority, &targetLoadFactor,
-			&targetSchedulable, &targetConcurrency, &item.metadataRaw, &manualPriority, &manualSyncBalanceMultiplier,
+			&targetSchedulable, &targetConcurrency, &item.metadataRaw, &manualPriority, &manualSyncBalanceMultiplier, &placeholderAt,
 		); err != nil {
 			return nil, err
 		}
+		item.ProbePlaceholderAt = nullString(placeholderAt)
 		item.Groups = []string{}
 		item.RecentResults = []AccountRecentResult{}
 		item.groupIDs = map[string]*string{}

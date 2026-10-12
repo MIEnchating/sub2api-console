@@ -152,6 +152,9 @@ func (s *Store) DeleteUpstreamProjection(ctx context.Context, host string, expec
 		if _, err := tx.ExecContext(ctx, `DELETE FROM bindings WHERE local_account_id=?`, accountID); err != nil {
 			return UpstreamDeleteProjection{}, err
 		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM operational_snapshots WHERE namespace='probe-placeholder' AND state_key=?`, accountID); err != nil {
+			return UpstreamDeleteProjection{}, err
+		}
 		if _, err := tx.ExecContext(ctx, `DELETE FROM accounts WHERE id=?`, accountID); err != nil {
 			return UpstreamDeleteProjection{}, err
 		}

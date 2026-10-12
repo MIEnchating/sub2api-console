@@ -330,16 +330,16 @@ func (s *Store) upstreamAccountRequestUsage(ctx context.Context) (map[string][]U
 		SELECT DISTINCT bi.upstream_id,a.id,a.name
 		FROM binding_identities bi JOIN bindings b ON b.id=bi.binding_id
 		JOIN accounts a ON a.id=b.local_account_id
-	), traffic_requests AS (
-		SELECT account_id,request_id
+	), traffic_counts AS (
+		SELECT account_id,COUNT(DISTINCT request_id) AS request_count
 		FROM usage_records
 		WHERE LOWER(source)='traffic' AND observed_at>=? AND observed_at<=?
 			AND TRIM(request_id)<>'' AND account_id IS NOT NULL
-		GROUP BY account_id,request_id
+		GROUP BY account_id
 	)
-	SELECT ba.upstream_id,ba.id,ba.name,COUNT(rr.request_id)
-	FROM bound_accounts ba LEFT JOIN traffic_requests rr ON rr.account_id=ba.id
-	GROUP BY ba.upstream_id,ba.id,ba.name ORDER BY ba.upstream_id,ba.name,ba.id`,
+	SELECT ba.upstream_id,ba.id,ba.name,COALESCE(tc.request_count,0)
+	FROM bound_accounts ba LEFT JOIN traffic_counts tc ON tc.account_id=ba.id
+	ORDER BY ba.upstream_id,ba.name,ba.id`,
 		start.Format(healthSampleTimeLayout), end.Format(healthSampleTimeLayout))
 	if err != nil {
 		return nil, nil, err

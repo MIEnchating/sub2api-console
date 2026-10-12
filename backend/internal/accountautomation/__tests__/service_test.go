@@ -227,7 +227,7 @@ func TestPreviewReadsModelsWithoutStartingAccountSync(t *testing.T) {
 	}
 }
 
-func TestChangedModelDirectoryAfterPreviewRejectsWrites(t *testing.T) {
+func TestUnavailableSelectionAfterPreviewSkipsWrites(t *testing.T) {
 	service, accounts, management, store, request := automationFixture()
 	preview, err := service.Enqueue(context.Background(), request)
 	if err != nil {
@@ -242,8 +242,8 @@ func TestChangedModelDirectoryAfterPreviewRejectsWrites(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if store.items[execution.ID].Status != "failed" || management.publishCalls != 0 || management.priceCalls != 0 {
-		t.Fatalf("changed plan must not write: task=%#v publish=%d price=%d", store.items[execution.ID], management.publishCalls, management.priceCalls)
+	if store.items[execution.ID].Status != "succeeded" || management.publishCalls != 0 || management.priceCalls != 0 {
+		t.Fatalf("unavailable selection must be skipped: task=%#v publish=%d price=%d", store.items[execution.ID], management.publishCalls, management.priceCalls)
 	}
 }
 

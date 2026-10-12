@@ -1,3 +1,6 @@
 export const accountConcurrencyLimitedReason = "上游可用并发不足，账号按调度策略等待额度";
 export const accountConcurrencyLimitedHelp =
   "开启上游共享并发分配后，系统先为健康账号各分配至少 1 个并发，再按调度权重分配剩余额度；额度不足的账号等待，释放确认后自动恢复，智能扩容关闭时仅按上游额度独立执行；开启时遵守配置的扩容限制和自动执行开关。";
+export const probePlaceholderLabel = "探活异常首字";
+export const probePlaceholderHelp =
+  "曾在有效正文前收到纯标点、格式符号或不可见占位字符。占位字符已忽略，首字延迟计至有效正文到达；此标记保留供排查，不代表已确认恶意。";

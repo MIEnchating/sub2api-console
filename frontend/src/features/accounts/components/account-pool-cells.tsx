@@ -14,6 +14,7 @@ import { accountIdentityMeta } from "@/features/accounts/lib/account-labels";
 import { cn } from "@/lib/utils";
 import { formatHealthScore as healthScoreValue } from "@/lib/health-score";
 import { accountConcurrencyLimitedHelp, accountConcurrencyLimitedReason } from "../constants";
+import { probePlaceholderHelp, probePlaceholderLabel } from "../constants";
 import {
   accountLoadFactorLabel,
   effectiveAccountLoadFactor,
@@ -238,6 +239,24 @@ export function AccountIdentityCell(props: { account: AccountStatus; groupContro
           </TooltipContent>
         </Tooltip>
       </div>
+      {props.account.probe_placeholder_at ? (
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <span
+                tabIndex={0}
+                className="w-fit max-w-full rounded-sm text-xs text-amber-700 outline-none focus-visible:ring-2 focus-visible:ring-ring dark:text-amber-400"
+              />
+            }
+          >
+            {probePlaceholderLabel}
+          </TooltipTrigger>
+          <TooltipContent role="tooltip" className="max-w-sm">
+            {probePlaceholderHelp} 最近发现：
+            {new Date(props.account.probe_placeholder_at).toLocaleString("zh-CN")}
+          </TooltipContent>
+        </Tooltip>
+      ) : null}
       <div
         data-slot="account-identity-meta"
         className="flex min-w-0 flex-nowrap items-center gap-2 text-xs text-muted-foreground"
