@@ -283,11 +283,12 @@ func upstreamDeletePreview(ctx context.Context, queryer deletePreviewQueryer, ho
 }
 
 func upstreamDeleteAccountRows(ctx context.Context, queryer deletePreviewQueryer, upstreamID string) ([]upstreamDeleteAccountRow, error) {
-	rows, err := queryer.QueryContext(ctx, `SELECT DISTINCT a.id,a.name,a.upstream_host
+	rows, err := queryer.QueryContext(ctx, `WITH bound_accounts AS (SELECT DISTINCT a.id,a.name,a.upstream_host
 		FROM accounts a LEFT JOIN bindings b ON b.local_account_id=a.id
 		LEFT JOIN binding_identities bi ON bi.binding_id=b.id
-		WHERE a.upstream_host IN (SELECT host FROM upstream_identity_hosts WHERE upstream_id=?) OR bi.upstream_id=?
-		ORDER BY `+numericIDOrder(queryer.Driver(), "a.id")+`,a.id`, upstreamID, upstreamID)
+		WHERE a.upstream_host IN (SELECT host FROM upstream_identity_hosts WHERE upstream_id=?) OR bi.upstream_id=?)
+		SELECT id,name,upstream_host FROM bound_accounts
+		ORDER BY `+numericIDOrder(queryer.Driver(), "id")+`,id`, upstreamID, upstreamID)
 	if err != nil {
 		return nil, err
 	}

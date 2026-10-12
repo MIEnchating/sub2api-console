@@ -265,7 +265,12 @@ func (s *Store) BoundAccountsForMaintenance(ctx context.Context, requestedIDs []
 	if predicate != "" {
 		query += " WHERE a.id" + predicate
 	}
-	query += ` ORDER BY ` + numericIDOrder(s.db.Driver(), "a.id") + `,a.id`
+	// Sort the deduplicated rows so PostgreSQL does not require the numeric
+	// ordering expression to participate in DISTINCT.
+	query = `WITH maintenance_accounts(account_id,account_name,multiplier,upstream_host,source_auth_host,upstream_type,
+		upstream_key_id,upstream_group_id,recharge_rate,raw_rate,raw_rate_source,base_url,upstream_metadata,account_metadata,
+		console_onboarded,manual_priority,sync_balance_multiplier) AS (` + query + `)
+		SELECT * FROM maintenance_accounts ORDER BY ` + numericIDOrder(s.db.Driver(), "account_id") + `,account_id`
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err

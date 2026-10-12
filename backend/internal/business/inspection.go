@@ -510,13 +510,13 @@ const routingWritebackPendingSQL = `WITH current_decisions AS (
 	SELECT CASE WHEN
 		COALESCE((SELECT MAX(updated_at) FROM policy_nodes WHERE policy_key='control-plane'),'') >
 		COALESCE((SELECT updated_at FROM app_state WHERE "key"=?),'')
-	THEN 1 ELSE EXISTS(SELECT 1 FROM latest_attempt WHERE state IS NULL OR state<>'succeeded') END`
+	THEN TRUE ELSE EXISTS(SELECT 1 FROM latest_attempt WHERE state IS NULL OR state<>'succeeded') END`
 
 func (s *Store) RoutingWritebackPending(ctx context.Context) (bool, error) {
-	var pending int
+	var pending bool
 	err := s.db.QueryRowContext(ctx, routingWritebackPendingSQL,
 		routingCalculationKey).Scan(&pending)
-	return pending == 1, err
+	return pending, err
 }
 
 func (s *Store) inspectionTaskState(ctx context.Context) (map[string]string, error) {
