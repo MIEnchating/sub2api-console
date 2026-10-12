@@ -41,7 +41,7 @@ func (s *Service) CheckOAuthCandyWithProxy(ctx context.Context, accountID, accou
 	}
 	defer closeTransport()
 	result := AnimationResult{AccountID: accountID, Model: model, Mode: precheckMode, ReasoningEffort: "medium", Usage: &AnimationUsage{}}
-	sender := oauthBundleSender{client: &http.Client{Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}, credential: credential, models: []string{model}, slots: make(chan struct{}, 1), usage: result.Usage}
+	sender := oauthBundleSender{stream: true, client: &http.Client{Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}, credential: credential, models: []string{model}, slots: make(chan struct{}, 1), usage: result.Usage}
 	err = runPrecheckQuestions(ctx, []string{"candy"}, &result, func(question AstraQuestion, requestID string) (string, string, error) {
 		sender.requestID = requestID
 		return sender.SendWithReasoning(ctx, accountID, model, question.Question, timeout, "medium")

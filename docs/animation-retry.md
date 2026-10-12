@@ -36,3 +36,9 @@ OpenAI 官方文档说明，可以通过再次传入消息历史，或使用支�
 HTML 缩略图与放大预览使用稳定的布局视口，按整页内容边界等比缩放、居中显示，保留原有 SVG 比例。超宽、超高及脚本动态改变尺寸的内容重新测量适配，不通过隐藏滚动条裁掉页面内容；代码视图仍保留原文。
 
 Responses 用量从 JSON 或完成事件读取，Chat Completions 请求 `stream_options.include_usage` 并读到 `[DONE]` 或正常 EOF，保留 finish_reason 后的用量块；Messages 合并 message_start 与 message_delta 中报告的用量。受控 OAuth 预览允许可选 `usage.input_tokens/output_tokens/total_tokens`。缺失用量不补零，仅在输入与输出都存在时计算总计；TPS 为输出 Token / 最终一次生成耗时，不将失败重试和退避计入分母。任务总耗时仍包含各次请求和退避。
+
+## 流式完成与工作台糖果题
+
+糖果题在导入、重新登录、自动维护及动画前置检测中统一发送流式请求；OAuth 收到合法的 `response.completed` / `response.done` 后立即读取结果与用量并关闭响应，不等待 HTTP 连接结束。失败完成事件、仅正文而没有协议完成事件、取消及超时均不算通过。工作台导入与维护糖果题使用 120 秒请求上限，为 medium 思考保留时间，不自动重放失败生成。
+
+主动探活及动画生成沿用各自的流式解析和超时策略：主动探活等待完整完成并仅记录真实首字时间；动画生成保留首字超时和任务总时限。隐藏 Token 的管理端预览兼容路径仍由 Sub2API 消费上游流，Console 接收完成后的受控结果。

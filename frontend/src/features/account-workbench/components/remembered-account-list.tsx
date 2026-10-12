@@ -69,7 +69,6 @@ export function RememberedAccountList(props: { onStarted?: () => void }): ReactE
     >
       <WorkbenchToolbar
         description="已导入账号会持续保留，可重新登录或手动删除。"
-        meta={<Badge variant="secondary">{query.data.length} 个账号</Badge>}
         actions={
           <Button
             variant="outline"

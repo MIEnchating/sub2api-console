@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/MIEnchating/sub2api-console/backend/internal/accountworkbench"
 	"github.com/MIEnchating/sub2api-console/backend/internal/business"
@@ -59,6 +60,10 @@ func TestImportAppliesTemplateBeforeDetectionAndOnlyEnablesPassingAccounts(t *te
 			var current map[string]any
 			var calls atomic.Int32
 			checker.UseOAuthTransport(transportFunc(func(req *http.Request) (*http.Response, error) {
+				deadline, bounded := req.Context().Deadline()
+				if !bounded || time.Until(deadline) < 110*time.Second {
+					t.Error("import candy check must allow the bounded 120-second reasoning budget")
+				}
 				var body struct {
 					Model     string `json:"model"`
 					Reasoning struct {

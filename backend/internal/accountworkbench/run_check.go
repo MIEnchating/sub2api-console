@@ -6,6 +6,8 @@ import (
 	"strings"
 )
 
+const candyCheckTimeoutSeconds = 120
+
 func passedImportCheck(result map[string]any) bool {
 	if strings.TrimSpace(text(result["error"])) != "" {
 		return false
@@ -30,7 +32,7 @@ func (s *Service) checkImportItem(ctx context.Context, value *privateRun, index 
 	if err := s.persistRun(value); err != nil {
 		return errors.New("检测阶段保存失败")
 	}
-	result, err := s.checker.CheckOAuthCandyWithProxy(ctx, row.AccountID, stored.Item.Name, stored.Credentials, value.Settings.Model, 30, stored.ProxyURL)
+	result, err := s.checker.CheckOAuthCandyWithProxy(ctx, row.AccountID, stored.Item.Name, stored.Credentials, value.Settings.Model, candyCheckTimeoutSeconds, stored.ProxyURL)
 	if err != nil {
 		result = map[string]any{"verdict": "ERROR", "error": err.Error(), "claimed_model": value.Settings.Model}
 	}

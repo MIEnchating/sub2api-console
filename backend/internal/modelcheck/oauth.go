@@ -41,6 +41,7 @@ type oauthBundleSender struct {
 	models          []string
 	slots           chan struct{}
 	requestID       string
+	stream          bool
 	animationStream bool
 	usage           *AnimationUsage
 	onFirstOutput   func()
@@ -121,6 +122,7 @@ func (s *Service) CheckOAuthWithProxy(ctx context.Context, accountID, accountNam
 		defer direct.CloseIdleConnections()
 	}
 	sender := oauthBundleSender{
+		stream: model == astraModel,
 		client: &http.Client{Transport: transport, Timeout: time.Duration(timeoutSeconds) * time.Second,
 			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }},
 		credential: credential, models: append(append([]string(nil), profile.Models...), astraModel), slots: make(chan struct{}, 2),
@@ -298,7 +300,7 @@ func (sender oauthBundleSender) SendWithReasoning(ctx context.Context, _ string,
 }
 
 func (sender oauthBundleSender) readResponse(body io.Reader) (map[string]any, error) {
-	if sender.animationStream {
+	if sender.stream || sender.animationStream {
 		return readOAuthResponse(body, true, sender.onFirstOutput)
 	}
 	raw, err := io.ReadAll(io.LimitReader(body, maximumDirectResponseBytes+1))

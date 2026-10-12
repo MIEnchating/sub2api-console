@@ -93,12 +93,13 @@ func runPreparedCheck(ctx context.Context, directClient, oauthClient *http.Clien
 	var sender interface {
 		bundleSender
 		reasoningSender
-	} = directBundleSender{client: directClient, credential: credential.value}
+	} = directBundleSender{stream: input.Model == astraModel, client: directClient, credential: credential.value}
 	if credential.oauth != nil {
 		if checkerForModel(input.Model, prepared.claudeProfiles, prepared.solProfile) == "claude" {
 			return nil, errors.New("OpenAI OAuth 账号不支持 Claude 模型，请选择 OpenAI 检测模型")
 		}
 		sender = oauthBundleSender{
+			stream: input.Model == astraModel,
 			client: oauthClient, credential: *credential.oauth,
 			models: append(append([]string(nil), prepared.solProfile.Models...), astraModel), slots: make(chan struct{}, 2),
 		}

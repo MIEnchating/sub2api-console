@@ -10,7 +10,7 @@ func (s *Service) checkMaintenanceCandy(ctx context.Context, account map[string]
 	if err != nil {
 		return nil, err
 	}
-	return s.checker.CheckOAuthCandyWithProxy(ctx, text(account["id"]), text(account["name"]), credentials, settings.Model, 30, proxyURL)
+	return s.checker.CheckOAuthCandyWithProxy(ctx, text(account["id"]), text(account["name"]), credentials, settings.Model, candyCheckTimeoutSeconds, proxyURL)
 }
 
 func (s *Service) checkHealthyMaintenanceAccount(ctx context.Context, value *privateMaintenance, account map[string]any, result MaintenanceResult) MaintenanceResult {
