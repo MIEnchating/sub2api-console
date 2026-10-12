@@ -86,7 +86,7 @@ func TestAstraAccountChecksPreserveReasoningOnChatFallbackAndAcrossRounds(t *tes
 			responses := []string{"21", "2", "4", "21", "4", "10"}
 			f := setup(t, 1, "openai", func(w http.ResponseWriter, r *http.Request) {
 				var body struct {
- Stream bool `json:"stream"`
+					Stream    bool `json:"stream"`
 					Reasoning struct {
 						Effort string `json:"effort"`
 					} `json:"reasoning"`
@@ -97,8 +97,10 @@ func TestAstraAccountChecksPreserveReasoningOnChatFallbackAndAcrossRounds(t *tes
 					w.WriteHeader(400)
 					return
 				}
-				if !body.Stream { t.Error("Astra candy requests must use streaming in both Responses and Chat fallback") }
- expected := "low"
+				if !body.Stream {
+					t.Error("Astra candy requests must use streaming in both Responses and Chat fallback")
+				}
+				expected := "low"
 				if len(efforts)%3 == 2 {
 					expected = "medium"
 				}
