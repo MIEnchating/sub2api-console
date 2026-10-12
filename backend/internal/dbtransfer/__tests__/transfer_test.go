@@ -3,6 +3,7 @@ package dbtransfer_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -119,11 +120,19 @@ func TestDatabaseTransferPreservesDataAndRebuildsServerIndexes(t *testing.T) {
 			if _, err := data.PersistTrafficSamples(t.Context(), []business.TrafficSample{{AccountID: "41", GroupName: "迁移分组", EvidenceKey: "request", Result: "通过", ObservedAt: stamp.Format(time.RFC3339Nano), Payload: map[string]any{"input_tokens": json.Number("9007199254740993")}}}); err != nil {
 				t.Fatal(err)
 			}
+			// Cross the derived-index rebuild batch boundary while preserving nanoseconds.
+			samples := make([]business.TrafficSample, 205)
+			for index := range samples {
+				samples[index] = business.TrafficSample{AccountID: "41", GroupName: "迁移分组", EvidenceKey: fmt.Sprintf("batch-%03d", index), Result: "通过", ObservedAt: stamp.Add(time.Duration(index+1) * time.Nanosecond).Format(time.RFC3339Nano), Payload: map[string]any{}}
+			}
+			if _, err := data.PersistTrafficSamples(t.Context(), samples); err != nil {
+				t.Fatal(err)
+			}
 			sourceDB, err := dbconn.Open(t.Context(), dbconn.Config{Driver: dbconn.SQLite, Path: sources.Business})
 			if err != nil {
 				t.Fatal(err)
 			}
-			for _, query := range []string{`UPDATE usage_records SET id=0 WHERE request_id='request'`, `UPDATE health_samples SET id=70000 WHERE evidence_key='request'`, `UPDATE runtime_events SET source_id=-12345 WHERE source_id=(SELECT MIN(source_id) FROM runtime_events)`} {
+			for _, query := range []string{`UPDATE usage_records SET id=0 WHERE request_id='request'`, `UPDATE health_samples SET id=70000 WHERE evidence_key='batch-204'`, `UPDATE runtime_events SET source_id=-12345 WHERE source_id=(SELECT MIN(source_id) FROM runtime_events)`} {
 				if _, err := sourceDB.ExecContext(t.Context(), query); err != nil {
 					sourceDB.Close()
 					t.Fatal(err)
@@ -173,7 +182,7 @@ func TestDatabaseTransferPreservesDataAndRebuildsServerIndexes(t *testing.T) {
 			}
 			defer data.Close()
 			traffic, err := data.RoutingRecoveryTraffic(t.Context(), "41", stamp.Add(-time.Second), stamp.Add(time.Second))
-			if err != nil || len(traffic) != 1 {
+			if err != nil || len(traffic) != 206 {
 				t.Fatalf("recovery index not rebuilt: %+v %v", traffic, err)
 			}
 			if id, err := data.RecordRuntimeEvent(t.Context(), "contract.import", "succeeded", "导入后写入", map[string]any{}); err != nil || id >= -12345 {

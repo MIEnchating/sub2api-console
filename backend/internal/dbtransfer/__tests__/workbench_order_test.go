@@ -2,8 +2,10 @@ package dbtransfer_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/MIEnchating/sub2api-console/backend/internal/business"
@@ -28,8 +30,17 @@ func TestDatabaseTransferWorkbenchDocumentsPreserveInsertionOrderAfterNewWrite(t
 			if err != nil {
 				t.Fatal(err)
 			}
-			for _, key := range []string{"fixture/z", "fixture/a"} {
-				if _, err = source.SaveWorkbenchDocument(t.Context(), key, 0, json.RawMessage(`{"name":"迁移资料"}`)); err != nil {
+			payloads := map[string]json.RawMessage{}
+			expectedIDs := []string{"fixture/new"}
+			for index := range 205 {
+				key := fmt.Sprintf("fixture/%03d", 204-index)
+				payload := json.RawMessage(`{"name":"迁移资料","exact":9007199254740993,"optional":null}`)
+				if index == 100 {
+					payload = json.RawMessage(`{"text":"` + strings.Repeat("中", 400000) + `"}`)
+				}
+				payloads[key] = payload
+				expectedIDs = append(expectedIDs, key)
+				if _, err = source.SaveWorkbenchDocument(t.Context(), key, 0, payload); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -66,9 +77,9 @@ func TestDatabaseTransferWorkbenchDocumentsPreserveInsertionOrderAfterNewWrite(t
 				t.Fatal(err)
 			}
 			var ids []string
-			err = target.VisitWorkbenchDocuments(t.Context(), "fixture/", 10, func(record configstore.WorkbenchDocumentRecord) (bool, error) {
+			err = target.VisitWorkbenchDocuments(t.Context(), "fixture/", 501, func(record configstore.WorkbenchDocumentRecord) (bool, error) {
 				ids = append(ids, record.ID)
-				if record.ID != "fixture/new" && (string(record.Payload) != `{"name":"迁移资料"}` || record.Revision != 1) {
+				if record.ID != "fixture/new" && (string(record.Payload) != string(payloads[record.ID]) || record.Revision != 1) {
 					t.Fatalf("imported document changed: %s", record.ID)
 				}
 				return true, nil
@@ -76,7 +87,10 @@ func TestDatabaseTransferWorkbenchDocumentsPreserveInsertionOrderAfterNewWrite(t
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !reflect.DeepEqual(ids, []string{"fixture/new", "fixture/a", "fixture/z"}) {
+			for left, right := 1, len(expectedIDs)-1; left < right; left, right = left+1, right-1 {
+				expectedIDs[left], expectedIDs[right] = expectedIDs[right], expectedIDs[left]
+			}
+			if !reflect.DeepEqual(ids, expectedIDs) {
 				t.Fatalf("insertion order=%v", ids)
 			}
 		})

@@ -118,7 +118,7 @@ func copyTable(ctx context.Context, tx *dbconn.Tx, item table) (TableReport, err
 		// Preserve legacy rowid order in the GENERATED ALWAYS identity column.
 		insert += ` OVERRIDING SYSTEM VALUE`
 	}
-	insert += ` VALUES(` + placeholders + `)`
+	batch := importBatch{tx: tx, insert: insert, tuple: `(` + placeholders + `)`, report: &report}
 	for rows.Next() {
 		values, err := valuesFrom(rows, count)
 		if err != nil {
@@ -131,15 +131,17 @@ func copyTable(ctx context.Context, tx *dbconn.Tx, item table) (TableReport, err
 				}
 			}
 		}
-		if _, err := tx.ExecContext(ctx, insert, values...); err != nil {
-			return report, fmt.Errorf("表 %s 第 %d 行无法导入（类型、长度、唯一性或关联不兼容）；未输出字段内容", item.name, report.Rows+1)
+		if err := batch.add(ctx, values); err != nil {
+			return report, err
 		}
-		report.Rows++
 	}
 	if err := rows.Err(); err != nil {
 		return report, err
 	}
 	if err := rows.Close(); err != nil {
+		return report, err
+	}
+	if err := batch.flush(ctx); err != nil {
 		return report, err
 	}
 	return report, nil

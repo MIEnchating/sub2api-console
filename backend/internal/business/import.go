@@ -3,6 +3,7 @@ package business
 import (
 	"context"
 	"database/sql"
+	"strings"
 	"time"
 
 	"github.com/MIEnchating/sub2api-console/backend/internal/dbconn"
@@ -47,12 +48,23 @@ func RebuildImportedState(ctx context.Context, tx *dbconn.Tx) error {
 		if err != nil {
 			return err
 		}
+		keys := make([]any, 0, len(entries)*2)
 		for _, value := range entries {
 			var key []byte
 			if stamp, err := time.Parse(time.RFC3339Nano, value.observed.String); value.observed.Valid && err == nil {
 				key = routingRecoveryTimeKey(stamp)
 			}
-			if _, err := tx.ExecContext(ctx, `UPDATE usage_records SET observed_key=? WHERE id=?`, key, value.id); err != nil {
+			if tx.Driver() == dbconn.Postgres {
+				keys = append(keys, value.id, key)
+			} else {
+				if _, err := tx.ExecContext(ctx, `UPDATE usage_records SET observed_key=? WHERE id=?`, key, value.id); err != nil {
+					return err
+				}
+			}
+		}
+		if len(keys) > 0 {
+			values := strings.TrimSuffix(strings.Repeat(`(?::bigint,?::bytea),`, len(entries)), ",")
+			if _, err := tx.ExecContext(ctx, `UPDATE usage_records AS u SET observed_key=v.observed_key FROM (VALUES `+values+`) AS v(id,observed_key) WHERE u.id=v.id`, keys...); err != nil {
 				return err
 			}
 		}
