@@ -21,7 +21,7 @@ func (s *Store) UpdateJSONSettings(ctx context.Context, keys []string, update fu
 		}
 		allowed[key] = true
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.beginSettingsTx(ctx, keys...)
 	if err != nil {
 		return err
 	}
@@ -46,7 +46,7 @@ func (s *Store) UpdateJSONSettings(ctx context.Context, keys []string, update fu
 		if !changed || exists && value == old {
 			continue
 		}
-		if _, err := tx.ExecContext(ctx, `INSERT OR REPLACE INTO settings(key,value) VALUES(?,?)`, key, value); err != nil {
+		if _, err := tx.ExecContext(ctx, s.dialect(`INSERT INTO settings("key",value) VALUES(?,?) ON CONFLICT("key") DO UPDATE SET value=excluded.value`, `INSERT INTO settings("key",value) VALUES(?,?) ON DUPLICATE KEY UPDATE value=VALUES(value)`), key, value); err != nil {
 			return err
 		}
 	}

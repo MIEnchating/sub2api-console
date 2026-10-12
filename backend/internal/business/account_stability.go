@@ -2,8 +2,8 @@ package business
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
+	"github.com/MIEnchating/sub2api-console/backend/internal/dbconn"
 	"strings"
 	"time"
 
@@ -134,11 +134,13 @@ func addStabilityCount(window *accountquality.Window, outcome string, count int)
 	}
 }
 
-func persistStabilitySample(ctx context.Context, tx *sql.Tx, accountID, source, key, at, outcome string, usageKnown bool) error {
-	_, err := tx.ExecContext(ctx, `INSERT INTO account_stability_samples(account_id,source,evidence_key,observed_at,outcome,usage_known)
+func persistStabilitySample(ctx context.Context, tx *dbconn.Tx, accountID, source, key, at, outcome string, usageKnown bool) error {
+	_, err := tx.ExecContext(ctx, tx.Dialect(`INSERT INTO account_stability_samples(account_id,source,evidence_key,observed_at,outcome,usage_known)
  VALUES(?,?,?,?,?,?) ON CONFLICT(account_id,source,evidence_key) DO UPDATE SET outcome=excluded.outcome,usage_known=excluded.usage_known
  WHERE excluded.observed_at>=account_stability_samples.observed_at
- AND (excluded.usage_known=1 OR account_stability_samples.usage_known=0)`, accountID, source, key, at, outcome, usageKnown)
+ AND (excluded.usage_known=1 OR account_stability_samples.usage_known=0)`, `INSERT INTO account_stability_samples(account_id,source,evidence_key,observed_at,outcome,usage_known) VALUES(?,?,?,?,?,?)
+ ON DUPLICATE KEY UPDATE outcome=IF(VALUES(observed_at)>=observed_at AND (VALUES(usage_known)=1 OR usage_known=0),VALUES(outcome),outcome),
+ usage_known=IF(VALUES(observed_at)>=observed_at AND (VALUES(usage_known)=1 OR usage_known=0),VALUES(usage_known),usage_known)`), accountID, source, key, at, outcome, boolDatabaseValue(usageKnown))
 	return err
 }
 

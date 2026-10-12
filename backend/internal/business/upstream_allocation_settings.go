@@ -108,7 +108,7 @@ func (s *Store) SetUpstreamAllocationSetting(ctx context.Context, kind, id strin
 	if strings.TrimSpace(update.ExpectedRevision) == "" {
 		return UpstreamAllocationSetting{}, errors.New("请刷新共享并发设置后重试")
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.beginPolicyTx(ctx, "control-plane")
 	if err != nil {
 		return UpstreamAllocationSetting{}, err
 	}
@@ -160,7 +160,11 @@ func (s *Store) SetUpstreamAllocationSetting(ctx context.Context, kind, id strin
 	if err != nil {
 		return UpstreamAllocationSetting{}, err
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO runtime_events(source_id,event_type,created_at,status,summary,payload_json) VALUES((SELECT COALESCE(MIN(source_id),0)-1 FROM runtime_events WHERE source_id<0),?,?,?,?,?)`, "policy.upstream_allocation", now, "succeeded", "上游共享并发分配设置已更新", string(payload)); err != nil {
+	eventID, err := nextLocalEventID(ctx, tx, "runtime_events")
+	if err != nil {
+		return UpstreamAllocationSetting{}, err
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO runtime_events(source_id,event_type,created_at,status,summary,payload_json) VALUES(?,?,?,?,?,?)`, eventID, "policy.upstream_allocation", now, "succeeded", "上游共享并发分配设置已更新", string(payload)); err != nil {
 		return UpstreamAllocationSetting{}, err
 	}
 	if err := tx.Commit(); err != nil {

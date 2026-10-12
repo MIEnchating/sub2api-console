@@ -8,6 +8,8 @@ import (
 )
 
 func TestLoadRejectsInvalidCookieSecureInsteadOfDisablingIt(t *testing.T) {
+	t.Setenv("SUB2API_CONSOLE_DB_DRIVER", "sqlite")
+	t.Setenv("SUB2API_CONSOLE_DB_DSN", "")
 	t.Setenv("SUB2API_CONSOLE_COOKIE_SECURE", "tru")
 	_, err := Load()
 	if err == nil || !strings.Contains(err.Error(), "SUB2API_CONSOLE_COOKIE_SECURE") {
@@ -16,6 +18,8 @@ func TestLoadRejectsInvalidCookieSecureInsteadOfDisablingIt(t *testing.T) {
 }
 
 func TestLoadAcceptsExplicitSecureCookieSetting(t *testing.T) {
+	t.Setenv("SUB2API_CONSOLE_DB_DRIVER", "sqlite")
+	t.Setenv("SUB2API_CONSOLE_DB_DSN", "")
 	t.Setenv("SUB2API_CONSOLE_COOKIE_SECURE", "true")
 	loaded, err := Load()
 	if err != nil {
@@ -27,6 +31,8 @@ func TestLoadAcceptsExplicitSecureCookieSetting(t *testing.T) {
 }
 
 func TestLoadAcceptsTrustedProxyCIDRs(t *testing.T) {
+	t.Setenv("SUB2API_CONSOLE_DB_DRIVER", "sqlite")
+	t.Setenv("SUB2API_CONSOLE_DB_DSN", "")
 	t.Setenv("SUB2API_CONSOLE_TRUSTED_PROXY_CIDRS", "172.16.0.0/12, 10.0.0.8/32")
 	loaded, err := Load()
 	if err != nil {
@@ -47,6 +53,8 @@ func TestLoadAcceptsTrustedProxyCIDRs(t *testing.T) {
 }
 
 func TestLoadRejectsInvalidTrustedProxyCIDR(t *testing.T) {
+	t.Setenv("SUB2API_CONSOLE_DB_DRIVER", "sqlite")
+	t.Setenv("SUB2API_CONSOLE_DB_DSN", "")
 	t.Setenv("SUB2API_CONSOLE_TRUSTED_PROXY_CIDRS", "172.16.0.0/12,not-a-cidr")
 	_, err := Load()
 	if err == nil || !strings.Contains(err.Error(), "SUB2API_CONSOLE_TRUSTED_PROXY_CIDRS") {
@@ -55,6 +63,8 @@ func TestLoadRejectsInvalidTrustedProxyCIDR(t *testing.T) {
 }
 
 func TestLoadAcceptsAbsoluteTrustedProxySocket(t *testing.T) {
+	t.Setenv("SUB2API_CONSOLE_DB_DRIVER", "sqlite")
+	t.Setenv("SUB2API_CONSOLE_DB_DSN", "")
 	want := filepath.Join(t.TempDir(), "proxy", "api.sock")
 	t.Setenv("SUB2API_CONSOLE_TRUSTED_PROXY_SOCKET", want)
 	loaded, err := Load()
@@ -67,6 +77,8 @@ func TestLoadAcceptsAbsoluteTrustedProxySocket(t *testing.T) {
 }
 
 func TestLoadRejectsRelativeTrustedProxySocket(t *testing.T) {
+	t.Setenv("SUB2API_CONSOLE_DB_DRIVER", "sqlite")
+	t.Setenv("SUB2API_CONSOLE_DB_DSN", "")
 	t.Setenv("SUB2API_CONSOLE_TRUSTED_PROXY_SOCKET", "run/api.sock")
 	_, err := Load()
 	if err == nil || !strings.Contains(err.Error(), "SUB2API_CONSOLE_TRUSTED_PROXY_SOCKET") {
@@ -75,6 +87,8 @@ func TestLoadRejectsRelativeTrustedProxySocket(t *testing.T) {
 }
 
 func TestLoadAcceptsStrongSetupToken(t *testing.T) {
+	t.Setenv("SUB2API_CONSOLE_DB_DRIVER", "sqlite")
+	t.Setenv("SUB2API_CONSOLE_DB_DSN", "")
 	t.Setenv("SUB2API_CONSOLE_SETUP_TOKEN", strings.Repeat("a", 32))
 	loaded, err := Load()
 	if err != nil {
@@ -86,6 +100,8 @@ func TestLoadAcceptsStrongSetupToken(t *testing.T) {
 }
 
 func TestLoadRejectsWeakSetupToken(t *testing.T) {
+	t.Setenv("SUB2API_CONSOLE_DB_DRIVER", "sqlite")
+	t.Setenv("SUB2API_CONSOLE_DB_DSN", "")
 	t.Setenv("SUB2API_CONSOLE_SETUP_TOKEN", "short-token")
 	_, err := Load()
 	if err == nil || !strings.Contains(err.Error(), "SUB2API_CONSOLE_SETUP_TOKEN") {
@@ -94,6 +110,8 @@ func TestLoadRejectsWeakSetupToken(t *testing.T) {
 }
 
 func TestLoadRejectsWeakAdminToken(t *testing.T) {
+	t.Setenv("SUB2API_CONSOLE_DB_DRIVER", "sqlite")
+	t.Setenv("SUB2API_CONSOLE_DB_DSN", "")
 	t.Setenv("SUB2API_CONSOLE_CONSOLE_ADMIN_TOKEN", "short-token")
 	_, err := Load()
 	if err == nil || !strings.Contains(err.Error(), "SUB2API_CONSOLE_CONSOLE_ADMIN_TOKEN") {
@@ -102,6 +120,8 @@ func TestLoadRejectsWeakAdminToken(t *testing.T) {
 }
 
 func TestLoadReadsTaskConcurrencyAndQueueCapacity(t *testing.T) {
+	t.Setenv("SUB2API_CONSOLE_DB_DRIVER", "sqlite")
+	t.Setenv("SUB2API_CONSOLE_DB_DSN", "")
 	t.Setenv("SUB2API_TASK_CONCURRENCY_ACCOUNT", "12")
 	t.Setenv("SUB2API_TASK_QUEUE_CAPACITY", "25")
 	loaded, err := Load()
@@ -114,6 +134,8 @@ func TestLoadReadsTaskConcurrencyAndQueueCapacity(t *testing.T) {
 }
 
 func TestLoadRejectsInvalidTaskConcurrency(t *testing.T) {
+	t.Setenv("SUB2API_CONSOLE_DB_DRIVER", "sqlite")
+	t.Setenv("SUB2API_CONSOLE_DB_DSN", "")
 	t.Setenv("SUB2API_TASK_CONCURRENCY_PROBE", "0")
 	_, err := Load()
 	if err == nil || !strings.Contains(err.Error(), "SUB2API_TASK_CONCURRENCY_PROBE") {

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/MIEnchating/sub2api-console/backend/internal/dbconn"
 	"sort"
 	"strconv"
 	"strings"
@@ -103,7 +104,7 @@ func (s *Store) pricingCatalog(ctx context.Context, accountIDs []string) (Pricin
 	locked := controlAccountIDs(scope[groupLockedAccountIDs])
 	catalog := PricingCatalog{Accounts: []PricingAccount{}, Groups: []PricingGroup{}}
 	groupRows, err := s.db.QueryContext(ctx, `SELECT name,remote_id,platform,rate_multiplier
-		FROM local_groups ORDER BY CASE WHEN remote_id GLOB '[0-9]*' THEN CAST(remote_id AS INTEGER) ELSE 0 END,remote_id,name`)
+		FROM local_groups ORDER BY `+numericIDOrder(s.db.Driver(), "remote_id")+`,remote_id,name`)
 	if err != nil {
 		return PricingCatalog{}, err
 	}
@@ -138,9 +139,12 @@ func (s *Store) pricingCatalog(ctx context.Context, accountIDs []string) (Pricin
 	accountQuery := `SELECT a.id,a.name,a.multiplier,
 		(SELECT CASE WHEN field.type='text' THEN field.value END
 		 FROM json_each(CASE WHEN json_valid(a.metadata_json) THEN a.metadata_json ELSE '{}' END) field
-		 WHERE field.key='platform' ORDER BY field.id DESC LIMIT 1) AS platform,
+		 WHERE field."key"='platform' ORDER BY field.id DESC LIMIT 1) AS platform,
 		CASE WHEN NOT json_valid(a.metadata_json) THEN a.metadata_json END AS legacy_metadata,
 		EXISTS(SELECT 1 FROM manual_priority_accounts m WHERE m.account_id=a.id) FROM accounts a`
+	if s.db.Driver() != dbconn.SQLite {
+		accountQuery = `SELECT a.id,a.name,a.multiplier,` + jsonFieldSQL(s.db.Driver(), "a.metadata_json", "platform", true) + ` AS platform,CASE WHEN NOT ` + jsonValidSQL(s.db.Driver(), "a.metadata_json") + ` THEN a.metadata_json END AS legacy_metadata,EXISTS(SELECT 1 FROM manual_priority_accounts m WHERE m.account_id=a.id) FROM accounts a`
+	}
 	args := []any{}
 	scopePredicate := ""
 	if accountIDs != nil {
@@ -152,12 +156,12 @@ func (s *Store) pricingCatalog(ctx context.Context, accountIDs []string) (Pricin
 			if err != nil {
 				return PricingCatalog{}, err
 			}
-			scopePredicate = ` IN (SELECT value FROM json_each(?))`
+			scopePredicate = ` IN (SELECT value FROM ` + jsonScopeRows(s.db.Driver()) + ` scope)`
 			args = append(args, string(encoded))
 		}
 		accountQuery += ` WHERE a.id` + scopePredicate
 	}
-	accountQuery += ` ORDER BY CASE WHEN a.id GLOB '[0-9]*' THEN CAST(a.id AS INTEGER) ELSE 0 END,a.id`
+	accountQuery += ` ORDER BY ` + numericIDOrder(s.db.Driver(), "a.id") + `,a.id`
 	accountRows, err := s.db.QueryContext(ctx, accountQuery, args...)
 	if err != nil {
 		return PricingCatalog{}, err
@@ -356,7 +360,7 @@ func (s *Store) SyncPricingAccountGroups(ctx context.Context, changes map[string
 		return PricingSyncResult{}, err
 	}
 	var eventID int64
-	if err := tx.QueryRowContext(ctx, `SELECT MIN(source_id) FROM runtime_events WHERE source_id < 0`).Scan(&eventID); err != nil {
+	if err := tx.QueryRowContext(ctx, lastLocalEventIDSQL(tx, "runtime_events")).Scan(&eventID); err != nil {
 		return PricingSyncResult{}, err
 	}
 	if err := tx.Commit(); err != nil {

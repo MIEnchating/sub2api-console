@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"github.com/MIEnchating/sub2api-console/backend/internal/dbconn"
 	"sort"
 	"strings"
 	"time"
@@ -52,7 +53,7 @@ func (s *Store) ensureStableUpstreamRelationsForID(ctx context.Context, upstream
 	return tx.Commit()
 }
 
-func ensureBindingIdentitiesTx(ctx context.Context, tx *sql.Tx, upstreamID string) error {
+func ensureBindingIdentitiesTx(ctx context.Context, tx *dbconn.Tx, upstreamID string) error {
 	query := `INSERT INTO binding_identities(binding_id,upstream_id,upstream_key_id,upstream_group_id,updated_at)
 		SELECT b.id,h.upstream_id,b.upstream_key_id,NULLIF(TRIM(b.upstream_group_id),''),b.updated_at
 		FROM bindings b JOIN upstream_identity_hosts h ON h.host=b.upstream_host`
@@ -63,8 +64,8 @@ func ensureBindingIdentitiesTx(ctx context.Context, tx *sql.Tx, upstreamID strin
 	} else {
 		query += ` WHERE 1=1`
 	}
-	query += ` ON CONFLICT(binding_id) DO UPDATE SET upstream_id=excluded.upstream_id,
-		upstream_key_id=excluded.upstream_key_id,upstream_group_id=excluded.upstream_group_id,updated_at=excluded.updated_at`
+	query += tx.Dialect(` ON CONFLICT(binding_id) DO UPDATE SET upstream_id=excluded.upstream_id,
+		upstream_key_id=excluded.upstream_key_id,upstream_group_id=excluded.upstream_group_id,updated_at=excluded.updated_at`, ` ON DUPLICATE KEY UPDATE upstream_id=VALUES(upstream_id),upstream_key_id=VALUES(upstream_key_id),upstream_group_id=VALUES(upstream_group_id),updated_at=VALUES(updated_at)`)
 	if _, err := tx.ExecContext(ctx, query, arguments...); err != nil {
 		return err
 	}
@@ -80,7 +81,7 @@ func ensureBindingIdentitiesTx(ctx context.Context, tx *sql.Tx, upstreamID strin
 	return err
 }
 
-func ensureCatalogEntitiesFromRowsTx(ctx context.Context, tx *sql.Tx, upstreamID string) error {
+func ensureCatalogEntitiesFromRowsTx(ctx context.Context, tx *dbconn.Tx, upstreamID string) error {
 	updateQuery := `UPDATE upstream_catalog_entities SET
 		lifecycle_state='suspected',missing_observations=1,confirmed_missing_at=NULL
 		WHERE lifecycle_state='missing' AND missing_observations=?
@@ -155,7 +156,7 @@ func ensureCatalogEntitiesFromRowsTx(ctx context.Context, tx *sql.Tx, upstreamID
 		if lifecycle == "missing" {
 			confirmedMissingAt = item.updatedAt
 		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO upstream_catalog_entities(
+		if _, err := tx.InsertIfAbsentContext(ctx, `INSERT INTO upstream_catalog_entities(
 			upstream_id,entity_kind,entity_id,parent_entity_id,name,observed_status,lifecycle_state,missing_observations,
 			last_seen_at,missing_since,confirmed_missing_at,updated_at
 		) VALUES(?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(upstream_id,entity_kind,entity_id) DO NOTHING`,
@@ -182,7 +183,7 @@ func initialCatalogLifecycle(status string) (string, int64) {
 	}
 }
 
-func ensureCatalogEntitiesFromBindingsTx(ctx context.Context, tx *sql.Tx, upstreamID, now string) error {
+func ensureCatalogEntitiesFromBindingsTx(ctx context.Context, tx *dbconn.Tx, upstreamID, now string) error {
 	filter, arguments := "", []any{}
 	if strings.TrimSpace(upstreamID) != "" {
 		filter = " AND bi.upstream_id=?"
@@ -193,8 +194,7 @@ func ensureCatalogEntitiesFromBindingsTx(ctx context.Context, tx *sql.Tx, upstre
 	) SELECT DISTINCT bi.upstream_id,'key',bi.upstream_key_id,bi.upstream_group_id,
 		COALESCE(NULLIF(TRIM(b.upstream_key_name),''),bi.upstream_key_id),'active',0,?
 		FROM binding_identities bi JOIN bindings b ON b.id=bi.binding_id
-		WHERE TRIM(bi.upstream_key_id)<>''`+filter+`
-		ON CONFLICT(upstream_id,entity_kind,entity_id) DO NOTHING`, append([]any{now}, arguments...)...); err != nil {
+		WHERE TRIM(bi.upstream_key_id)<>''`+filter+tx.Dialect(` ON CONFLICT(upstream_id,entity_kind,entity_id) DO NOTHING`, ` ON DUPLICATE KEY UPDATE entity_id=upstream_catalog_entities.entity_id`), append([]any{now}, arguments...)...); err != nil {
 		return err
 	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO upstream_catalog_entities(
@@ -202,8 +202,7 @@ func ensureCatalogEntitiesFromBindingsTx(ctx context.Context, tx *sql.Tx, upstre
 	) SELECT DISTINCT bi.upstream_id,'group',bi.upstream_group_id,
 		COALESCE(NULLIF(TRIM(b.upstream_group),''),bi.upstream_group_id),'active',0,?
 		FROM binding_identities bi JOIN bindings b ON b.id=bi.binding_id
-		WHERE TRIM(COALESCE(bi.upstream_group_id,''))<>''`+filter+`
-		ON CONFLICT(upstream_id,entity_kind,entity_id) DO NOTHING`, append([]any{now}, arguments...)...); err != nil {
+		WHERE TRIM(COALESCE(bi.upstream_group_id,''))<>''`+filter+tx.Dialect(` ON CONFLICT(upstream_id,entity_kind,entity_id) DO NOTHING`, ` ON DUPLICATE KEY UPDATE entity_id=upstream_catalog_entities.entity_id`), append([]any{now}, arguments...)...); err != nil {
 		return err
 	}
 	return nil
@@ -211,7 +210,7 @@ func ensureCatalogEntitiesFromBindingsTx(ctx context.Context, tx *sql.Tx, upstre
 
 func upsertLiveCatalogEntitiesTx(
 	ctx context.Context,
-	tx *sql.Tx,
+	tx *dbconn.Tx,
 	upstreamID string,
 	groups []UpstreamCatalogGroup,
 	keys []UpstreamCatalogKey,
@@ -243,11 +242,14 @@ func upsertLiveCatalogEntitiesTx(
 		}
 	}
 	for _, group := range groups {
-		if _, err := tx.ExecContext(ctx, `INSERT INTO upstream_catalog_entities(
+		if _, err := tx.ExecContext(ctx, tx.Dialect(`INSERT INTO upstream_catalog_entities(
 			upstream_id,entity_kind,entity_id,name,observed_status,lifecycle_state,missing_observations,last_seen_at,updated_at
 		) VALUES(?,'group',?,?,?,'active',0,?,?) ON CONFLICT(upstream_id,entity_kind,entity_id) DO UPDATE SET
 			name=excluded.name,observed_status=excluded.observed_status,lifecycle_state='active',missing_observations=0,
-			last_seen_at=excluded.last_seen_at,missing_since=NULL,confirmed_missing_at=NULL,updated_at=excluded.updated_at`,
+			last_seen_at=excluded.last_seen_at,missing_since=NULL,confirmed_missing_at=NULL,updated_at=excluded.updated_at`, `INSERT INTO upstream_catalog_entities(
+			upstream_id,entity_kind,entity_id,name,observed_status,lifecycle_state,missing_observations,last_seen_at,updated_at
+		) VALUES(?,'group',?,?,?,'active',0,?,?) ON DUPLICATE KEY UPDATE name=VALUES(name),observed_status=VALUES(observed_status),lifecycle_state='active',missing_observations=0,
+			last_seen_at=VALUES(last_seen_at),missing_since=NULL,confirmed_missing_at=NULL,updated_at=VALUES(updated_at)`),
 			upstreamID, group.GroupID, group.Name, group.Status, now, now); err != nil {
 			return err
 		}
@@ -259,12 +261,16 @@ func upsertLiveCatalogEntitiesTx(
 				parentID = stringPointer(stableID)
 			}
 		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO upstream_catalog_entities(
+		if _, err := tx.ExecContext(ctx, tx.Dialect(`INSERT INTO upstream_catalog_entities(
 			upstream_id,entity_kind,entity_id,parent_entity_id,name,observed_status,lifecycle_state,missing_observations,last_seen_at,updated_at
 		) VALUES(?,'key',?,?,?,?, 'active',0,?,?) ON CONFLICT(upstream_id,entity_kind,entity_id) DO UPDATE SET
 			parent_entity_id=excluded.parent_entity_id,name=excluded.name,observed_status=excluded.observed_status,
 			lifecycle_state='active',missing_observations=0,last_seen_at=excluded.last_seen_at,
-			missing_since=NULL,confirmed_missing_at=NULL,updated_at=excluded.updated_at`,
+			missing_since=NULL,confirmed_missing_at=NULL,updated_at=excluded.updated_at`, `INSERT INTO upstream_catalog_entities(
+			upstream_id,entity_kind,entity_id,parent_entity_id,name,observed_status,lifecycle_state,missing_observations,last_seen_at,updated_at
+		) VALUES(?,'key',?,?,?,?, 'active',0,?,?) ON DUPLICATE KEY UPDATE parent_entity_id=VALUES(parent_entity_id),name=VALUES(name),observed_status=VALUES(observed_status),
+			lifecycle_state='active',missing_observations=0,last_seen_at=VALUES(last_seen_at),
+			missing_since=NULL,confirmed_missing_at=NULL,updated_at=VALUES(updated_at)`),
 			upstreamID, key.KeyID, parentID, key.Name, key.Status, now, now); err != nil {
 			return err
 		}
@@ -272,7 +278,7 @@ func upsertLiveCatalogEntitiesTx(
 	return nil
 }
 
-func recordLiveGroupAdditionsTx(ctx context.Context, tx *sql.Tx, upstreamID string, groups []UpstreamCatalogGroup, now string) error {
+func recordLiveGroupAdditionsTx(ctx context.Context, tx *dbconn.Tx, upstreamID string, groups []UpstreamCatalogGroup, now string) error {
 	rows, err := tx.QueryContext(ctx, `SELECT entity_id,lifecycle_state FROM upstream_catalog_entities
 		WHERE upstream_id=? AND entity_kind='group'`, upstreamID)
 	if err != nil {
@@ -321,7 +327,7 @@ func recordLiveGroupAdditionsTx(ctx context.Context, tx *sql.Tx, upstreamID stri
 	return nil
 }
 
-func updateLiveGroupAdditionNamesTx(ctx context.Context, tx *sql.Tx, upstreamID string, groups []UpstreamCatalogGroup) error {
+func updateLiveGroupAdditionNamesTx(ctx context.Context, tx *dbconn.Tx, upstreamID string, groups []UpstreamCatalogGroup) error {
 	updated := map[string]struct{}{}
 	for _, group := range groups {
 		groupID := strings.TrimSpace(group.GroupID)
@@ -338,9 +344,9 @@ func updateLiveGroupAdditionNamesTx(ctx context.Context, tx *sql.Tx, upstreamID 
 		}
 		_, err := tx.ExecContext(ctx, `UPDATE upstream_group_change_events
 			SET group_name=?
-			WHERE id=(SELECT id FROM upstream_group_change_events
+			WHERE id=(SELECT id FROM (SELECT id FROM upstream_group_change_events
 				WHERE upstream_id=? AND group_id=?
-				ORDER BY changed_at DESC,id DESC LIMIT 1)
+				ORDER BY changed_at DESC,id DESC LIMIT 1) AS latest_change)
 			AND change_type='added'`, name, upstreamID, groupID)
 		if err != nil {
 			return err
@@ -349,7 +355,7 @@ func updateLiveGroupAdditionNamesTx(ctx context.Context, tx *sql.Tx, upstreamID 
 	return nil
 }
 
-func reconcileCatalogEntitiesTx(ctx context.Context, tx *sql.Tx, upstreamID, kind string, live map[string]struct{}, now string) error {
+func reconcileCatalogEntitiesTx(ctx context.Context, tx *dbconn.Tx, upstreamID, kind string, live map[string]struct{}, now string) error {
 	rows, err := tx.QueryContext(ctx, `SELECT entity_id,name,lifecycle_state,missing_observations FROM upstream_catalog_entities
 		WHERE upstream_id=? AND entity_kind=?`, upstreamID, kind)
 	if err != nil {

@@ -2,7 +2,7 @@ package business
 
 import (
 	"context"
-	"database/sql"
+	"github.com/MIEnchating/sub2api-console/backend/internal/dbconn"
 )
 
 const legacyPolicyChangeReason = "等待写回期间策略已变化，请重新计算调度"
@@ -45,7 +45,7 @@ func legacyPolicyChangeAlertKeys(ctx context.Context, queryer policyQueryer) (ma
 	return keys, rows.Err()
 }
 
-func closeLegacyPolicyChangeAlerts(ctx context.Context, tx *sql.Tx, now string) error {
+func closeLegacyPolicyChangeAlerts(ctx context.Context, tx *dbconn.Tx, now string) error {
 	keys, err := legacyPolicyChangeAlertKeys(ctx, tx)
 	if err != nil {
 		return err

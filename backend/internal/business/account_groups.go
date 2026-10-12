@@ -2,14 +2,14 @@ package business
 
 import (
 	"context"
-	"database/sql"
 	"errors"
+	"github.com/MIEnchating/sub2api-console/backend/internal/dbconn"
 	"slices"
 )
 
 // CommitAccountGroups saves confirmed membership and its audit in one transaction.
 func (s *Store) CommitAccountGroups(ctx context.Context, accountID string, before, after []string, operation AccountOperation) error {
-	return s.commitAccountMutation(ctx, accountID, operation, func(tx *sql.Tx, now string) error {
+	return s.commitAccountMutation(ctx, accountID, operation, func(tx *dbconn.Tx, now string) error {
 		if err := s.requireAccountGroupsUnlocked(ctx, tx, accountID); err != nil {
 			return err
 		}
@@ -72,8 +72,8 @@ func (s *Store) CommitAccountGroups(ctx context.Context, accountID string, befor
 }
 
 // Aggregate stable identities separately from legacy memberships without IDs.
-func refreshAccountGroupCounts(ctx context.Context, tx *sql.Tx, now string) error {
-	_, err := tx.ExecContext(ctx, `WITH
+func refreshAccountGroupCounts(ctx context.Context, tx *dbconn.Tx, now string) error {
+	_, err := tx.ExecContext(ctx, tx.Dialect(`WITH
 		stable_counts AS MATERIALIZED (
 			SELECT group_id,COUNT(*) AS total FROM account_groups
 			WHERE group_id IS NOT NULL GROUP BY group_id
@@ -85,6 +85,9 @@ func refreshAccountGroupCounts(ctx context.Context, tx *sql.Tx, now string) erro
 		UPDATE local_groups SET account_count=
 			COALESCE((SELECT total FROM stable_counts WHERE group_id=local_groups.remote_id),0)+
 			COALESCE((SELECT total FROM legacy_counts WHERE group_name=local_groups.name),0),
-			updated_at=?`, now)
+			updated_at=?`, `UPDATE local_groups g
+		LEFT JOIN (SELECT group_id,COUNT(*) AS total FROM account_groups WHERE group_id IS NOT NULL GROUP BY group_id) stable_counts ON stable_counts.group_id=g.remote_id
+		LEFT JOIN (SELECT group_name,COUNT(*) AS total FROM account_groups WHERE group_id IS NULL GROUP BY group_name) legacy_counts ON legacy_counts.group_name=g.name
+		SET g.account_count=COALESCE(stable_counts.total,0)+COALESCE(legacy_counts.total,0),g.updated_at=?`), now)
 	return err
 }

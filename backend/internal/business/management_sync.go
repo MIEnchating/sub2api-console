@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/MIEnchating/sub2api-console/backend/internal/dbconn"
 	"sort"
 	"strconv"
 	"strings"
@@ -26,8 +27,7 @@ type ManagementSyncResult struct {
 }
 
 func (s *Store) ManagementAccountIDs(ctx context.Context) ([]string, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id FROM accounts ORDER BY
-		CASE WHEN id GLOB '[0-9]*' THEN CAST(id AS INTEGER) ELSE 0 END,id`)
+	rows, err := s.db.QueryContext(ctx, `SELECT id FROM accounts ORDER BY `+numericIDOrder(s.db.Driver(), "id")+`,id`)
 	if err != nil {
 		return nil, err
 	}
@@ -118,7 +118,7 @@ func (s *Store) CommitAccountBaseURLObservations(ctx context.Context, values []A
 		}
 		seen[accountID] = struct{}{}
 		var metadataRaw string
-		if err := tx.QueryRowContext(ctx, `SELECT metadata_json FROM accounts WHERE id=?`, accountID).Scan(&metadataRaw); err != nil {
+		if err := tx.QueryRowContext(ctx, `SELECT metadata_json FROM accounts WHERE id=?`+tx.LockClause(), accountID).Scan(&metadataRaw); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				return fmt.Errorf("Base URL 观测账号 %s 不存在", accountID)
 			}
@@ -205,7 +205,7 @@ func (s *Store) syncManagementSnapshot(
 	if err != nil {
 		return ManagementSyncResult{}, err
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.beginPolicyTx(ctx, "control-plane")
 	if err != nil {
 		return ManagementSyncResult{}, err
 	}
@@ -252,10 +252,12 @@ func (s *Store) syncManagementSnapshot(
 		if err != nil {
 			return ManagementSyncResult{}, fmt.Errorf("分组 %s 的平台无效：%w", name, err)
 		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO local_groups(
+		if _, err := tx.ExecContext(ctx, tx.Dialect(`INSERT INTO local_groups(
 			name,remote_id,strategy,strategy_source,platform,rate_multiplier,updated_at
 		) VALUES(?,?,?,?,?,?,?) ON CONFLICT(name) DO UPDATE SET
-			remote_id=excluded.remote_id,platform=excluded.platform,rate_multiplier=excluded.rate_multiplier,updated_at=excluded.updated_at`,
+			remote_id=excluded.remote_id,platform=excluded.platform,rate_multiplier=excluded.rate_multiplier,updated_at=excluded.updated_at`, `INSERT INTO local_groups(
+			name,remote_id,strategy,strategy_source,platform,rate_multiplier,updated_at
+		) VALUES(?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE remote_id=VALUES(remote_id),platform=VALUES(platform),rate_multiplier=VALUES(rate_multiplier),updated_at=VALUES(updated_at)`),
 			name, groupID, globalStrategy, "global_default", managementNullableString(platform), managementNullableString(rate), now,
 		); err != nil {
 			return ManagementSyncResult{}, err
@@ -280,7 +282,7 @@ func (s *Store) syncManagementSnapshot(
 		if err != nil {
 			return ManagementSyncResult{}, fmt.Errorf("账号 %s 元数据无法序列化：%w", account.ID, err)
 		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO accounts(
+		if _, err := tx.ExecContext(ctx, tx.Dialect(`INSERT INTO accounts(
 			id,name,upstream_host,upstream_type,schedulable,priority,load_factor,concurrency,multiplier,balance,
 			paused,paused_reason,routing_state,routing_tier,health_status,failure_streak,recovery_pass_streak,metadata_json,updated_at
 		) VALUES(?,?,?,?,?,?,?,?,?,?,0,NULL,?,NULL,?,NULL,NULL,?,?) ON CONFLICT(id) DO UPDATE SET
@@ -288,7 +290,14 @@ func (s *Store) syncManagementSnapshot(
 			schedulable=excluded.schedulable,priority=excluded.priority,load_factor=excluded.load_factor,
 			concurrency=excluded.concurrency,multiplier=excluded.multiplier,balance=excluded.balance,
 			routing_state=excluded.routing_state,health_status=excluded.health_status,
-			metadata_json=excluded.metadata_json,updated_at=excluded.updated_at`,
+			metadata_json=excluded.metadata_json,updated_at=excluded.updated_at`, `INSERT INTO accounts(
+			id,name,upstream_host,upstream_type,schedulable,priority,load_factor,concurrency,multiplier,balance,
+			paused,paused_reason,routing_state,routing_tier,health_status,failure_streak,recovery_pass_streak,metadata_json,updated_at
+		) VALUES(?,?,?,?,?,?,?,?,?,?,0,NULL,?,NULL,?,NULL,NULL,?,?) ON DUPLICATE KEY UPDATE name=VALUES(name),upstream_host=VALUES(upstream_host),upstream_type=VALUES(upstream_type),
+			schedulable=VALUES(schedulable),priority=VALUES(priority),load_factor=VALUES(load_factor),
+			concurrency=VALUES(concurrency),multiplier=VALUES(multiplier),balance=VALUES(balance),
+			routing_state=VALUES(routing_state),health_status=VALUES(health_status),
+			metadata_json=VALUES(metadata_json),updated_at=VALUES(updated_at)`),
 			account.ID, account.Name, managementNullableString(account.UpstreamHost), managementNullableString(account.UpstreamType),
 			managementNullableBool(account.Schedulable), managementNullableInt(account.Priority), managementNullableString(account.LoadFactor),
 			managementNullableInt(account.Concurrency), managementNullableString(account.Multiplier), managementNullableString(account.Balance),
@@ -322,9 +331,10 @@ func (s *Store) syncManagementSnapshot(
 					}
 				}
 				if _, found := groupsByName[membership.Name]; !found {
-					if _, err := tx.ExecContext(ctx, `INSERT INTO local_groups(name,remote_id,strategy,strategy_source,updated_at)
+					if _, err := tx.ExecContext(ctx, tx.Dialect(`INSERT INTO local_groups(name,remote_id,strategy,strategy_source,updated_at)
 						VALUES(?,?,?,?,?) ON CONFLICT(name) DO UPDATE SET
-						remote_id=COALESCE(local_groups.remote_id,excluded.remote_id),updated_at=excluded.updated_at`,
+						remote_id=COALESCE(local_groups.remote_id,excluded.remote_id),updated_at=excluded.updated_at`, `INSERT INTO local_groups(name,remote_id,strategy,strategy_source,updated_at)
+						VALUES(?,?,?,?,?) ON DUPLICATE KEY UPDATE remote_id=COALESCE(local_groups.remote_id,VALUES(remote_id)),updated_at=VALUES(updated_at)`),
 						membership.Name, managementNullableString(membership.ID), globalStrategy, "global_default", now); err != nil {
 						return ManagementSyncResult{}, err
 					}
@@ -359,7 +369,7 @@ func (s *Store) syncManagementSnapshot(
 		return ManagementSyncResult{}, err
 	}
 	var eventID int64
-	if err := tx.QueryRowContext(ctx, `SELECT MIN(source_id) FROM runtime_events WHERE source_id < 0`).Scan(&eventID); err != nil {
+	if err := tx.QueryRowContext(ctx, lastLocalEventIDSQL(tx, "runtime_events")).Scan(&eventID); err != nil {
 		return ManagementSyncResult{}, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -374,7 +384,7 @@ func (s *Store) syncManagementSnapshot(
 
 func managementAccountGroupsChanged(
 	ctx context.Context,
-	tx *sql.Tx,
+	tx *dbconn.Tx,
 	accountID string,
 	desired []managementMembership,
 ) (bool, error) {
@@ -425,7 +435,7 @@ type managementDeletedGroup struct {
 func pruneManagementDeletedGroups(
 	ctx context.Context,
 	store *Store,
-	tx *sql.Tx,
+	tx *dbconn.Tx,
 	remoteGroups map[string]string,
 	separatedDeletedIDs map[string]struct{},
 	now string,
@@ -501,7 +511,7 @@ func pruneManagementDeletedGroups(
 
 func archiveManagementDeletedGroupReferences(
 	ctx context.Context,
-	tx *sql.Tx,
+	tx *dbconn.Tx,
 	group managementDeletedGroup,
 ) (string, error) {
 	base := managementDeletedGroupArchiveBase(group.name, group.id)
@@ -522,7 +532,7 @@ func archiveManagementDeletedGroupReferences(
 	return archivedName, nil
 }
 
-func managementGroupReferenceNameOccupied(ctx context.Context, tx *sql.Tx, name string) (bool, error) {
+func managementGroupReferenceNameOccupied(ctx context.Context, tx *dbconn.Tx, name string) (bool, error) {
 	var occupied bool
 	err := tx.QueryRowContext(ctx, `SELECT
 		EXISTS(SELECT 1 FROM local_groups WHERE name=?) OR
@@ -657,7 +667,7 @@ type managementLocalGroupIdentity struct {
 // when a new ID reuses its former name.
 func stageManagementGroupIdentityConflicts(
 	ctx context.Context,
-	tx *sql.Tx,
+	tx *dbconn.Tx,
 	remoteGroupsByID map[string]string,
 	remoteGroupsByName map[string]string,
 	separatedDeletedIDs map[string]struct{},
@@ -756,13 +766,13 @@ func stageManagementGroupIdentityConflicts(
 	return nil
 }
 
-func reconcileManagementGroupIdentity(ctx context.Context, tx *sql.Tx, groupID, currentName, now string) error {
+func reconcileManagementGroupIdentity(ctx context.Context, tx *dbconn.Tx, groupID, currentName, now string) error {
 	return reconcileManagementGroupIdentityFrom(ctx, tx, groupID, currentName, currentName, now)
 }
 
 func reconcileManagementGroupIdentityFrom(
 	ctx context.Context,
-	tx *sql.Tx,
+	tx *dbconn.Tx,
 	groupID string,
 	currentName string,
 	preferredName string,
@@ -829,14 +839,20 @@ func reconcileManagementGroupIdentityFrom(
 	if err := migrateManagementGroupReferences(ctx, tx, groupID, currentName, staleNames); err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO local_groups(
+	if _, err := tx.ExecContext(ctx, tx.Dialect(`INSERT INTO local_groups(
 		name,remote_id,strategy,strategy_source,platform,rate_multiplier,profit_control_enabled,
 		profit_min_margin,profit_safety_buffer,account_count,updated_at
 	) VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(name) DO UPDATE SET
 		remote_id=excluded.remote_id,strategy=excluded.strategy,strategy_source=excluded.strategy_source,
 		platform=excluded.platform,rate_multiplier=excluded.rate_multiplier,
 		profit_control_enabled=excluded.profit_control_enabled,profit_min_margin=excluded.profit_min_margin,
-		profit_safety_buffer=excluded.profit_safety_buffer,account_count=excluded.account_count,updated_at=excluded.updated_at`,
+		profit_safety_buffer=excluded.profit_safety_buffer,account_count=excluded.account_count,updated_at=excluded.updated_at`, `INSERT INTO local_groups(
+		name,remote_id,strategy,strategy_source,platform,rate_multiplier,profit_control_enabled,
+		profit_min_margin,profit_safety_buffer,account_count,updated_at
+	) VALUES(?,?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE remote_id=VALUES(remote_id),strategy=VALUES(strategy),strategy_source=VALUES(strategy_source),
+		platform=VALUES(platform),rate_multiplier=VALUES(rate_multiplier),
+		profit_control_enabled=VALUES(profit_control_enabled),profit_min_margin=VALUES(profit_min_margin),
+		profit_safety_buffer=VALUES(profit_safety_buffer),account_count=VALUES(account_count),updated_at=VALUES(updated_at)`),
 		canonical.name, groupID, canonical.strategy, canonical.strategySource,
 		managementSQLNullString(canonical.platform), managementSQLNullString(canonical.rateMultiplier), managementSQLNullInt64(canonical.profitEnabled),
 		managementSQLNullString(canonical.profitMinMargin), managementSQLNullString(canonical.profitSafetyBuffer), canonical.accountCount, now,
@@ -851,10 +867,11 @@ func reconcileManagementGroupIdentityFrom(
 	return nil
 }
 
-func migrateManagementGroupReferences(ctx context.Context, tx *sql.Tx, groupID, currentName string, staleNames []string) error {
-	if _, err := tx.ExecContext(ctx, `INSERT INTO account_groups(account_id,group_name,group_id,group_rate)
+func migrateManagementGroupReferences(ctx context.Context, tx *dbconn.Tx, groupID, currentName string, staleNames []string) error {
+	if _, err := tx.ExecContext(ctx, tx.Dialect(`INSERT INTO account_groups(account_id,group_name,group_id,group_rate)
 		SELECT account_id,?,?,group_rate FROM account_groups WHERE group_id=?
-		ON CONFLICT(account_id,group_name) DO UPDATE SET group_id=excluded.group_id,group_rate=excluded.group_rate`,
+		ON CONFLICT(account_id,group_name) DO UPDATE SET group_id=excluded.group_id,group_rate=excluded.group_rate`, `INSERT INTO account_groups(account_id,group_name,group_id,group_rate)
+		SELECT account_id,?,?,group_rate FROM account_groups WHERE group_id=? ON DUPLICATE KEY UPDATE group_id=VALUES(group_id),group_rate=VALUES(group_rate)`),
 		currentName, groupID, groupID); err != nil {
 		return err
 	}
@@ -865,9 +882,10 @@ func migrateManagementGroupReferences(ctx context.Context, tx *sql.Tx, groupID, 
 		return err
 	}
 	for _, staleName := range staleNames {
-		if _, err := tx.ExecContext(ctx, `INSERT INTO account_groups(account_id,group_name,group_id,group_rate)
+		if _, err := tx.ExecContext(ctx, tx.Dialect(`INSERT INTO account_groups(account_id,group_name,group_id,group_rate)
 			SELECT account_id,?,?,group_rate FROM account_groups WHERE group_name=? AND group_id IS NULL
-			ON CONFLICT(account_id,group_name) DO UPDATE SET group_id=excluded.group_id,group_rate=excluded.group_rate`,
+			ON CONFLICT(account_id,group_name) DO UPDATE SET group_id=excluded.group_id,group_rate=excluded.group_rate`, `INSERT INTO account_groups(account_id,group_name,group_id,group_rate)
+			SELECT account_id,?,?,group_rate FROM account_groups WHERE group_name=? AND group_id IS NULL ON DUPLICATE KEY UPDATE group_id=VALUES(group_id),group_rate=VALUES(group_rate)`),
 			currentName, groupID, staleName); err != nil {
 			return err
 		}
@@ -883,6 +901,12 @@ func migrateManagementGroupReferences(ctx context.Context, tx *sql.Tx, groupID, 
 			if _, err := tx.ExecContext(ctx, statement, currentName, staleName); err != nil {
 				return err
 			}
+		}
+		if tx.Driver() != dbconn.SQLite {
+			if err := moveServerGroupHistory(ctx, tx, currentName, staleName); err != nil {
+				return err
+			}
+			continue
 		}
 		if _, err := tx.ExecContext(ctx, `DELETE FROM health_samples
 			WHERE group_name=? AND evidence_key IS NOT NULL AND EXISTS(
@@ -975,7 +999,7 @@ func managementGroupCatalog(rows []map[string]any) (map[string]string, map[strin
 
 func managementAccountProjection(
 	ctx context.Context,
-	tx *sql.Tx,
+	tx *dbconn.Tx,
 	row map[string]any,
 	groupsByID map[string]string,
 	groupsByName map[string]string,
@@ -995,7 +1019,7 @@ func managementAccountProjection(
 		priority, concurrency                                                                   sql.NullInt64
 	}
 	err = tx.QueryRowContext(ctx, `SELECT name,upstream_host,upstream_type,schedulable,priority,load_factor,
-		concurrency,multiplier,balance,routing_state,health_status,metadata_json FROM accounts WHERE id=?`, id).Scan(
+		concurrency,multiplier,balance,routing_state,health_status,metadata_json FROM accounts WHERE id=?`+tx.LockClause(), id).Scan(
 		&existing.name, &existing.upstreamHost, &existing.upstreamType, &existing.schedulable, &existing.priority,
 		&existing.loadFactor, &existing.concurrency, &existing.multiplier, &existing.balance,
 		&existing.routingState, &existing.healthStatus, &existing.metadata,
@@ -1228,7 +1252,7 @@ func managementMemberships(row map[string]any, byID, byName map[string]string) (
 	return result, true, nil
 }
 
-func managementGlobalStrategy(ctx context.Context, store *Store, tx *sql.Tx) (string, error) {
+func managementGlobalStrategy(ctx context.Context, store *Store, tx *dbconn.Tx) (string, error) {
 	document, err := store.readPolicyDocument(ctx, tx, "control-plane")
 	if err != nil {
 		return "", err
@@ -1405,7 +1429,7 @@ func managementNullableBool(value *bool) any {
 	if value == nil {
 		return nil
 	}
-	return *value
+	return boolDatabaseValue(*value)
 }
 
 func managementEqualStrings(left, right *string) bool {

@@ -24,7 +24,7 @@ func (s *Store) SetAccountGroupsLocked(ctx context.Context, accountID string, en
 		return err
 	}
 	defer release()
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.beginPolicyTx(ctx, "control-plane")
 	if err != nil {
 		return err
 	}

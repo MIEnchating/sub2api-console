@@ -15,6 +15,7 @@ RUN go mod download
 COPY backend/cmd ./cmd
 COPY backend/internal ./internal
 RUN CGO_ENABLED=0 go build -buildvcs=false -trimpath -ldflags="-s -w" -o /out/sub2api-console ./cmd/server
+RUN CGO_ENABLED=0 go build -buildvcs=false -trimpath -ldflags="-s -w" -o /out/db-migrate ./cmd/db-migrate
 
 FROM alpine:3.22
 ARG VERSION
@@ -30,6 +31,7 @@ RUN apk add --no-cache ca-certificates su-exec tzdata \
     && adduser -u 10001 -S -G console console
 WORKDIR /app
 COPY --from=builder /out/sub2api-console /usr/local/bin/sub2api-console
+COPY --from=builder /out/db-migrate /usr/local/bin/db-migrate
 COPY --from=frontend /frontend/dist /app/web
 COPY backend/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN printf '%s\n' "$VERSION" > /app/VERSION

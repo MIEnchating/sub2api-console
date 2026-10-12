@@ -2,7 +2,7 @@ package business
 
 import (
 	"context"
-	"database/sql"
+	"github.com/MIEnchating/sub2api-console/backend/internal/dbconn"
 	"strings"
 )
 
@@ -19,7 +19,7 @@ func legacyCapacityWaitAlert(eventType, causeCode string) bool {
 		legacyCapacityWaitReason(strings.TrimPrefix(causeCode, "APPLY_FAILED:"))
 }
 
-func closeLegacyCapacityWaitAlerts(ctx context.Context, tx *sql.Tx, now string) error {
+func closeLegacyCapacityWaitAlerts(ctx context.Context, tx *dbconn.Tx, now string) error {
 	rows, err := tx.QueryContext(ctx, `SELECT incident_key,cause_code FROM alert_incidents
 		WHERE event_type='routing.apply_failure' AND status IN ('firing','recovered','suppressed')`)
 	if err != nil {

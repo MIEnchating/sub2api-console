@@ -20,7 +20,7 @@ func (s *Store) LoadModelCheckConfiguration(ctx context.Context) ([]byte, error)
 
 func (s *Store) loadModelCheckState(ctx context.Context, key string) ([]byte, error) {
 	var raw string
-	err := s.db.QueryRowContext(ctx, `SELECT value_json FROM app_state WHERE key=?`, key).Scan(&raw)
+	err := s.db.QueryRowContext(ctx, `SELECT value_json FROM app_state WHERE "key"=?`, key).Scan(&raw)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -48,25 +48,21 @@ func (s *Store) saveModelCheckState(ctx context.Context, raw []byte, actor, acti
 	}
 	defer tx.Rollback()
 	var previous string
-	readErr := tx.QueryRowContext(ctx, `SELECT value_json FROM app_state WHERE key=?`, key).Scan(&previous)
+	readErr := tx.QueryRowContext(ctx, `SELECT value_json FROM app_state WHERE "key"=?`, key).Scan(&previous)
 	if readErr != nil && !errors.Is(readErr, sql.ErrNoRows) {
 		return readErr
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	if _, err := tx.ExecContext(ctx, `INSERT INTO app_state(key,value_json,updated_at) VALUES(?,?,?)
-		ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json,updated_at=excluded.updated_at`,
+	if _, err := tx.ExecContext(ctx, tx.Dialect(`INSERT INTO app_state("key",value_json,updated_at) VALUES(?,?,?)
+		ON CONFLICT("key") DO UPDATE SET value_json=excluded.value_json,updated_at=excluded.updated_at`, `INSERT INTO app_state("key",value_json,updated_at) VALUES(?,?,?) ON DUPLICATE KEY UPDATE value_json=VALUES(value_json),updated_at=VALUES(updated_at)`),
 		key, string(raw), now); err != nil {
 		return err
 	}
 	before := configurationAuditValue(previous)
 	after := configurationAuditValue(string(raw))
-	var minimum sql.NullInt64
-	if err := tx.QueryRowContext(ctx, `SELECT MIN(source_id) FROM operation_audit WHERE source_id < 0`).Scan(&minimum); err != nil {
+	sourceID, err := nextLocalEventID(ctx, tx, "operation_audit")
+	if err != nil {
 		return err
-	}
-	sourceID := int64(-1)
-	if minimum.Valid && minimum.Int64 <= -1 {
-		sourceID = minimum.Int64 - 1
 	}
 	objectType, objectID, objectName := "model-check-profile", "active", "模型检测画像"
 	operationType := "model-check.profile." + action

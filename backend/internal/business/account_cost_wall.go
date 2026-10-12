@@ -12,7 +12,7 @@ func (s *Store) SetAccountIgnoreCostWall(ctx context.Context, accountID string, 
 	if !positiveNumericID(accountID) {
 		return errors.New("账号必须使用有效的稳定 ID")
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.beginPolicyTx(ctx, "control-plane")
 	if err != nil {
 		return err
 	}

@@ -46,12 +46,16 @@ func (s *Store) NewAPIPlatforms(ctx context.Context) ([]NewAPIPlatformSummary, e
 }
 
 func (s *Store) NewAPIPlatform(ctx context.Context, id string) (*NewAPIPlatform, error) {
+	return readNewAPIPlatform(ctx, s.db, id)
+}
+
+func readNewAPIPlatform(ctx context.Context, reader privateRowReader, id string) (*NewAPIPlatform, error) {
 	id = strings.TrimSpace(id)
 	if id == "" {
 		return nil, errors.New("New API 平台 ID 不能为空")
 	}
 	var item NewAPIPlatform
-	err := s.db.QueryRowContext(ctx, `SELECT id,name,base_url,admin_key,user_id,updated_at FROM newapi_platforms WHERE id=?`, id).Scan(
+	err := reader.QueryRowContext(ctx, `SELECT id,name,base_url,admin_key,user_id,updated_at FROM newapi_platforms WHERE id=?`, id).Scan(
 		&item.ID, &item.Name, &item.BaseURL, &item.AdminKey, &item.UserID, &item.UpdatedAt,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -79,7 +83,12 @@ func (s *Store) SaveNewAPIPlatform(ctx context.Context, item NewAPIPlatform) (Ne
 	if item.ID == "" {
 		item.ID = "primary"
 	}
-	current, err := s.NewAPIPlatform(ctx, item.ID)
+	tx, err := s.beginSettingsTx(ctx, "newapi.platform")
+	if err != nil {
+		return NewAPIPlatformSummary{}, err
+	}
+	defer tx.Rollback()
+	current, err := readNewAPIPlatform(ctx, tx, item.ID)
 	if err != nil {
 		return NewAPIPlatformSummary{}, err
 	}
@@ -90,22 +99,19 @@ func (s *Store) SaveNewAPIPlatform(ctx context.Context, item NewAPIPlatform) (Ne
 		return NewAPIPlatformSummary{}, errors.New("New API Admin Key 不能为空")
 	}
 	item.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return NewAPIPlatformSummary{}, err
-	}
-	defer tx.Rollback()
 	if current == nil || current.BaseURL != item.BaseURL || current.UserID != item.UserID {
-		if _, err := tx.ExecContext(ctx, `DELETE FROM settings WHERE key=?`, channelGroupsKey(item.ID)); err != nil {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM settings WHERE "key"=?`, channelGroupsKey(item.ID)); err != nil {
 			return NewAPIPlatformSummary{}, err
 		}
 	}
-	if _, err := tx.ExecContext(ctx, `DELETE FROM settings WHERE key GLOB 'newapi.channel_groups.*' AND key<>?`, channelGroupsKey(item.ID)); err != nil {
+	if _, err := tx.ExecContext(ctx, `DELETE FROM settings WHERE "key">='newapi.channel_groups.' AND "key"<'newapi.channel_groups/' AND "key"<>?`, channelGroupsKey(item.ID)); err != nil {
 		return NewAPIPlatformSummary{}, err
 	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO newapi_platforms(id,name,base_url,admin_key,user_id,updated_at)
+	_, err = tx.ExecContext(ctx, s.dialect(`INSERT INTO newapi_platforms(id,name,base_url,admin_key,user_id,updated_at)
 		VALUES(?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,base_url=excluded.base_url,
-		admin_key=excluded.admin_key,user_id=excluded.user_id,updated_at=excluded.updated_at`,
+		admin_key=excluded.admin_key,user_id=excluded.user_id,updated_at=excluded.updated_at`, `INSERT INTO newapi_platforms(id,name,base_url,admin_key,user_id,updated_at)
+		VALUES(?,?,?,?,?,?) ON DUPLICATE KEY UPDATE name=VALUES(name),base_url=VALUES(base_url),
+		admin_key=VALUES(admin_key),user_id=VALUES(user_id),updated_at=VALUES(updated_at)`),
 		item.ID, item.Name, item.BaseURL, item.AdminKey, item.UserID, item.UpdatedAt)
 	if err != nil {
 		return NewAPIPlatformSummary{}, err
@@ -120,7 +126,7 @@ func (s *Store) SaveNewAPIPlatform(ctx context.Context, item NewAPIPlatform) (Ne
 }
 
 func (s *Store) DeleteNewAPIPlatform(ctx context.Context, id string) (bool, error) {
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.beginSettingsTx(ctx, "newapi.platform")
 	if err != nil {
 		return false, err
 	}
@@ -133,7 +139,7 @@ func (s *Store) DeleteNewAPIPlatform(ctx context.Context, id string) (bool, erro
 	if err != nil {
 		return false, err
 	}
-	if _, err := tx.ExecContext(ctx, `DELETE FROM settings WHERE key=?`, channelGroupsKey(strings.TrimSpace(id))); err != nil {
+	if _, err := tx.ExecContext(ctx, `DELETE FROM settings WHERE "key"=?`, channelGroupsKey(strings.TrimSpace(id))); err != nil {
 		return false, err
 	}
 	return count > 0, tx.Commit()

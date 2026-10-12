@@ -2,6 +2,7 @@ package taskstore
 
 import (
 	"context"
+	"github.com/MIEnchating/sub2api-console/backend/internal/dbconn"
 	"time"
 )
 
@@ -17,6 +18,9 @@ func (s *Store) ClearLogs(ctx context.Context, before *time.Time) (int64, int64,
 }
 
 func (s *Store) ClearLogsWithProgress(ctx context.Context, before *time.Time, report func(int64, int64) error) (int64, int64, error) {
+	if s.db.Driver() != dbconn.SQLite {
+		return s.clearServerLogs(ctx, before, report)
+	}
 	var total, protected int64
 	var cursor *logCleanupCursor
 	if err := s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM tasks WHERE status IN ('queued','running','waiting_input')").Scan(&protected); err != nil {

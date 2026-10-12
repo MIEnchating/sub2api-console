@@ -25,11 +25,13 @@ func (s *Store) UptimeKuma(ctx context.Context) (UptimeKumaConfig, error) {
 }
 
 func (s *Store) SaveUptimeKuma(ctx context.Context, item UptimeKumaConfig) error {
-	result, err := s.db.ExecContext(ctx, `INSERT INTO uptime_kuma_config(id,base_url,api_key,username,password,token,revision)
-		SELECT 1,?,?,?,?,?,? WHERE ?=0 OR EXISTS(SELECT 1 FROM uptime_kuma_config WHERE id=1)
-		ON CONFLICT(id) DO UPDATE SET base_url=excluded.base_url,api_key=excluded.api_key,
-		username=excluded.username,password=excluded.password,token=excluded.token,revision=excluded.revision
-		WHERE uptime_kuma_config.revision=?`, item.BaseURL, item.APIKey, item.Username, item.Password, item.Token, item.Revision+1, item.Revision, item.Revision)
+	var result sql.Result
+	var err error
+	if item.Revision == 0 {
+		result, err = s.db.InsertIfAbsentContext(ctx, `INSERT INTO uptime_kuma_config(id,base_url,api_key,username,password,token,revision) VALUES(1,?,?,?,?,?,1) ON CONFLICT(id) DO NOTHING`, item.BaseURL, item.APIKey, item.Username, item.Password, item.Token)
+	} else {
+		result, err = s.db.ExecContext(ctx, `UPDATE uptime_kuma_config SET base_url=?,api_key=?,username=?,password=?,token=?,revision=revision+1 WHERE id=1 AND revision=?`, item.BaseURL, item.APIKey, item.Username, item.Password, item.Token, item.Revision)
+	}
 	if err != nil {
 		return err
 	}

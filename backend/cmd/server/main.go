@@ -25,6 +25,7 @@ import (
 	"github.com/MIEnchating/sub2api-console/backend/internal/business"
 	"github.com/MIEnchating/sub2api-console/backend/internal/config"
 	"github.com/MIEnchating/sub2api-console/backend/internal/configstore"
+	"github.com/MIEnchating/sub2api-console/backend/internal/dbconn"
 	"github.com/MIEnchating/sub2api-console/backend/internal/evidence"
 	"github.com/MIEnchating/sub2api-console/backend/internal/inspection"
 	consolelogs "github.com/MIEnchating/sub2api-console/backend/internal/logs"
@@ -40,7 +41,6 @@ import (
 	"github.com/MIEnchating/sub2api-console/backend/internal/routing"
 	"github.com/MIEnchating/sub2api-console/backend/internal/routingwrite"
 	"github.com/MIEnchating/sub2api-console/backend/internal/systeminfo"
-	"github.com/MIEnchating/sub2api-console/backend/internal/taskcontext"
 	"github.com/MIEnchating/sub2api-console/backend/internal/taskrecovery"
 	"github.com/MIEnchating/sub2api-console/backend/internal/taskrunner"
 	"github.com/MIEnchating/sub2api-console/backend/internal/tasksettings"
@@ -73,7 +73,38 @@ func run() error {
 		return err
 	}
 	defer listeners.close()
-	privateStore, err := configstore.Open(cfg.ConfigDB)
+	startupContext := context.Background()
+	if cfg.Database.Driver != dbconn.SQLite {
+		guard, err := dbconn.Open(startupContext, cfg.Database)
+		if err != nil {
+			return err
+		}
+		defer guard.Close()
+		instance, err := guard.AcquireInstance(startupContext)
+		if err != nil {
+			return err
+		}
+		defer instance.Close()
+		startupContext = instance.Context()
+		legacy, err := cfg.HasLegacyDatabase()
+		if err != nil {
+			return err
+		}
+		if legacy {
+			if err := guard.RequireCompletedImport(startupContext); err != nil {
+				return err
+			}
+		}
+		if err := guard.CheckImport(startupContext); err != nil {
+			return err
+		}
+		// Instance owns its dedicated connection; the startup query pool can
+		// close before opening the three business stores.
+		if err := guard.Close(); err != nil {
+			return err
+		}
+	}
+	privateStore, err := configstore.OpenDatabase(startupContext, cfg.DatabaseFor(cfg.ConfigDB))
 	if err != nil {
 		return err
 	}
@@ -87,7 +118,7 @@ func run() error {
 			_ = privateStore.Close()
 		}
 	}()
-	businessStore, err := business.Open(cfg.DataDB)
+	businessStore, err := business.OpenDatabase(startupContext, cfg.DatabaseFor(cfg.DataDB))
 	if err != nil {
 		return err
 	}
@@ -96,7 +127,7 @@ func run() error {
 			_ = businessStore.Close()
 		}
 	}()
-	taskStore, err := taskstore.Open(cfg.TaskDB)
+	taskStore, err := taskstore.OpenDatabase(startupContext, cfg.DatabaseFor(cfg.TaskDB))
 	if err != nil {
 		return err
 	}
@@ -114,8 +145,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	serviceContext, stopServices := context.WithCancelCause(context.Background())
-	cancelServices := func() { stopServices(taskcontext.ErrInterrupted) }
+	serviceContext, cancelServices := newServiceContext(startupContext)
 	// Each task domain has its own capacity. A long running model check or
 	// inspection must not consume the slots needed by account operations,
 	// probes, synchronization, or the workbench.
@@ -460,6 +490,8 @@ func run() error {
 	case serveErr = <-serveErrors:
 		remainingServers--
 	case <-stopped.Done():
+	case <-startupContext.Done():
+		serveErr = context.Cause(startupContext)
 	}
 
 	shutdown, cancelShutdown := context.WithTimeout(context.Background(), 30*time.Second)

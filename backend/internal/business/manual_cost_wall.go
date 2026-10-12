@@ -12,7 +12,7 @@ func (s *Store) CommitManualCostWallReadback(ctx context.Context, accountID stri
 		return err
 	}
 	defer tx.Rollback()
-	result, err := tx.ExecContext(ctx, `UPDATE accounts SET schedulable=?,routing_state=?,updated_at=? WHERE id=? AND schedulable=? AND EXISTS(SELECT 1 FROM manual_priority_accounts WHERE account_id=? AND priority=?)`, enabled, state, time.Now().UTC().Format(time.RFC3339Nano), accountID, before, accountID, reserved)
+	result, err := tx.ExecContext(ctx, `UPDATE accounts SET schedulable=?,routing_state=?,updated_at=? WHERE id=? AND schedulable=? AND EXISTS(SELECT 1 FROM manual_priority_accounts WHERE account_id=? AND priority=?)`, boolDatabaseValue(enabled), state, time.Now().UTC().Format(time.RFC3339Nano), accountID, boolDatabaseValue(before), accountID, reserved)
 	if err != nil {
 		return err
 	}

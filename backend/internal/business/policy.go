@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/MIEnchating/sub2api-console/backend/internal/dbconn"
 	"math"
 	"math/big"
 	"net/http"
@@ -98,7 +99,7 @@ func (s *Store) UpdatePolicy(ctx context.Context, rawPatch map[string]any, actor
 		runtimeMode = parsedMode
 		delete(patch, "mode")
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.beginPolicyTx(ctx, "control-plane")
 	if err != nil {
 		return PolicySnapshot{}, err
 	}
@@ -167,13 +168,9 @@ func (s *Store) UpdatePolicy(ctx context.Context, rawPatch map[string]any, actor
 	if err != nil {
 		return PolicySnapshot{}, err
 	}
-	var minimum sql.NullInt64
-	if err := tx.QueryRowContext(ctx, `SELECT MIN(source_id) FROM runtime_events WHERE source_id < 0`).Scan(&minimum); err != nil {
+	sourceID, err := nextLocalEventID(ctx, tx, "runtime_events")
+	if err != nil {
 		return PolicySnapshot{}, err
-	}
-	sourceID := int64(-1)
-	if minimum.Valid && minimum.Int64 <= -1 {
-		sourceID = minimum.Int64 - 1
 	}
 	summary := "策略配置已更新"
 	if strings.TrimSpace(actor) != "" {
@@ -189,7 +186,7 @@ func (s *Store) UpdatePolicy(ctx context.Context, rawPatch map[string]any, actor
 	return s.PolicySnapshot(ctx)
 }
 
-func normalizePolicyPatch(ctx context.Context, tx *sql.Tx, current, patch map[string]any) (map[string]any, []string, string, error) {
+func normalizePolicyPatch(ctx context.Context, tx *dbconn.Tx, current, patch map[string]any) (map[string]any, []string, string, error) {
 	updated := copyObject(current)
 	sections := map[string]map[string]any{}
 	for _, section := range []string{"selection", "weights", "scope", "probe", "traffic"} {

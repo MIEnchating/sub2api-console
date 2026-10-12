@@ -2,7 +2,6 @@ package business
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"sort"
@@ -64,7 +63,7 @@ func (s *Store) AccountMutationProtections(ctx context.Context, accountIDs []str
 		ordered = append(ordered, accountID)
 	}
 	sort.Strings(ordered)
-	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	tx, err := s.db.BeginSnapshot(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -101,7 +100,7 @@ func (s *Store) AccountMutationProtections(ctx context.Context, accountIDs []str
 		return nil, err
 	}
 	rows, err := tx.QueryContext(ctx, `SELECT account_id FROM manual_priority_accounts
-		WHERE account_id IN (SELECT CAST(value AS TEXT) FROM json_each(?))`, string(encodedAccountIDs))
+		WHERE account_id IN (SELECT value FROM `+jsonScopeRows(tx.Driver())+` scope)`, string(encodedAccountIDs))
 	if err != nil {
 		return nil, err
 	}

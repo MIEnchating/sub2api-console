@@ -3,6 +3,7 @@ package taskstore
 import (
 	"context"
 	"errors"
+	"github.com/MIEnchating/sub2api-console/backend/internal/dbconn"
 	"strings"
 	"time"
 )
@@ -16,6 +17,9 @@ type HistorySelection struct {
 func (s *Store) DeleteTerminalBySkill(ctx context.Context, skill string, selected []HistorySelection) error {
 	if strings.TrimSpace(skill) == "" || len(selected) == 0 || len(selected) > 500 {
 		return errors.New("请选择 1～500 条已结束的处理记录")
+	}
+	if s.db.Driver() != dbconn.SQLite {
+		return s.deleteServerHistory(ctx, skill, selected)
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {

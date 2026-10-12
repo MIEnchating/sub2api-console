@@ -2,7 +2,7 @@ package business
 
 import (
 	"context"
-	"database/sql"
+	"github.com/MIEnchating/sub2api-console/backend/internal/dbconn"
 	"time"
 )
 
@@ -11,11 +11,11 @@ type readSnapshotKey struct {
 }
 
 type readSnapshot struct {
-	tx         *sql.Tx
+	tx         *dbconn.Tx
 	capturedAt time.Time
 }
 
-func (db *database) readSnapshot(ctx context.Context) *sql.Tx {
+func (db *database) readSnapshot(ctx context.Context) *dbconn.Tx {
 	snapshot, _ := ctx.Value(readSnapshotKey{database: db}).(readSnapshot)
 	return snapshot.tx
 }
@@ -27,7 +27,7 @@ func (s *Store) ReadSnapshotTime(ctx context.Context) (time.Time, bool) {
 	return snapshot.capturedAt, found
 }
 
-func (db *database) captureReadSnapshot(ctx context.Context, tx *sql.Tx) (readSnapshot, error) {
+func (db *database) captureReadSnapshot(ctx context.Context, tx *dbconn.Tx) (readSnapshot, error) {
 	db.snapshotLock.Lock()
 	defer db.snapshotLock.Unlock()
 	// BEGIN is deferred: the first real table read pins SQLite's WAL snapshot.
@@ -50,7 +50,7 @@ func (s *Store) WithReadSnapshot(ctx context.Context, read func(context.Context)
 	if s.db.readSnapshot(ctx) != nil {
 		return preferContextError(ctx, read(ctx))
 	}
-	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	tx, err := s.db.BeginSnapshot(ctx)
 	if err != nil {
 		return preferContextError(ctx, err)
 	}

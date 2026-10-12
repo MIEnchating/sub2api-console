@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"github.com/MIEnchating/sub2api-console/backend/internal/dbconn"
 	"strings"
 )
 
@@ -22,8 +23,8 @@ func (s *Store) WorkbenchDocumentPage(ctx context.Context, prefix, after string,
 	if prefix == "" || len(prefix) > 200 || len(after) > 200 || limit < 1 || limit > 501 {
 		return nil, errors.New("工作台查询范围无效")
 	}
-	where, args := workbenchDocumentRange(prefix)
-	args = append(args, after, limit)
+	where, args := s.workbenchDocumentRange(prefix)
+	args = append(args, s.workbenchKey(after), limit)
 	rows, err := s.db.QueryContext(ctx, `SELECT id,revision,payload FROM account_workbench_documents WHERE `+where+` AND id>? ORDER BY id LIMIT ?`, args...)
 	if err != nil {
 		return nil, err
@@ -73,7 +74,7 @@ func workbenchDocumentRange(prefix string) (string, []any) {
 func (s *Store) DeleteWorkbenchDocument(ctx context.Context, key string, revision int64) error {
 	s.workbenchWriteMu.Lock()
 	defer s.workbenchWriteMu.Unlock()
-	result, err := s.db.ExecContext(ctx, `DELETE FROM account_workbench_documents WHERE id=? AND revision=?`, key, revision)
+	result, err := s.db.ExecContext(ctx, `DELETE FROM account_workbench_documents WHERE id=? AND revision=?`, s.workbenchKey(key), revision)
 	if err != nil {
 		return err
 	}
@@ -91,7 +92,7 @@ func (s *Store) DeleteWorkbenchDocument(ctx context.Context, key string, revisio
 func (s *Store) WorkbenchDocument(ctx context.Context, key string) (json.RawMessage, int64, error) {
 	var raw []byte
 	var revision int64
-	err := s.db.QueryRowContext(ctx, `SELECT payload,revision FROM account_workbench_documents WHERE id=?`, key).Scan(&raw, &revision)
+	err := s.db.QueryRowContext(ctx, `SELECT payload,revision FROM account_workbench_documents WHERE id=?`, s.workbenchKey(key)).Scan(&raw, &revision)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, 0, nil
 	}
@@ -101,7 +102,14 @@ func (s *Store) WorkbenchDocument(ctx context.Context, key string) (json.RawMess
 func (s *Store) WorkbenchDocumentPublic(ctx context.Context, key string) (json.RawMessage, int64, error) {
 	var raw []byte
 	var revision int64
-	err := s.db.QueryRowContext(ctx, `SELECT json_extract(payload,'$.public'),revision FROM account_workbench_documents WHERE id=?`, key).Scan(&raw, &revision)
+	expression := `json_extract(payload,'$.public')`
+	switch s.db.Driver() {
+	case dbconn.Postgres:
+		expression = `convert_from(payload,'UTF8')::jsonb->'public'`
+	case dbconn.MySQL:
+		expression = `JSON_EXTRACT(CONVERT(payload USING utf8mb4),'$.public')`
+	}
+	err := s.db.QueryRowContext(ctx, `SELECT `+expression+`,revision FROM account_workbench_documents WHERE id=?`, s.workbenchKey(key)).Scan(&raw, &revision)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, 0, nil
 	}
@@ -117,9 +125,9 @@ func (s *Store) SaveWorkbenchDocument(ctx context.Context, key string, revision 
 	var result sql.Result
 	var err error
 	if revision == 0 {
-		result, err = s.db.ExecContext(ctx, `INSERT INTO account_workbench_documents(id,revision,payload) VALUES(?,1,?) ON CONFLICT(id) DO NOTHING`, key, []byte(raw))
+		result, err = s.db.InsertIfAbsentContext(ctx, `INSERT INTO account_workbench_documents(id,revision,payload) VALUES(?,1,?) ON CONFLICT(id) DO NOTHING`, s.workbenchKey(key), []byte(raw))
 	} else {
-		result, err = s.db.ExecContext(ctx, `UPDATE account_workbench_documents SET revision=revision+1,payload=? WHERE id=? AND revision=?`, []byte(raw), key, revision)
+		result, err = s.db.ExecContext(ctx, `UPDATE account_workbench_documents SET revision=revision+1,payload=? WHERE id=? AND revision=?`, []byte(raw), s.workbenchKey(key), revision)
 	}
 	if err != nil {
 		return 0, err
@@ -132,4 +140,19 @@ func (s *Store) SaveWorkbenchDocument(ctx context.Context, key string, revision 
 		return 0, ErrWorkbenchVersion
 	}
 	return revision + 1, nil
+}
+
+// Server engines compare binary keys, preserving SQLite byte-prefix semantics.
+func (s *Store) workbenchKey(key string) any {
+	if s.db.Driver() == dbconn.SQLite {
+		return key
+	}
+	return []byte(key)
+}
+func (s *Store) workbenchDocumentRange(prefix string) (string, []any) {
+	where, args := workbenchDocumentRange(prefix)
+	for i := range args {
+		args[i] = s.workbenchKey(args[i].(string))
+	}
+	return where, args
 }

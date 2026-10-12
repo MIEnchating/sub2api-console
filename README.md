@@ -17,10 +17,10 @@ Sub2API 的独立可视化控制面。业务规则全部由 Go 后端领域服�
 ## 技术栈
 
 - 前端：React 19、TypeScript、Rsbuild、Bun、TanStack Query、Tailwind 风格 CSS、Lucide
-- 后端：Go 1.26、Gin、modernc SQLite、标准库 HTTP Client
-- 业务数据：只使用 Console 自有 `data/sub2api-console.sqlite3`
+- 后端：Go 1.26、Gin、PostgreSQL（默认）/MySQL/modernc SQLite、标准库 HTTP Client
+- 业务数据：使用 Console 专用 PostgreSQL/MySQL 数据库；SQLite 模式使用 `data/sub2api-console.sqlite3`
 - 业务 API：Console 自己的 Admin API 客户端，远程写操作统一读回并审计
-- 任务状态：Console 自己的 `data/tasks.sqlite3`，与业务数据分离
+- 任务状态：由独立任务存储模块管理；SQLite 模式使用 `data/tasks.sqlite3`
 - 业务任务：Go 任务执行器 + Console 任务库，按领域服务执行
 - 实时任务：Go 调度器 + SSE
 - 领域服务：`internal/inspection`、`internal/probe`、`internal/authrecovery`、`internal/upstreamsync`、`internal/routing`、`internal/notification`；外部网络调用均通过受控适配器进入。
@@ -264,7 +264,7 @@ OAuth 账号的“获取模型”读取管理端账号模型目录，不触发�
 
 ## 本地启动
 
-启动 API：
+先按 [数据库操作说明](docs/database-operations.md) 配置独立开发库和进程环境。默认 PostgreSQL 必须设置 `SUB2API_CONSOLE_DB_DSN`；继续使用本地 SQLite 时显式设置 `SUB2API_CONSOLE_DB_DRIVER=sqlite` 并清空 DSN。然后启动 API：
 
 ```bash
 cd backend
@@ -285,13 +285,11 @@ bun run dev
 
 运行时不需要安装或挂载 `sub2api-skills`。它只作为业务设计参考；Console 的数据库、任务调度和业务执行都在本项目内完成。
 
-默认数据库均位于当前目录的 `data/`：`sub2api-console.sqlite3`、`tasks.sqlite3` 和 `console-config.sqlite3`。Console 启动和运行不需要任何外部运行库路径，也不会挂载或读取 `sub2api-skills` 的数据。
+默认使用 PostgreSQL，也支持 MySQL 和显式选择 SQLite。服务器数据库通过 `SUB2API_CONSOLE_DB_DRIVER` 与 `SUB2API_CONSOLE_DB_DSN` 配置，缺少 DSN 时拒绝启动；旧 SQLite 不会被自动替换为空库。SQLite 原有三个文件路径保持可用。配置、部署、备份、失败恢复与离线迁移命令见 [数据库操作说明](docs/database-operations.md)。
 
-升级部署前备份数据库。业务库启动时会为兼容旧结构补建缺失表和索引，并在同一事务内校验及记录版本；失败会回滚结构变更，保留原有数据。现有表缺列等不兼容变更需要显式迁移，更新版本数据库不能由旧程序降级打开。新增稳定性统计表从升级后的请求和探活开始累计。
+PG/MySQL 使用并发连接池，必要的本地写入在短事务中完成；多步骤修改使用行锁或资源锁，陈旧编辑通过版本条件拒绝。SQLite 保持 WAL、单写池与独立只读池。服务仍采用单实例调度，服务器端使用数据库会话锁阻止重复启动。
 
-业务库使用 WAL、单连接写入池和独立的只读连接池。倍率同步、巡检、告警等本地写入先在连接池排队，等待支持任务取消；页面查询与只读事务不会占用写入连接。SQLite 的锁等待仍用于处理其他进程的占用，同一数据目录应仅由一份 API 后端提供服务。
-
-业务库、任务库和私有配置库的读写连接均在空闲约 1 分钟后回收，释放连接持有的 SQLite 缓存；正在执行的查询和事务不受影响。空闲后首次访问需要重新连接和预热缓存，因此可能比连续访问稍慢。隔离内存测量及恢复写入的开销见 [数据库性能记录](docs/database-performance.md)。
+结构升级按模块记录版本、校验和和失败状态；PG/SQLite 的事务失败回滚，MySQL 部分 DDL 失败会阻止启动。部署升级前仍须备份，不支持旧程序直接降级更新新结构，也不承诺恢复已提交删除的字段数据。
 
 首次打开会进入初始化页，需要设置控制台账号密码、Sub2API Admin Base URL 和 Admin Key。远程访问时必须在服务端配置至少 32 个字符的 `SUB2API_CONSOLE_SETUP_TOKEN`，并在初始化页输入相同令牌。令牌只通过 `X-Setup-Token` 请求头发送，不写入配置数据库，初始化完成后即不能再次使用该接口覆盖配置。
 
@@ -303,13 +301,13 @@ chmod 600 .env
 openssl rand -hex 32
 ```
 
-将生成的令牌填入 `.env` 的 `SUB2API_CONSOLE_SETUP_TOKEN`，访问端口默认是 `3004`，需要时修改 `SUB2API_CONSOLE_FRONTEND_PORT`。默认配置只有这两项。Docker Compose 自动读取根目录 `.env`，无需逐项 `export`；同名 shell 环境变量会覆盖文件中的值。`.env` 已被 Git 忽略，可提交的 `.env.example` 保持初始化令牌为空。Docker Hub 的 `DOCKERHUB_TOKEN` 继续保存在 GitHub Actions Secret 中。
+将生成的令牌填入 `.env` 的 `SUB2API_CONSOLE_SETUP_TOKEN`，再次独立生成数据库密码并填入 `SUB2API_CONSOLE_POSTGRES_PASSWORD`。访问端口默认是 `3004`，需要时修改 `SUB2API_CONSOLE_FRONTEND_PORT`。Docker Compose 自动读取根目录 `.env`，无需逐项 `export`；同名 shell 环境变量会覆盖文件中的值。`.env` 已被 Git 忽略，可提交的 `.env.example` 保持初始化令牌为空。Docker Hub 的 `DOCKERHUB_TOKEN` 继续保存在 GitHub Actions Secret 中。
 
 启动前可以执行 `docker compose config --quiet` 检查配置格式，此命令不会启动容器或发布镜像。直接运行 Go 后端时仍通过进程环境传入配置，不会自动加载此 Compose `.env` 文件。
 
-初始化完成后可在下次重建 API 容器时从部署环境中移除该变量。控制台随后使用 HttpOnly 会话 Cookie 登录；Admin Key 只保存在后端 `data/console-config.sqlite3`，不会返回到浏览器。业务账号、分组、绑定、运行记录和告警只从 Console 自有业务库读取。
+初始化完成后可在下次重建 API 容器时从部署环境中移除该变量。控制台随后使用 HttpOnly 会话 Cookie 登录；Admin Key 只保存在后端私有配置存储，不会返回到浏览器。业务账号、分组、绑定、运行记录和告警只从 Console 自有业务库读取。
 
-单体服务通过同源路径提供页面和 `/api`，远程访问时只需开放 `3004`。多套 Compose 项目可使用不同的 `SUB2API_CONSOLE_FRONTEND_PORT` 并行部署；数据库统一保存在宿主机部署目录的 `./data`，路径无需配置。
+单体服务通过同源路径提供页面和 `/api`，远程访问时只需开放 `3004`。多套 Compose 项目可使用不同的 `SUB2API_CONSOLE_FRONTEND_PORT` 并行部署；默认 PostgreSQL 数据保存在独立命名卷 `postgres-data`，`./data` 保留本地文件和旧库；显式 SQLite 模式继续使用 `./data`。
 
 使用 Docker Compose 部署：
 

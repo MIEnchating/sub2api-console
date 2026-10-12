@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"errors"
+	"github.com/MIEnchating/sub2api-console/backend/internal/dbconn"
 	"sort"
 	"strings"
 	"time"
@@ -248,7 +249,7 @@ func (s *Store) ensureMissingUpstreamIdentities(ctx context.Context) error {
 
 func reconcileUpstreamIdentityComponent(
 	ctx context.Context,
-	tx *sql.Tx,
+	tx *dbconn.Tx,
 	hosts []string,
 	storedHosts map[string]struct{},
 	preferredPrimary map[string]struct{},
@@ -288,7 +289,7 @@ func reconcileUpstreamIdentityComponent(
 		if candidate == upstreamID {
 			continue
 		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO upstream_catalog_entities(
+		if _, err := tx.ExecContext(ctx, tx.Dialect(`INSERT INTO upstream_catalog_entities(
 			upstream_id,entity_kind,entity_id,parent_entity_id,name,observed_status,lifecycle_state,missing_observations,
 			last_seen_at,missing_since,confirmed_missing_at,updated_at
 		) SELECT ?,entity_kind,entity_id,parent_entity_id,name,observed_status,lifecycle_state,missing_observations,
@@ -298,7 +299,20 @@ func reconcileUpstreamIdentityComponent(
 			lifecycle_state=excluded.lifecycle_state,missing_observations=excluded.missing_observations,
 			last_seen_at=excluded.last_seen_at,missing_since=excluded.missing_since,
 			confirmed_missing_at=excluded.confirmed_missing_at,updated_at=excluded.updated_at
-			WHERE excluded.updated_at>upstream_catalog_entities.updated_at`, upstreamID, candidate); err != nil {
+			WHERE excluded.updated_at>upstream_catalog_entities.updated_at`, `INSERT INTO upstream_catalog_entities(
+			upstream_id,entity_kind,entity_id,parent_entity_id,name,observed_status,lifecycle_state,missing_observations,
+			last_seen_at,missing_since,confirmed_missing_at,updated_at
+		) SELECT ?,entity_kind,entity_id,parent_entity_id,name,observed_status,lifecycle_state,missing_observations,
+			last_seen_at,missing_since,confirmed_missing_at,updated_at FROM upstream_catalog_entities WHERE upstream_id=?
+			ON DUPLICATE KEY UPDATE parent_entity_id=IF(VALUES(updated_at)>upstream_catalog_entities.updated_at,VALUES(parent_entity_id),upstream_catalog_entities.parent_entity_id),
+name=IF(VALUES(updated_at)>upstream_catalog_entities.updated_at,VALUES(name),upstream_catalog_entities.name),
+observed_status=IF(VALUES(updated_at)>upstream_catalog_entities.updated_at,VALUES(observed_status),upstream_catalog_entities.observed_status),
+lifecycle_state=IF(VALUES(updated_at)>upstream_catalog_entities.updated_at,VALUES(lifecycle_state),upstream_catalog_entities.lifecycle_state),
+missing_observations=IF(VALUES(updated_at)>upstream_catalog_entities.updated_at,VALUES(missing_observations),upstream_catalog_entities.missing_observations),
+last_seen_at=IF(VALUES(updated_at)>upstream_catalog_entities.updated_at,VALUES(last_seen_at),upstream_catalog_entities.last_seen_at),
+missing_since=IF(VALUES(updated_at)>upstream_catalog_entities.updated_at,VALUES(missing_since),upstream_catalog_entities.missing_since),
+confirmed_missing_at=IF(VALUES(updated_at)>upstream_catalog_entities.updated_at,VALUES(confirmed_missing_at),upstream_catalog_entities.confirmed_missing_at),
+updated_at=IF(VALUES(updated_at)>upstream_catalog_entities.updated_at,VALUES(updated_at),upstream_catalog_entities.updated_at)`), upstreamID, candidate); err != nil {
 			return err
 		}
 		if _, err := tx.ExecContext(ctx, `DELETE FROM upstream_catalog_entities WHERE upstream_id=?`, candidate); err != nil {
@@ -318,8 +332,9 @@ func reconcileUpstreamIdentityComponent(
 		}
 	}
 	for _, host := range hosts {
-		if _, err := tx.ExecContext(ctx, `INSERT INTO upstream_identity_hosts(host,upstream_id,is_primary,updated_at)
-			VALUES(?,?,0,?) ON CONFLICT(host) DO UPDATE SET upstream_id=excluded.upstream_id,updated_at=excluded.updated_at`, host, upstreamID, now); err != nil {
+		if _, err := tx.ExecContext(ctx, tx.Dialect(`INSERT INTO upstream_identity_hosts(host,upstream_id,is_primary,updated_at)
+			VALUES(?,?,0,?) ON CONFLICT(host) DO UPDATE SET upstream_id=excluded.upstream_id,updated_at=excluded.updated_at`, `INSERT INTO upstream_identity_hosts(host,upstream_id,is_primary,updated_at)
+			VALUES(?,?,0,?) ON DUPLICATE KEY UPDATE upstream_id=VALUES(upstream_id),updated_at=VALUES(updated_at)`), host, upstreamID, now); err != nil {
 			return err
 		}
 	}
@@ -347,7 +362,7 @@ func reconcileUpstreamIdentityComponent(
 	return nil
 }
 
-func (s *Store) createUpstreamIdentityTx(ctx context.Context, tx *sql.Tx, host, now string) (string, error) {
+func (s *Store) createUpstreamIdentityTx(ctx context.Context, tx *dbconn.Tx, host, now string) (string, error) {
 	upstreamID, err := newUpstreamID()
 	if err != nil {
 		return "", err

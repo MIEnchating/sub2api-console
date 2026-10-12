@@ -5,19 +5,19 @@ import (
 	"database/sql"
 	"sync"
 
-	"github.com/MIEnchating/sub2api-console/backend/internal/sqliteutil"
+	"github.com/MIEnchating/sub2api-console/backend/internal/dbconn"
 )
 
 // The single writer queues local mutations in database/sql, where waiting can
 // be cancelled without competing for SQLite's busy timeout. WAL readers use a
 // separate pool so queued writes cannot exhaust the connections used by pages.
 type database struct {
-	*sqliteutil.Database
+	*dbconn.Database
 	snapshotLock sync.Mutex
 }
 
 func openDatabase(path string) (*database, error) {
-	db, err := sqliteutil.OpenDatabase(path)
+	db, err := dbconn.Open(context.Background(), dbconn.Config{Driver: dbconn.SQLite, Path: path})
 	if err != nil {
 		return nil, err
 	}

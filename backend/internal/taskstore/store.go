@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/MIEnchating/sub2api-console/backend/internal/sqliteutil"
+	"github.com/MIEnchating/sub2api-console/backend/internal/dbconn"
 
 	_ "modernc.org/sqlite"
 )
@@ -60,33 +60,55 @@ type Task struct {
 }
 
 type Store struct {
-	db *sqliteutil.Database
+	db *dbconn.Database
 }
 
 func Open(path string) (*Store, error) {
-	if err := sqliteutil.Prepare(path); err != nil {
-		return nil, err
-	}
-	db, err := sqliteutil.OpenDatabase(path)
+	return OpenDatabase(context.Background(), dbconn.Config{Driver: dbconn.SQLite, Path: path})
+}
+
+func OpenDatabase(ctx context.Context, config dbconn.Config) (*Store, error) {
+	db, err := dbconn.Open(ctx, config)
 	if err != nil {
 		return nil, err
 	}
 	store := &Store{db: db}
-	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS tasks (
+	if db.Driver() != dbconn.SQLite {
+		if err := store.ensureServerSchema(ctx); err != nil {
+			return nil, errors.Join(err, db.Close())
+		}
+		return store, nil
+	}
+	if err := store.ensureSQLiteSchema(ctx); err != nil {
+		return nil, errors.Join(err, db.Close())
+	}
+	return store, nil
+}
+
+func (s *Store) ensureSQLiteSchema(ctx context.Context) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if err := tx.CheckSQLiteVersion(ctx, 1); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS tasks (
 		id TEXT PRIMARY KEY,skill TEXT NOT NULL,operation TEXT NOT NULL,status TEXT NOT NULL,progress INTEGER NOT NULL,
 		message TEXT NOT NULL,result_json TEXT NOT NULL,created_at TEXT NOT NULL,updated_at TEXT NOT NULL
 	)`); err != nil {
-		return nil, errors.Join(err, db.Close())
+		return err
 	}
-	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS active_task_operations (
+	if _, err := tx.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS active_task_operations (
 		operation TEXT PRIMARY KEY,task_id TEXT NOT NULL UNIQUE
 	)`); err != nil {
-		return nil, errors.Join(err, db.Close())
+		return err
 	}
-	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS deleted_tasks (
+	if _, err := tx.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS deleted_tasks (
 		id TEXT PRIMARY KEY,deleted_at TEXT NOT NULL
 	)`); err != nil {
-		return nil, errors.Join(err, db.Close())
+		return err
 	}
 	for _, statement := range []string{
 		`CREATE TABLE IF NOT EXISTS task_recovery (task_id TEXT PRIMARY KEY, payload TEXT NOT NULL)`,
@@ -106,14 +128,14 @@ func Open(path string) (*Store, error) {
 		`DROP INDEX IF EXISTS ix_tasks_log_listing`,
 		taskConsoleSummaryIndexSQL,
 	} {
-		if _, err := db.Exec(statement); err != nil {
-			return nil, errors.Join(err, db.Close())
+		if _, err := tx.ExecContext(ctx, statement); err != nil {
+			return err
 		}
 	}
-	if err := sqliteutil.Secure(path); err != nil {
-		return nil, errors.Join(err, db.Close())
+	if err := tx.SetSQLiteVersion(ctx, 1); err != nil {
+		return err
 	}
-	return store, nil
+	return tx.Commit()
 }
 
 func (s *Store) Close() error { return s.db.Close() }
@@ -133,11 +155,21 @@ func (s *Store) Save(ctx context.Context, task Task) error {
 	if len(encoded) > maximumTaskResultBytes {
 		return fmt.Errorf("任务结果不能超过 %d MiB", maximumTaskResultBytes>>20)
 	}
+	if s.db.Driver() != dbconn.SQLite {
+		return s.saveServerTask(ctx, task, encoded)
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
+	var skill, operation, created string
+	err = tx.QueryRowContext(ctx, `SELECT skill,operation,created_at FROM tasks WHERE id=?`, task.ID).Scan(&skill, &operation, &created)
+	if err == nil {
+		task.Skill, task.Operation, task.CreatedAt = skill, operation, created
+	} else if !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
 	operationKey := activeOperationKey(task.Operation)
 	if activeTaskStatus(task.Status) && operationKey != "" {
 		reservation, reserveErr := tx.ExecContext(ctx, `INSERT INTO active_task_operations(operation,task_id) VALUES(?,?)
@@ -308,7 +340,7 @@ func (s *Store) ListLogSummaries(ctx context.Context, limit *int) ([]Task, error
 		query += ` LIMIT ?`
 		arguments = append(arguments, *limit)
 	}
-	rows, err := s.db.QueryContext(ctx, query, arguments...)
+	rows, err := s.db.QueryContext(ctx, s.summarySQL(query), arguments...)
 	if err != nil {
 		return nil, err
 	}
@@ -361,7 +393,7 @@ func (s *Store) SearchLogs(ctx context.Context, search string, limit *int) ([]Ta
 		query += ` LIMIT ?`
 		arguments = append(arguments, *limit)
 	}
-	rows, err := s.db.QueryContext(ctx, query, arguments...)
+	rows, err := s.db.QueryContext(ctx, s.summarySQL(query), arguments...)
 	if err != nil {
 		return nil, err
 	}
@@ -404,6 +436,9 @@ func (s *Store) RecoverStaleInterrupted(ctx context.Context, maxAge time.Duratio
 }
 
 func (s *Store) recoverInterruptedBefore(ctx context.Context, cutoff time.Time) (int64, error) {
+	if s.db.Driver() != dbconn.SQLite {
+		return s.recoverServerInterrupted(ctx, cutoff)
+	}
 	now := time.Now().UTC().Format(storageTimeLayout)
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -448,7 +483,13 @@ func (s *Store) CompactAutomaticInspectionHistory(ctx context.Context, keepFull 
 		if err := ctx.Err(); err != nil {
 			return compacted, err
 		}
-		changed, err := compactAutomaticInspectionHistory(ctx, s.db, keepFull, batchSize)
+		var changed int64
+		var err error
+		if s.db.Driver() == dbconn.SQLite {
+			changed, err = compactAutomaticInspectionHistory(ctx, s.db, keepFull, batchSize)
+		} else {
+			changed, err = s.compactServerBatch(ctx, keepFull, batchSize)
+		}
 		if err != nil {
 			return compacted, err
 		}
@@ -474,6 +515,7 @@ func compactAutomaticInspectionHistory(
 	), '$.compacted', json('true')) WHERE id IN (
 		SELECT id FROM tasks WHERE operation='automatic-inspection'
 		AND status NOT IN ('queued','running','waiting_input') AND json_valid(result_json)
+		AND CASE WHEN json_valid(result_json) THEN json_type(result_json)='object' ELSE 0 END
 		AND COALESCE(json_extract(result_json,'$.compacted'),0)<>1
 		AND id NOT IN (
 			SELECT id FROM tasks WHERE operation='automatic-inspection'

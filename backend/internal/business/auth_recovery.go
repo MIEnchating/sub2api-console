@@ -91,9 +91,10 @@ func (s *Store) persistAuthRecoveryOutcomes(ctx context.Context, values, updates
 		return AuthRecoverySummary{}, err
 	}
 	defer tx.Rollback()
-	if _, err := tx.ExecContext(ctx, `INSERT INTO operational_snapshots(namespace,state_key,value_json,observed_at,updated_at,origin)
+	if _, err := tx.ExecContext(ctx, tx.Dialect(`INSERT INTO operational_snapshots(namespace,state_key,value_json,observed_at,updated_at,origin)
 		VALUES('sub2api','auth-recovery-runtime-snapshot',?,?,?,'console') ON CONFLICT(namespace,state_key) DO UPDATE SET
-		value_json=excluded.value_json,observed_at=excluded.observed_at,updated_at=excluded.updated_at,origin=excluded.origin`, string(payload), now, now); err != nil {
+		value_json=excluded.value_json,observed_at=excluded.observed_at,updated_at=excluded.updated_at,origin=excluded.origin`, `INSERT INTO operational_snapshots(namespace,state_key,value_json,observed_at,updated_at,origin)
+		VALUES('sub2api','auth-recovery-runtime-snapshot',?,?,?,'console') ON DUPLICATE KEY UPDATE value_json=VALUES(value_json),observed_at=VALUES(observed_at),updated_at=VALUES(updated_at),origin=VALUES(origin)`), string(payload), now, now); err != nil {
 		return AuthRecoverySummary{}, err
 	}
 	result := AuthRecoverySummary{Hosts: len(values)}
@@ -113,7 +114,7 @@ func (s *Store) persistAuthRecoveryOutcomes(ctx context.Context, values, updates
 		}
 		var metadataRaw string
 		resolvedHost := item.Host
-		err := tx.QueryRowContext(ctx, `SELECT metadata_json FROM upstreams WHERE host=?`, resolvedHost).Scan(&metadataRaw)
+		err := tx.QueryRowContext(ctx, `SELECT metadata_json FROM upstreams WHERE host=?`+tx.LockClause(), resolvedHost).Scan(&metadataRaw)
 		if errors.Is(err, sql.ErrNoRows) {
 			err = tx.QueryRowContext(ctx, `SELECT u.host,u.metadata_json FROM upstream_identity_hosts selected
 				JOIN upstream_identity_hosts canonical ON canonical.upstream_id=selected.upstream_id

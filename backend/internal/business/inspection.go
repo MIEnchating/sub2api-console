@@ -153,7 +153,7 @@ func (s *Store) UpdateAutoInspectionConfig(ctx context.Context, value AutoInspec
 	if err := ValidateAutoInspectionConfig(value); err != nil {
 		return AutoInspectionConfig{}, err
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.beginPolicyTx(ctx, inspectionConfigKey)
 	if err != nil {
 		return AutoInspectionConfig{}, err
 	}
@@ -176,7 +176,7 @@ func (s *Store) InspectionHeartbeats(ctx context.Context, limit int) ([]Inspecti
 		return nil, errors.New("limit 必须在 1 到 50 之间")
 	}
 	var raw string
-	err := s.db.QueryRowContext(ctx, `SELECT value_json FROM app_state WHERE key=?`, inspectionHistoryKey).Scan(&raw)
+	err := s.db.QueryRowContext(ctx, `SELECT value_json FROM app_state WHERE "key"=?`, inspectionHistoryKey).Scan(&raw)
 	if errors.Is(err, sql.ErrNoRows) {
 		return []InspectionHeartbeat{}, nil
 	}
@@ -201,7 +201,7 @@ func (s *Store) InspectionHeartbeats(ctx context.Context, limit int) ([]Inspecti
 
 func (s *Store) ClearInspectionHeartbeats(ctx context.Context) (int64, error) {
 	var raw string
-	err := s.db.QueryRowContext(ctx, `SELECT value_json FROM app_state WHERE key=?`, inspectionHistoryKey).Scan(&raw)
+	err := s.db.QueryRowContext(ctx, `SELECT value_json FROM app_state WHERE "key"=?`, inspectionHistoryKey).Scan(&raw)
 	if errors.Is(err, sql.ErrNoRows) {
 		return 0, nil
 	}
@@ -212,7 +212,7 @@ func (s *Store) ClearInspectionHeartbeats(ctx context.Context) (int64, error) {
 	if err := json.Unmarshal([]byte(raw), &records); err != nil {
 		return 0, errors.New("心跳历史损坏，无法安全清空")
 	}
-	if _, err := s.db.ExecContext(ctx, `DELETE FROM app_state WHERE key=?`, inspectionHistoryKey); err != nil {
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM app_state WHERE "key"=?`, inspectionHistoryKey); err != nil {
 		return 0, err
 	}
 	return int64(len(records)), nil
@@ -229,7 +229,7 @@ func (s *Store) RecordInspectionHeartbeat(ctx context.Context, heartbeat Inspect
 	}
 	defer tx.Rollback()
 	var raw string
-	err = tx.QueryRowContext(ctx, `SELECT value_json FROM app_state WHERE key=?`, inspectionHistoryKey).Scan(&raw)
+	err = tx.QueryRowContext(ctx, `SELECT value_json FROM app_state WHERE "key"=?`, inspectionHistoryKey).Scan(&raw)
 	records := []InspectionHeartbeat{}
 	if err == nil {
 		if err := json.Unmarshal([]byte(raw), &records); err != nil {
@@ -256,8 +256,8 @@ func (s *Store) RecordInspectionHeartbeat(ctx context.Context, heartbeat Inspect
 	if normalized.CompletedAt != nil {
 		updatedAt = *normalized.CompletedAt
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO app_state(key,value_json,updated_at) VALUES(?,?,?)
-		ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json,updated_at=excluded.updated_at`,
+	if _, err := tx.ExecContext(ctx, tx.Dialect(`INSERT INTO app_state("key",value_json,updated_at) VALUES(?,?,?)
+		ON CONFLICT("key") DO UPDATE SET value_json=excluded.value_json,updated_at=excluded.updated_at`, `INSERT INTO app_state("key",value_json,updated_at) VALUES(?,?,?) ON DUPLICATE KEY UPDATE value_json=VALUES(value_json),updated_at=VALUES(updated_at)`),
 		inspectionHistoryKey, string(encoded), updatedAt); err != nil {
 		return err
 	}
@@ -279,7 +279,7 @@ func (s *Store) AcquireInspectionLease(
 	if strings.TrimSpace(ownerID) == "" || ownerPID <= 0 || strings.TrimSpace(ownerHost) == "" || ttl < time.Second {
 		return false, errors.New("巡检租约参数无效")
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.beginResourceTx(ctx, []string{inspectionLeaseName})
 	if err != nil {
 		return false, preferContextError(ctx, err)
 	}
@@ -312,19 +312,19 @@ func (s *Store) RenewInspectionLease(ctx context.Context, ownerID string, now ti
 	if strings.TrimSpace(ownerID) == "" || ttl < time.Second {
 		return false, errors.New("巡检租约参数无效")
 	}
-	result, err := s.db.ExecContext(ctx, `UPDATE scheduler_leases SET renewed_at=?,expires_at=?
-		WHERE lease_name=? AND owner_id=? AND julianday(expires_at)>julianday(?)`, now.UTC().Format(time.RFC3339Nano),
-		now.UTC().Add(ttl).Format(time.RFC3339Nano), inspectionLeaseName, ownerID, now.UTC().Format(time.RFC3339Nano))
-	if err != nil {
-		return false, err
-	}
-	count, err := result.RowsAffected()
-	return count == 1, err
+	return s.renewLeaseNames(ctx, ownerID, []string{inspectionLeaseName}, now, ttl)
 }
 
 func (s *Store) ReleaseInspectionLease(ctx context.Context, ownerID string) error {
-	_, err := s.db.ExecContext(ctx, `DELETE FROM scheduler_leases WHERE lease_name=? AND owner_id=?`, inspectionLeaseName, ownerID)
-	return err
+	tx, err := s.beginResourceTx(ctx, []string{inspectionLeaseName})
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `DELETE FROM scheduler_leases WHERE lease_name=? AND owner_id=?`, inspectionLeaseName, ownerID); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (s *Store) ActiveInspectionCheckedAt(ctx context.Context, now time.Time) (*string, error) {
@@ -343,7 +343,7 @@ func (s *Store) ReconcileInterruptedInspections(ctx context.Context, now time.Ti
 	if err != nil || !needed {
 		return 0, err
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.beginResourceTx(ctx, []string{inspectionLeaseName})
 	if err != nil {
 		return 0, preferContextError(ctx, err)
 	}
@@ -361,7 +361,7 @@ func (s *Store) ReconcileInterruptedInspections(ctx context.Context, now time.Ti
 		}
 	}
 	var raw string
-	err = tx.QueryRowContext(ctx, `SELECT value_json FROM app_state WHERE key=?`, inspectionHistoryKey).Scan(&raw)
+	err = tx.QueryRowContext(ctx, `SELECT value_json FROM app_state WHERE "key"=?`, inspectionHistoryKey).Scan(&raw)
 	if errors.Is(err, sql.ErrNoRows) {
 		if err := tx.Commit(); err != nil {
 			return 0, err
@@ -390,7 +390,7 @@ func (s *Store) ReconcileInterruptedInspections(ctx context.Context, now time.Ti
 		if err != nil {
 			return 0, err
 		}
-		if _, err := tx.ExecContext(ctx, `UPDATE app_state SET value_json=?,updated_at=? WHERE key=?`,
+		if _, err := tx.ExecContext(ctx, `UPDATE app_state SET value_json=?,updated_at=? WHERE "key"=?`,
 			string(encoded), completedAt, inspectionHistoryKey); err != nil {
 			return 0, err
 		}
@@ -414,7 +414,7 @@ func (s *Store) inspectionReconciliationNeeded(ctx context.Context, now time.Tim
 		activeCheckedAt = lease.CheckedAt
 	}
 	var raw string
-	err = s.db.QueryRowContext(ctx, `SELECT value_json FROM app_state WHERE key=?`, inspectionHistoryKey).Scan(&raw)
+	err = s.db.QueryRowContext(ctx, `SELECT value_json FROM app_state WHERE "key"=?`, inspectionHistoryKey).Scan(&raw)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
@@ -462,8 +462,8 @@ func (s *Store) MarkInspectionTask(ctx context.Context, taskName string, now tim
 	if err != nil {
 		return err
 	}
-	_, err = s.db.ExecContext(ctx, `INSERT INTO app_state(key,value_json,updated_at) VALUES(?,?,?)
-		ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json,updated_at=excluded.updated_at`,
+	_, err = s.db.ExecContext(ctx, s.db.Dialect(`INSERT INTO app_state("key",value_json,updated_at) VALUES(?,?,?)
+		ON CONFLICT("key") DO UPDATE SET value_json=excluded.value_json,updated_at=excluded.updated_at`, `INSERT INTO app_state("key",value_json,updated_at) VALUES(?,?,?) ON DUPLICATE KEY UPDATE value_json=VALUES(value_json),updated_at=VALUES(updated_at)`),
 		inspectionHeartbeatKey, string(encoded), now.UTC().Format(time.RFC3339Nano))
 	return err
 }
@@ -483,8 +483,8 @@ func (s *Store) ResetInspectionTask(ctx context.Context, taskName string, marked
 		return err
 	}
 	updatedAt := time.Now().UTC().Format(time.RFC3339Nano)
-	_, err = s.db.ExecContext(ctx, `INSERT INTO app_state(key,value_json,updated_at) VALUES(?,?,?)
-		ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json,updated_at=excluded.updated_at`,
+	_, err = s.db.ExecContext(ctx, s.db.Dialect(`INSERT INTO app_state("key",value_json,updated_at) VALUES(?,?,?)
+		ON CONFLICT("key") DO UPDATE SET value_json=excluded.value_json,updated_at=excluded.updated_at`, `INSERT INTO app_state("key",value_json,updated_at) VALUES(?,?,?) ON DUPLICATE KEY UPDATE value_json=VALUES(value_json),updated_at=VALUES(updated_at)`),
 		inspectionHeartbeatKey, string(encoded), updatedAt)
 	return err
 }
@@ -497,7 +497,7 @@ const routingWritebackPendingSQL = `WITH current_decisions AS (
 	SELECT rd.account_id,MAX(rd.updated_at) AS decided_at
 	FROM routing_decisions rd
 	WHERE rd.updated_at>=COALESCE(
-		(SELECT updated_at FROM app_state WHERE key='routing-decision-epoch'),rd.updated_at)
+		(SELECT updated_at FROM app_state WHERE "key"='routing-decision-epoch'),rd.updated_at)
 	GROUP BY rd.account_id
 ), latest_attempt AS (
 	SELECT cd.account_id,cd.decided_at,
@@ -509,7 +509,7 @@ const routingWritebackPendingSQL = `WITH current_decisions AS (
 )
 	SELECT CASE WHEN
 		COALESCE((SELECT MAX(updated_at) FROM policy_nodes WHERE policy_key='control-plane'),'') >
-		COALESCE((SELECT updated_at FROM app_state WHERE key=?),'')
+		COALESCE((SELECT updated_at FROM app_state WHERE "key"=?),'')
 	THEN 1 ELSE EXISTS(SELECT 1 FROM latest_attempt WHERE state IS NULL OR state<>'succeeded') END`
 
 func (s *Store) RoutingWritebackPending(ctx context.Context) (bool, error) {
@@ -521,7 +521,7 @@ func (s *Store) RoutingWritebackPending(ctx context.Context) (bool, error) {
 
 func (s *Store) inspectionTaskState(ctx context.Context) (map[string]string, error) {
 	var raw string
-	err := s.db.QueryRowContext(ctx, `SELECT value_json FROM app_state WHERE key=?`, inspectionHeartbeatKey).Scan(&raw)
+	err := s.db.QueryRowContext(ctx, `SELECT value_json FROM app_state WHERE "key"=?`, inspectionHeartbeatKey).Scan(&raw)
 	if errors.Is(err, sql.ErrNoRows) {
 		return map[string]string{}, nil
 	}

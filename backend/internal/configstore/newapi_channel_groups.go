@@ -80,12 +80,16 @@ func channelGroupsVersion(raw string) string {
 	return hex.EncodeToString(sum[:])
 }
 func (s *Store) NewAPIChannelGroups(ctx context.Context, platformID string) (NewAPIChannelGroups, error) {
+	return readNewAPIChannelGroups(ctx, s.db, platformID)
+}
+
+func readNewAPIChannelGroups(ctx context.Context, reader privateRowReader, platformID string) (NewAPIChannelGroups, error) {
 	result := NewAPIChannelGroups{Groups: []NewAPIChannelGroup{}}
 	if !channelGroupPlatformPattern.MatchString(platformID) {
 		return result, errors.New("平台标识无效")
 	}
 	var raw string
-	err := s.db.QueryRowContext(ctx, `SELECT value FROM settings WHERE key=?`, channelGroupsKey(platformID)).Scan(&raw)
+	err := reader.QueryRowContext(ctx, `SELECT value FROM settings WHERE "key"=?`, channelGroupsKey(platformID)).Scan(&raw)
 	if errors.Is(err, sql.ErrNoRows) {
 		return result, nil
 	}
@@ -112,7 +116,12 @@ func (s *Store) SaveNewAPIChannelGroups(ctx context.Context, platformID string, 
 		return NewAPIChannelGroups{}, err
 	}
 	key := channelGroupsKey(platformID)
-	current, err := s.NewAPIChannelGroups(ctx, platformID)
+	tx, err := s.beginSettingsTx(ctx, "newapi.platform")
+	if err != nil {
+		return NewAPIChannelGroups{}, err
+	}
+	defer tx.Rollback()
+	current, err := readNewAPIChannelGroups(ctx, tx, platformID)
 	if err != nil {
 		return NewAPIChannelGroups{}, err
 	}
@@ -121,7 +130,7 @@ func (s *Store) SaveNewAPIChannelGroups(ctx context.Context, platformID string, 
 	}
 	if version == "" {
 		var result sql.Result
-		result, err = s.db.ExecContext(ctx, `INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO NOTHING`, key, string(encoded))
+		result, err = tx.InsertIfAbsentContext(ctx, `INSERT INTO settings("key",value) VALUES(?,?) ON CONFLICT("key") DO NOTHING`, key, string(encoded))
 		if err == nil {
 			var n int64
 			n, err = result.RowsAffected()
@@ -132,7 +141,7 @@ func (s *Store) SaveNewAPIChannelGroups(ctx context.Context, platformID string, 
 	} else {
 		old, _ := json.Marshal(current.Groups)
 		var result sql.Result
-		result, err = s.db.ExecContext(ctx, `UPDATE settings SET value=? WHERE key=? AND value=?`, string(encoded), key, string(old))
+		result, err = tx.ExecContext(ctx, `UPDATE settings SET value=? WHERE "key"=? AND value=?`, string(encoded), key, string(old))
 		if err == nil {
 			var n int64
 			n, err = result.RowsAffected()
@@ -144,5 +153,5 @@ func (s *Store) SaveNewAPIChannelGroups(ctx context.Context, platformID string, 
 	if err != nil {
 		return NewAPIChannelGroups{}, err
 	}
-	return NewAPIChannelGroups{Groups: normalized, Version: channelGroupsVersion(string(encoded))}, nil
+	return NewAPIChannelGroups{Groups: normalized, Version: channelGroupsVersion(string(encoded))}, tx.Commit()
 }

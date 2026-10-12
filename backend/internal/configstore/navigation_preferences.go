@@ -35,7 +35,7 @@ func navigationPreferences(raw string) (NavigationPreferences, error) {
 
 func (s *Store) NavigationPreferences(ctx context.Context) (NavigationPreferences, error) {
 	var raw string
-	err := s.db.QueryRowContext(ctx, `SELECT value FROM settings WHERE key='console.navigation_hidden_items'`).Scan(&raw)
+	err := s.db.QueryRowContext(ctx, `SELECT value FROM settings WHERE "key"='console.navigation_hidden_items'`).Scan(&raw)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return NavigationPreferences{}, err
 	}
@@ -71,7 +71,7 @@ func (s *Store) SaveNavigationPreferences(ctx context.Context, input NavigationP
 		return NavigationPreferences{}, ErrNavigationConflict
 	}
 	if input.Version == "" {
-		inserted, err := s.db.ExecContext(ctx, `INSERT INTO settings(key,value) VALUES('console.navigation_hidden_items',?) ON CONFLICT(key) DO NOTHING`, string(raw))
+		inserted, err := s.db.InsertIfAbsentContext(ctx, `INSERT INTO settings("key",value) VALUES('console.navigation_hidden_items',?) ON CONFLICT("key") DO NOTHING`, string(raw))
 		if err != nil {
 			return NavigationPreferences{}, err
 		}
@@ -84,7 +84,7 @@ func (s *Store) SaveNavigationPreferences(ctx context.Context, input NavigationP
 		}
 	} else {
 		previous, _ := json.Marshal(result.HiddenItemIDs)
-		updated, err := s.db.ExecContext(ctx, `UPDATE settings SET value=? WHERE key='console.navigation_hidden_items' AND value=?`, string(raw), string(previous))
+		updated, err := s.db.ExecContext(ctx, `UPDATE settings SET value=? WHERE "key"='console.navigation_hidden_items' AND value=?`, string(raw), string(previous))
 		if err != nil {
 			return NavigationPreferences{}, err
 		}

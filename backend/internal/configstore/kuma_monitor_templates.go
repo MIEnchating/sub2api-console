@@ -30,7 +30,7 @@ func (s *Store) KumaMonitorTemplates(ctx context.Context, baseURL string) (map[i
 }
 
 func (s *Store) SaveKumaMonitorTemplate(ctx context.Context, baseURL string, item KumaMonitorTemplate) error {
-	_, err := s.db.ExecContext(ctx, `INSERT INTO uptime_kuma_monitor_templates(base_url,monitor_id,template_id,template_revision,template_name,template_model,body_encoding) VALUES(?,?,?,?,?,?,?) ON CONFLICT(base_url,monitor_id) DO UPDATE SET template_id=excluded.template_id,template_revision=excluded.template_revision,template_name=excluded.template_name,template_model=excluded.template_model,body_encoding=excluded.body_encoding`, baseURL, item.MonitorID, item.TemplateID, item.Revision, item.Name, item.Model, item.BodyEncoding)
+	_, err := s.db.ExecContext(ctx, s.dialect(`INSERT INTO uptime_kuma_monitor_templates(base_url,monitor_id,template_id,template_revision,template_name,template_model,body_encoding) VALUES(?,?,?,?,?,?,?) ON CONFLICT(base_url,monitor_id) DO UPDATE SET template_id=excluded.template_id,template_revision=excluded.template_revision,template_name=excluded.template_name,template_model=excluded.template_model,body_encoding=excluded.body_encoding`, `INSERT INTO uptime_kuma_monitor_templates(base_url,monitor_id,template_id,template_revision,template_name,template_model,body_encoding) VALUES(?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE template_id=VALUES(template_id),template_revision=VALUES(template_revision),template_name=VALUES(template_name),template_model=VALUES(template_model),body_encoding=VALUES(body_encoding)`), baseURL, item.MonitorID, item.TemplateID, item.Revision, item.Name, item.Model, item.BodyEncoding)
 	return err
 }
 

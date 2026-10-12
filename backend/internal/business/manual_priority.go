@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/MIEnchating/sub2api-console/backend/internal/dbconn"
 	"math/big"
 	"strings"
 	"time"
@@ -94,7 +95,7 @@ func (s *Store) AssignManualPriority(ctx context.Context, accountID string, prio
 	if !positiveNumericID(accountID) {
 		return ManualPriorityAssignment{}, errors.New("账号必须使用有效的稳定 ID")
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.beginPolicyTx(ctx, "control-plane")
 	if err != nil {
 		return ManualPriorityAssignment{}, err
 	}
@@ -150,11 +151,14 @@ func (s *Store) AssignManualPriority(ctx context.Context, accountID string, prio
 		}
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	if _, err := tx.ExecContext(ctx, `INSERT INTO manual_priority_accounts(
+	if _, err := tx.ExecContext(ctx, tx.Dialect(`INSERT INTO manual_priority_accounts(
 		account_id,priority,previous_priority,previous_load_factor,previous_concurrency,previous_schedulable,
 		previous_paused,previous_paused_reason,sync_balance_multiplier,created_at,updated_at
 	) VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(account_id) DO UPDATE SET
-		priority=excluded.priority,sync_balance_multiplier=excluded.sync_balance_multiplier,updated_at=excluded.updated_at`,
+		priority=excluded.priority,sync_balance_multiplier=excluded.sync_balance_multiplier,updated_at=excluded.updated_at`, `INSERT INTO manual_priority_accounts(
+		account_id,priority,previous_priority,previous_load_factor,previous_concurrency,previous_schedulable,
+		previous_paused,previous_paused_reason,sync_balance_multiplier,created_at,updated_at
+	) VALUES(?,?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE priority=VALUES(priority),sync_balance_multiplier=VALUES(sync_balance_multiplier),updated_at=VALUES(updated_at)`),
 		accountID, priority, nullableInt64(previousPriority), nullString(previousLoadFactor), nullableInt64(previousConcurrency),
 		nullableInt64(previousSchedulable), nullableInt64(previousPaused), nullString(previousPausedReason),
 		boolDatabaseValue(syncBalanceMultiplier), now, now); err != nil {
@@ -192,7 +196,7 @@ func (s *Store) RevertManualPriorityReservation(ctx context.Context, accountID, 
 	if !positiveNumericID(accountID) {
 		return errors.New("账号必须使用有效的稳定 ID")
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.beginPolicyTx(ctx, "control-plane")
 	if err != nil {
 		return err
 	}
@@ -209,9 +213,9 @@ func (s *Store) RevertManualPriorityReservation(ctx context.Context, accountID, 
 		return err
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO routing_baselines(
+	if _, err := tx.InsertIfAbsentContext(ctx, `INSERT INTO routing_baselines(
 		account_id,schedulable,priority,load_factor,concurrency,captured_at,ownership_version
-	) VALUES(?,?,?,?,?,?,1)`, accountID, nullableInt64(schedulable), nullableInt64(previousPriority),
+	) VALUES(?,?,?,?,?,?,1) ON CONFLICT(account_id) DO NOTHING`, accountID, nullableInt64(schedulable), nullableInt64(previousPriority),
 		nullString(previousLoadFactor), nullableInt64(previousConcurrency), now); err != nil {
 		return err
 	}
@@ -273,7 +277,7 @@ func (s *Store) CommitManualPriorityRelease(
 	actor string,
 	operation AccountOperation,
 ) error {
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.beginPolicyTx(ctx, "control-plane")
 	if err != nil {
 		return err
 	}
@@ -289,9 +293,9 @@ func (s *Store) CommitManualPriorityRelease(
 		return errors.New("手动控制在远端确认期间已发生变化，请重新操作")
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO routing_baselines(
+	if _, err := tx.InsertIfAbsentContext(ctx, `INSERT INTO routing_baselines(
 		account_id,schedulable,priority,load_factor,concurrency,captured_at,ownership_version
-	) VALUES(?,?,?,?,?,?,1)`, release.AccountID, boolDatabase(release.Schedulable), release.Priority,
+	) VALUES(?,?,?,?,?,?,1) ON CONFLICT(account_id) DO NOTHING`, release.AccountID, boolDatabase(release.Schedulable), release.Priority,
 		release.LoadFactor, release.Concurrency, now); err != nil {
 		return err
 	}
@@ -326,7 +330,7 @@ func (s *Store) CommitManualPriorityRelease(
 	return tx.Commit()
 }
 
-func validateManualPriorityCapacity(ctx context.Context, tx *sql.Tx, document map[string]any) error {
+func validateManualPriorityCapacity(ctx context.Context, tx *dbconn.Tx, document map[string]any) error {
 	config, err := manualPriorityConfig(document)
 	if err != nil {
 		return err
@@ -384,7 +388,7 @@ func (s *Store) HostBalanceSyncAllowed(ctx context.Context, host string) (bool, 
 
 func recordManualPriorityEvent(
 	ctx context.Context,
-	tx *sql.Tx,
+	tx *dbconn.Tx,
 	accountID, name string,
 	priority *int64,
 	syncBalanceMultiplier *bool,
@@ -402,13 +406,9 @@ func recordManualPriorityEvent(
 	if err != nil {
 		return err
 	}
-	var minimum sql.NullInt64
-	if err := tx.QueryRowContext(ctx, `SELECT MIN(source_id) FROM runtime_events WHERE source_id < 0`).Scan(&minimum); err != nil {
+	sourceID, err := nextLocalEventID(ctx, tx, "runtime_events")
+	if err != nil {
 		return err
-	}
-	sourceID := int64(-1)
-	if minimum.Valid && minimum.Int64 <= -1 {
-		sourceID = minimum.Int64 - 1
 	}
 	_, err = tx.ExecContext(ctx, `INSERT INTO runtime_events(source_id,event_type,created_at,status,summary,payload_json)
 		VALUES(?,?,?,?,?,?)`, sourceID, "account.manual_priority", now, "succeeded", summary, string(payload))

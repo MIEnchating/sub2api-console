@@ -2,9 +2,9 @@ package business
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"errors"
+	"github.com/MIEnchating/sub2api-console/backend/internal/dbconn"
 	"math/big"
 	"strings"
 )
@@ -47,7 +47,7 @@ func readUpstreamSpending(metadata map[string]any) (*upstreamSpendingState, erro
 
 // Keep one shared observation across aliases, in the existing upstream state.
 // All writes share the balance transaction, so retries cannot count a drop twice.
-func applyUpstreamSpending(ctx context.Context, tx *sql.Tx, host string, metadata map[string]any, balance *UpstreamBalanceObservation, recharge, now string) error {
+func applyUpstreamSpending(ctx context.Context, tx *dbconn.Tx, host string, metadata map[string]any, balance *UpstreamBalanceObservation, recharge, now string) error {
 	if balance.RawBalance == nil || balance.Status != "已读取" {
 		return nil
 	}

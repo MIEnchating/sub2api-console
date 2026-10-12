@@ -35,7 +35,7 @@ func (s *Store) RevenueCatalog(ctx context.Context) (RevenueCatalog, error) {
 	}
 	result := RevenueCatalog{Accounts: []RevenueAccount{}}
 	rows, err := s.db.QueryContext(ctx, `SELECT id,name FROM accounts
-		ORDER BY CASE WHEN id GLOB '[0-9]*' THEN CAST(id AS INTEGER) ELSE 0 END,id`)
+		ORDER BY `+numericIDOrder(s.db.Driver(), "id")+`,id`)
 	if err != nil {
 		return RevenueCatalog{}, err
 	}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"github.com/MIEnchating/sub2api-console/backend/internal/dbconn"
 	"math/big"
 	"strings"
 	"time"
@@ -19,9 +20,9 @@ func (s *Store) costTrafficAlertFindings(ctx context.Context) ([]alertFinding, m
 		return nil, nil, err
 	}
 	rows, err := s.db.QueryContext(ctx, `WITH traffic AS (
- SELECT account_id,json_extract(payload_json,'$.request_group_id') AS group_id,COUNT(DISTINCT request_id) AS requests,MAX(observed_at) AS latest
+ SELECT account_id,`+jsonFieldSQL(s.db.Driver(), "payload_json", "request_group_id", false)+` AS group_id,COUNT(DISTINCT request_id) AS requests,MAX(observed_at) AS latest
  FROM usage_records WHERE LOWER(source)='traffic' AND observed_at>=? AND observed_at<=? AND TRIM(request_id)<>''
- GROUP BY account_id,json_extract(payload_json,'$.request_group_id')
+ GROUP BY account_id,`+jsonFieldSQL(s.db.Driver(), "payload_json", "request_group_id", false)+`
  ) SELECT a.id,ag.group_name,a.multiplier,lg.rate_multiplier,COALESCE(t.requests,0),t.latest
  FROM accounts a JOIN account_groups ag ON ag.account_id=a.id
  LEFT JOIN local_groups lg ON lg.remote_id=ag.group_id AND lg.name=ag.group_name AND TRIM(ag.group_id)<>''
@@ -99,7 +100,7 @@ func (s *Store) costWallIgnoredAccounts(ctx context.Context, queryer policyQuery
 	return controlAccountIDs(scope["ignore_cost_wall_account_ids"]), nil
 }
 
-func closeAccountCostTrafficAlerts(ctx context.Context, tx *sql.Tx, accountID, now string) error {
+func closeAccountCostTrafficAlerts(ctx context.Context, tx *dbconn.Tx, accountID, now string) error {
 	_, err := tx.ExecContext(ctx, `UPDATE alert_incidents SET status='closed',last_seen_at=?,delivery_status='账号已开启无视成本墙',last_error=NULL
 		WHERE event_type='account.cost_traffic' AND object_kind='account' AND object_id=? AND status IN ('firing','suppressed','recovered')`, now, accountID)
 	return err

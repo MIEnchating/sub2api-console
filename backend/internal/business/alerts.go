@@ -462,12 +462,16 @@ func (s *Store) FinalizeAlertDelivery(ctx context.Context, channelKey string, ou
 			lastError = nil
 			deliveredAt = now
 		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO alert_deliveries(
+		if _, err := tx.ExecContext(ctx, tx.Dialect(`INSERT INTO alert_deliveries(
 			incident_key,channel_key,status,attempts,last_error,delivered_at,updated_at
 		) VALUES(?,?,?,?,?,?,?) ON CONFLICT(incident_key,channel_key) DO UPDATE SET
 			status=excluded.status,attempts=CASE WHEN alert_deliveries.status='commit_unknown'
 				THEN alert_deliveries.attempts ELSE alert_deliveries.attempts+1 END,last_error=excluded.last_error,
-			delivered_at=excluded.delivered_at,updated_at=excluded.updated_at`,
+			delivered_at=excluded.delivered_at,updated_at=excluded.updated_at`, `INSERT INTO alert_deliveries(
+			incident_key,channel_key,status,attempts,last_error,delivered_at,updated_at
+		) VALUES(?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE attempts=CASE WHEN alert_deliveries.status='commit_unknown'
+				THEN alert_deliveries.attempts ELSE alert_deliveries.attempts+1 END,status=VALUES(status),last_error=VALUES(last_error),
+			delivered_at=VALUES(delivered_at),updated_at=VALUES(updated_at)`),
 			outcome.IncidentKey, channelKey, status, 1, lastError, deliveredAt, now,
 		); err != nil {
 			return err
@@ -499,11 +503,14 @@ func (s *Store) BeginAlertDelivery(ctx context.Context, channelKey string, incid
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	detail := "发送请求可能已被 QQBot 接收，为避免重复通知不会自动重试"
 	for _, incident := range incidents {
-		if _, err := tx.ExecContext(ctx, `INSERT INTO alert_deliveries(
+		if _, err := tx.ExecContext(ctx, tx.Dialect(`INSERT INTO alert_deliveries(
 			incident_key,channel_key,status,attempts,last_error,updated_at
 		) VALUES(?,?,'commit_unknown',1,?,?) ON CONFLICT(incident_key,channel_key) DO UPDATE SET
 			status='commit_unknown',attempts=alert_deliveries.attempts+1,last_error=excluded.last_error,
-			delivered_at=NULL,updated_at=excluded.updated_at`, incident.IncidentKey, channelKey, detail, now); err != nil {
+			delivered_at=NULL,updated_at=excluded.updated_at`, `INSERT INTO alert_deliveries(
+			incident_key,channel_key,status,attempts,last_error,updated_at
+		) VALUES(?,?,'commit_unknown',1,?,?) ON DUPLICATE KEY UPDATE status='commit_unknown',attempts=alert_deliveries.attempts+1,last_error=VALUES(last_error),
+			delivered_at=NULL,updated_at=VALUES(updated_at)`), incident.IncidentKey, channelKey, detail, now); err != nil {
 			return err
 		}
 		if _, err := tx.ExecContext(ctx, `UPDATE alert_incidents SET delivery_status='发送结果待人工确认',last_error=?
@@ -678,8 +685,7 @@ func (s *Store) scopedDeliveryIncidents(ctx context.Context, balanceHost string)
 	}
 	query := `SELECT i.incident_key,i.event_type,i.object_kind,i.object_id,a.name,i.cause_code,
 		i.status,i.first_seen_at,i.last_seen_at,i.delivery_status,i.last_error,
-		(SELECT json_group_array(group_name ORDER BY group_name) FROM account_groups
-		 WHERE i.object_kind='account' AND account_id=i.object_id) FROM alert_incidents i INDEXED BY ix_alert_incidents_delivery_recent
+		` + alertGroupNamesSQL(s.db.Driver()) + ` FROM alert_incidents i` + sqliteIndexHint(s.db.Driver(), "ix_alert_incidents_delivery_recent") + `
 		LEFT JOIN accounts a ON i.object_kind='account' AND a.id=i.object_id
 		WHERE i.status IN ('firing','recovered')`
 	var args []any
@@ -713,6 +719,7 @@ func (s *Store) scopedDeliveryIncidents(ctx context.Context, balanceHost string)
 		if err := json.Unmarshal([]byte(groupNamesJSON), &item.GroupNames); err != nil {
 			return nil, fmt.Errorf("读取告警账号分组失败: %w", err)
 		}
+		sort.Strings(item.GroupNames)
 		item.ObjectName = nullString(objectName)
 		item.DeliveryStatus = nullString(deliveryStatus)
 		item.LastError = nullString(lastError)

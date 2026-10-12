@@ -50,7 +50,7 @@ func (s *Store) SeedKumaTemplate(ctx context.Context, item KumaTemplate) error {
 	}
 	defer tx.Rollback()
 	marker := "uptime_kuma.seed." + item.ID
-	result, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO settings(key,value) VALUES(?, '1')`, marker)
+	result, err := tx.InsertIfAbsentContext(ctx, `INSERT INTO settings("key",value) VALUES(?, '1') ON CONFLICT("key") DO NOTHING`, marker)
 	if err != nil {
 		return err
 	}
@@ -64,7 +64,7 @@ func (s *Store) SeedKumaTemplate(ctx context.Context, item KumaTemplate) error {
 		if err != nil {
 			return err
 		}
-		if _, err = tx.ExecContext(ctx, `INSERT OR IGNORE INTO settings(key,value) VALUES(?,?)`, kumaTemplatePrefix+item.ID, string(raw)); err != nil {
+		if _, err = tx.InsertIfAbsentContext(ctx, `INSERT INTO settings("key",value) VALUES(?,?) ON CONFLICT("key") DO NOTHING`, kumaTemplatePrefix+item.ID, string(raw)); err != nil {
 			return err
 		}
 	}
@@ -76,7 +76,7 @@ var ErrKumaTemplateConflict = errors.New("模板已被修改或删除，请刷�
 const kumaTemplatePrefix = "uptime_kuma.template."
 
 func (s *Store) KumaTemplates(ctx context.Context) ([]KumaTemplate, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT value FROM settings WHERE key LIKE 'uptime_kuma.template.%' ORDER BY key`)
+	rows, err := s.db.QueryContext(ctx, `SELECT value FROM settings WHERE "key" LIKE 'uptime_kuma.template.%' ORDER BY "key"`)
 	if err != nil {
 		return nil, err
 	}
@@ -98,7 +98,7 @@ func (s *Store) KumaTemplates(ctx context.Context) ([]KumaTemplate, error) {
 func (s *Store) KumaTemplate(ctx context.Context, id string) (KumaTemplate, error) {
 	var raw string
 	var item KumaTemplate
-	err := s.db.QueryRowContext(ctx, `SELECT value FROM settings WHERE key=?`, kumaTemplatePrefix+id).Scan(&raw)
+	err := s.db.QueryRowContext(ctx, `SELECT value FROM settings WHERE "key"=?`, kumaTemplatePrefix+id).Scan(&raw)
 	if errors.Is(err, sql.ErrNoRows) {
 		return item, ErrKumaTemplateConflict
 	}
@@ -115,8 +115,12 @@ func (s *Store) SaveKumaTemplate(ctx context.Context, item KumaTemplate) error {
 	if err != nil {
 		return err
 	}
-	result, err := s.db.ExecContext(ctx, `INSERT INTO settings(key,value) SELECT ?,? WHERE ?=0 OR EXISTS(SELECT 1 FROM settings WHERE key=?)
- ON CONFLICT(key) DO UPDATE SET value=excluded.value WHERE json_extract(settings.value,'$.revision')=?`, kumaTemplatePrefix+item.ID, string(raw), previous, kumaTemplatePrefix+item.ID, previous)
+	var result sql.Result
+	if previous == 0 {
+		result, err = s.db.InsertIfAbsentContext(ctx, `INSERT INTO settings("key",value) VALUES(?,?) ON CONFLICT("key") DO NOTHING`, kumaTemplatePrefix+item.ID, string(raw))
+	} else {
+		result, err = s.db.ExecContext(ctx, `UPDATE settings SET value=? WHERE "key"=? AND `+s.jsonRevision()+`=?`, string(raw), kumaTemplatePrefix+item.ID, previous)
+	}
 	if err != nil {
 		return err
 	}
@@ -130,7 +134,7 @@ func (s *Store) SaveKumaTemplate(ctx context.Context, item KumaTemplate) error {
 	return nil
 }
 func (s *Store) DeleteKumaTemplate(ctx context.Context, id string, revision int64) error {
-	result, err := s.db.ExecContext(ctx, `DELETE FROM settings WHERE key=? AND json_extract(value,'$.revision')=?`, kumaTemplatePrefix+id, revision)
+	result, err := s.db.ExecContext(ctx, `DELETE FROM settings WHERE "key"=? AND `+s.jsonRevision()+`=?`, kumaTemplatePrefix+id, revision)
 	if err != nil {
 		return err
 	}

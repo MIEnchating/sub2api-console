@@ -1,5 +1,10 @@
 package business
 
+import (
+	"github.com/MIEnchating/sub2api-console/backend/internal/dbconn"
+	"strings"
+)
+
 // Select each stream's newest relevant outcome through its existing index,
 // then compare the two. Restore outcomes must supersede old write failures,
 // including for existing databases whose partial index excludes restores.
@@ -12,7 +17,7 @@ const latestRoutingOutcomeSQL = `SELECT source_id FROM (
 		CASE WHEN recent.source_id < 0 THEN 0 ELSE 1 END,
 		CASE WHEN recent.source_id < 0 THEN recent.source_id END ASC,
 		CASE WHEN recent.source_id >= 0 THEN recent.source_id END DESC LIMIT 1
-	) UNION ALL SELECT * FROM (
+	) recent_failure UNION ALL SELECT * FROM (
 		SELECT recent.source_id,recent.created_at FROM operation_audit recent INDEXED BY ix_operation_audit_type_object_recent
 		WHERE recent.operation_type='routing.restore' AND recent.object_id=a.id
 		AND (recent.state='failed' OR (recent.state='succeeded' AND recent.readback_confirmed=1))
@@ -20,8 +25,15 @@ const latestRoutingOutcomeSQL = `SELECT source_id FROM (
 		CASE WHEN recent.source_id < 0 THEN 0 ELSE 1 END,
 		CASE WHEN recent.source_id < 0 THEN recent.source_id END ASC,
 		CASE WHEN recent.source_id >= 0 THEN recent.source_id END DESC LIMIT 1
-	)
-) ORDER BY created_at DESC,
+	) recent_restore
+) outcomes ORDER BY created_at DESC,
 CASE WHEN source_id < 0 THEN 0 ELSE 1 END,
 CASE WHEN source_id < 0 THEN source_id END ASC,
 CASE WHEN source_id >= 0 THEN source_id END DESC LIMIT 1`
+
+func latestRoutingOutcomeQuery(driver dbconn.Driver) string {
+	if driver == dbconn.SQLite {
+		return latestRoutingOutcomeSQL
+	}
+	return strings.NewReplacer(" INDEXED BY ix_operation_audit_apply_error_recent", "", " INDEXED BY ix_operation_audit_type_object_recent", "").Replace(latestRoutingOutcomeSQL)
+}

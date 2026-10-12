@@ -64,7 +64,7 @@ func (s *Store) selectHealthSampleWindow(
 		index = "ix_health_samples_source_window"
 	}
 	query := `SELECT id,account_id,observed_at,source,evidence_key
-		FROM health_samples INDEXED BY ` + index + whereSQL(clauses) +
+		FROM health_samples` + sqliteIndexHint(s.db.Driver(), index) + whereSQL(clauses) +
 		` ORDER BY account_id,observed_at DESC,id DESC`
 	rows, err := s.db.QueryContext(ctx, query, arguments...)
 	if err != nil {

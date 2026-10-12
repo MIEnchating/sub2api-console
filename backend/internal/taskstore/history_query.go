@@ -2,10 +2,11 @@ package taskstore
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"net/mail"
 	"strings"
+
+	"github.com/MIEnchating/sub2api-console/backend/internal/dbconn"
 )
 
 type HistoryQuery struct {
@@ -24,7 +25,7 @@ type HistoryPage struct {
 	Limit  int    `json:"limit"`
 }
 
-func historyWhere(skill string, input HistoryQuery) (string, []any, error) {
+func (s *Store) historyWhere(skill string, input HistoryQuery) (string, []any, error) {
 	if strings.TrimSpace(skill) == "" || input.Offset < 0 || input.Offset > 1000000 || input.Limit < 1 || input.Limit > 100 || len(input.Search) > 1024 || len(input.Operation) > 128 || len(input.Emails) > 500 {
 		return "", nil, errors.New("历史查询范围无效，每页限 1～100 条、最多 500 个邮箱")
 	}
@@ -62,7 +63,17 @@ func historyWhere(skill string, input HistoryQuery) (string, []any, error) {
 		}
 		// Only explicit email metadata participates in exact matching. A name
 		// or diagnostic mentioning an email cannot bind an unrelated record.
-		where += " AND EXISTS (SELECT 1 FROM json_tree(CASE WHEN json_valid(tasks.result_json) THEN tasks.result_json ELSE '{}' END) AS field WHERE field.key='email' AND field.type='text' AND lower(field.value) IN (" + strings.Join(marks, ",") + "))"
+		switch s.db.Driver() {
+		case dbconn.Postgres:
+			where += ` AND EXISTS (SELECT 1 FROM jsonb_path_query(CASE WHEN result_json IS JSON THEN result_json::jsonb ELSE '{}'::jsonb END,'$.**.email') AS field(value) WHERE jsonb_typeof(field.value)='string' AND lower(field.value #>> '{}') IN (` + strings.Join(marks, ",") + `))`
+		case dbconn.MySQL:
+			where += ` AND EXISTS (SELECT 1 FROM JSON_TABLE(JSON_EXTRACT(CASE WHEN JSON_VALID(result_json) THEN result_json ELSE '{}' END,'$**.email'),'$[*]' COLUMNS(value JSON PATH '$')) AS field WHERE JSON_TYPE(field.value)='STRING' AND lower(JSON_UNQUOTE(field.value)) IN (` + strings.Join(marks, ",") + `))`
+		default:
+			where += " AND EXISTS (SELECT 1 FROM json_tree(CASE WHEN json_valid(tasks.result_json) THEN tasks.result_json ELSE '{}' END) AS field WHERE field.key='email' AND field.type='text' AND lower(field.value) IN (" + strings.Join(marks, ",") + "))"
+		}
+	}
+	if s.db.Driver() == dbconn.Postgres {
+		where = strings.ReplaceAll(where, "instr(", "strpos(")
 	}
 	return where, args, nil
 }
@@ -71,11 +82,11 @@ func (s *Store) QueryBySkill(ctx context.Context, skill string, input HistoryQue
 	if input.Limit == 0 {
 		input.Limit = 50
 	}
-	where, args, err := historyWhere(skill, input)
+	where, args, err := s.historyWhere(skill, input)
 	if err != nil {
 		return HistoryPage{}, err
 	}
-	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	tx, err := s.db.BeginSnapshot(ctx)
 	if err != nil {
 		return HistoryPage{}, err
 	}
@@ -84,11 +95,15 @@ func (s *Store) QueryBySkill(ctx context.Context, skill string, input HistoryQue
 	args = append(args, input.Limit, input.Offset)
 	// Keep large result bodies out of the count window and its temporary sort.
 	// Materialize only the requested IDs before looking up their full records.
-	rows, err := tx.QueryContext(ctx, `WITH page AS MATERIALIZED (
-		SELECT id,updated_at,COUNT(*) OVER() AS total FROM tasks WHERE `+where+`
+	query := `WITH page AS MATERIALIZED (
+		SELECT id,updated_at,COUNT(*) OVER() AS total FROM tasks WHERE ` + where + `
 		ORDER BY updated_at DESC,id LIMIT ? OFFSET ?
 	) SELECT t.id,t.skill,t.operation,t.status,t.progress,t.message,t.result_json,t.created_at,t.updated_at,page.total
-	FROM page JOIN tasks t ON t.id=page.id ORDER BY page.updated_at DESC,page.id`, args...)
+	FROM page JOIN tasks t ON t.id=page.id ORDER BY page.updated_at DESC,page.id`
+	if s.db.Driver() == dbconn.MySQL {
+		query = strings.Replace(query, "AS MATERIALIZED", "AS", 1)
+	}
+	rows, err := tx.QueryContext(ctx, query, args...)
 	if err != nil {
 		return HistoryPage{}, err
 	}

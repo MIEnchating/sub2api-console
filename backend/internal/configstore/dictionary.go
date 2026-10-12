@@ -32,7 +32,7 @@ func (s *Store) SyncDictionaryValues(ctx context.Context, kind string, values []
 	if !validDictionaryKind(kind) {
 		return fmt.Errorf("无效的字典类型")
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.beginSettingsTx(ctx, "dictionary.entries")
 	if err != nil {
 		return err
 	}
@@ -60,7 +60,7 @@ func (s *Store) SyncDictionaryValues(ctx context.Context, kind string, values []
 			nextOrder++
 		} else if err != nil {
 			return err
-		} else if _, err = tx.ExecContext(ctx, `UPDATE dictionary_entries SET name=?,updated_at=? WHERE id=? AND name<>?`, name, time.Now().UTC().Format(time.RFC3339Nano), id, name); err != nil {
+		} else if _, err = tx.ExecContext(ctx, `UPDATE dictionary_entries SET name=?,updated_at=?,version=version+1 WHERE id=? AND name<>?`, name, time.Now().UTC().Format(time.RFC3339Nano), id, name); err != nil {
 			return err
 		}
 	}
@@ -136,21 +136,28 @@ func (s *Store) SaveDictionary(ctx context.Context, d DictionaryEntry, expectedV
 		return DictionaryEntry{}, errors.New("字典名称或值过长")
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
+	// Entries can move between kinds; one dictionary lock also coordinates a
+	// complete sync or reorder with single-entry edits and deletions.
+	tx, err := s.beginSettingsTx(ctx, "dictionary.entries")
+	if err != nil {
+		return DictionaryEntry{}, err
+	}
+	defer tx.Rollback()
 	if d.ID == "" {
 		d.ID = uuid.NewString()
 		d.CreatedAt = now
 		d.UpdatedAt = now
 		d.Version = 1
-		_, err := s.db.ExecContext(ctx, `INSERT INTO dictionary_entries(id,kind,name,value,description,enabled,sort_order,created_at,updated_at,version) VALUES(?,?,?,?,?,?,?,?,?,?)`, d.ID, d.Kind, d.Name, d.Value, d.Description, boolInt(d.Enabled), d.SortOrder, now, now, 1)
+		_, err := tx.ExecContext(ctx, `INSERT INTO dictionary_entries(id,kind,name,value,description,enabled,sort_order,created_at,updated_at,version) VALUES(?,?,?,?,?,?,?,?,?,?)`, d.ID, d.Kind, d.Name, d.Value, d.Description, boolInt(d.Enabled), d.SortOrder, now, now, 1)
 		if err != nil {
 			return DictionaryEntry{}, err
 		}
-		return d, nil
+		return d, tx.Commit()
 	}
 	if expectedVersion <= 0 {
 		expectedVersion = d.Version
 	}
-	result, err := s.db.ExecContext(ctx, `UPDATE dictionary_entries SET kind=?,name=?,value=?,description=?,enabled=?,sort_order=?,updated_at=?,version=version+1 WHERE id=? AND version=?`, d.Kind, d.Name, d.Value, d.Description, boolInt(d.Enabled), d.SortOrder, now, d.ID, expectedVersion)
+	result, err := tx.ExecContext(ctx, `UPDATE dictionary_entries SET kind=?,name=?,value=?,description=?,enabled=?,sort_order=?,updated_at=?,version=version+1 WHERE id=? AND version=?`, d.Kind, d.Name, d.Value, d.Description, boolInt(d.Enabled), d.SortOrder, now, d.ID, expectedVersion)
 	if err != nil {
 		return DictionaryEntry{}, err
 	}
@@ -160,7 +167,7 @@ func (s *Store) SaveDictionary(ctx context.Context, d DictionaryEntry, expectedV
 	}
 	d.UpdatedAt = now
 	d.Version = expectedVersion + 1
-	return d, nil
+	return d, tx.Commit()
 }
 
 func boolInt(v bool) int {
@@ -174,7 +181,12 @@ func (s *Store) DeleteDictionary(ctx context.Context, id string, expectedVersion
 	if strings.TrimSpace(id) == "" {
 		return errors.New("字典 ID 不能为空")
 	}
-	r, err := s.db.ExecContext(ctx, `DELETE FROM dictionary_entries WHERE id=? AND version=?`, id, expectedVersion)
+	tx, err := s.beginSettingsTx(ctx, "dictionary.entries")
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	r, err := tx.ExecContext(ctx, `DELETE FROM dictionary_entries WHERE id=? AND version=?`, id, expectedVersion)
 	if err != nil {
 		return err
 	}
@@ -182,14 +194,14 @@ func (s *Store) DeleteDictionary(ctx context.Context, id string, expectedVersion
 	if n == 0 {
 		return ErrDictionaryConflict
 	}
-	return nil
+	return tx.Commit()
 }
 
 func (s *Store) ReorderDictionaries(ctx context.Context, kind string, ids []string) error {
 	if !validDictionaryKind(kind) {
 		return fmt.Errorf("无效的字典类型")
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.beginSettingsTx(ctx, "dictionary.entries")
 	if err != nil {
 		return err
 	}

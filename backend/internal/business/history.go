@@ -139,7 +139,7 @@ type AuditEvent struct {
 
 func (s *Store) Events(ctx context.Context, limit *int) ([]RunEvent, error) {
 	query := `SELECT source_id,event_type,created_at,status,summary,payload_json
-		FROM runtime_events INDEXED BY ix_runtime_events_log_order
+		FROM runtime_events` + sqliteIndexHint(s.db.Driver(), "ix_runtime_events_log_order") + `
 		ORDER BY created_at DESC,CASE WHEN source_id < 0 THEN 0 ELSE 1 END,
 		CASE WHEN source_id < 0 THEN source_id END ASC,CASE WHEN source_id >= 0 THEN source_id END DESC`
 	arguments, err := appendLimit(&query, limit)
@@ -166,7 +166,7 @@ func (s *Store) Events(ctx context.Context, limit *int) ([]RunEvent, error) {
 
 func (s *Store) SearchEvents(ctx context.Context, search string, limit *int) ([]RunEvent, error) {
 	recent := `SELECT source_id,event_type,created_at,status,summary,payload_json
-		FROM runtime_events INDEXED BY ix_runtime_events_log_order
+		FROM runtime_events` + sqliteIndexHint(s.db.Driver(), "ix_runtime_events_log_order") + `
 		ORDER BY created_at DESC,CASE WHEN source_id < 0 THEN 0 ELSE 1 END,
 		CASE WHEN source_id < 0 THEN source_id END ASC,CASE WHEN source_id >= 0 THEN source_id END DESC`
 	arguments, err := appendLimit(&recent, limit)
@@ -175,9 +175,7 @@ func (s *Store) SearchEvents(ctx context.Context, search string, limit *int) ([]
 	}
 	normalized := strings.ToLower(strings.TrimSpace(search))
 	query := `WITH recent AS (` + recent + `) SELECT source_id,event_type,created_at,status,summary,payload_json
-		FROM recent WHERE instr(lower(CAST(source_id AS TEXT)),?)>0 OR instr(lower(event_type),?)>0 OR
-		instr(lower(created_at),?)>0 OR instr(lower(status),?)>0 OR instr(lower(summary),?)>0 OR
-		instr(lower(payload_json),?)>0 ORDER BY created_at DESC,CASE WHEN source_id < 0 THEN 0 ELSE 1 END,
+		FROM recent WHERE ` + historySearchPredicate(s.db.Driver(), "source_id", "event_type", "created_at", "status", "summary", "payload_json") + ` ORDER BY created_at DESC,CASE WHEN source_id < 0 THEN 0 ELSE 1 END,
 		CASE WHEN source_id < 0 THEN source_id END ASC,CASE WHEN source_id >= 0 THEN source_id END DESC`
 	for range 6 {
 		arguments = append(arguments, normalized)
@@ -239,7 +237,7 @@ func (s *Store) RoutingDecisions(ctx context.Context, limit *int, accountID, gro
 		clauses = append(clauses, "account_id IN (SELECT account_id FROM account_groups WHERE group_name=?)")
 		arguments = append(arguments, strings.TrimSpace(*groupName))
 	}
-	query := `SELECT account_id,group_name,priority,schedulable,role,routing_state,rank,reason,updated_at,payload_json
+	query := `SELECT account_id,group_name,priority,schedulable,role,routing_state,"rank",reason,updated_at,payload_json
 		FROM routing_decisions` + whereSQL(clauses) + ` ORDER BY updated_at DESC`
 	limitArguments, err := appendLimit(&query, limit)
 	if err != nil {
@@ -292,9 +290,7 @@ func (s *Store) SearchRunRecords(ctx context.Context, search string, limit *int)
 	}
 	normalized := strings.ToLower(strings.TrimSpace(search))
 	query := `WITH recent AS (` + recent + `) SELECT run_key,task_name,status,stage,started_at,ended_at,duration_seconds,summary,payload_json,updated_at
-		FROM recent WHERE instr(lower(run_key),?)>0 OR instr(lower(task_name),?)>0 OR instr(lower(COALESCE(status,'')),?)>0 OR
-		instr(lower(COALESCE(stage,'')),?)>0 OR instr(lower(COALESCE(summary,'')),?)>0 OR instr(lower(payload_json),?)>0 OR
-		instr(lower(updated_at),?)>0 ORDER BY COALESCE(ended_at,started_at,updated_at) DESC`
+		FROM recent WHERE ` + historySearchPredicate(s.db.Driver(), "run_key", "task_name", "COALESCE(status,'')", "COALESCE(stage,'')", "COALESCE(summary,'')", "payload_json", "updated_at") + ` ORDER BY COALESCE(ended_at,started_at,updated_at) DESC`
 	for range 7 {
 		arguments = append(arguments, normalized)
 	}
@@ -497,7 +493,7 @@ func (s *Store) AuditEvents(ctx context.Context, limit *int, writebackOnly bool)
 		oa.field_name,oa.before_json,oa.after_json,oa.writeback,oa.created_at
 		FROM operation_audit oa`
 	if writebackOnly {
-		query += ` INDEXED BY ix_operation_audit_log_recent_v2`
+		query += sqliteIndexHint(s.db.Driver(), "ix_operation_audit_log_recent_v2")
 	}
 	query += ` LEFT JOIN accounts a ON a.id=oa.object_id`
 	if writebackOnly {
@@ -526,7 +522,7 @@ func (s *Store) SearchAuditEvents(ctx context.Context, search string, limit *int
 	recent := `SELECT oa.source_id,oa.operation_id,oa.operation_type,oa.state,oa.phase,oa.request_id,oa.task_id,oa.actor,oa.source,oa.error,oa.remote_confirmed,
 		oa.readback_confirmed,oa.object_type,oa.object_id,COALESCE(NULLIF(oa.object_name,''),a.name) AS object_name,oa.group_names_json,
 		oa.field_name,oa.before_json,oa.after_json,oa.writeback,oa.created_at
-		FROM operation_audit oa INDEXED BY ix_operation_audit_log_recent_v2 LEFT JOIN accounts a ON a.id=oa.object_id
+		FROM operation_audit oa` + sqliteIndexHint(s.db.Driver(), "ix_operation_audit_log_recent_v2") + ` LEFT JOIN accounts a ON a.id=oa.object_id
 		WHERE oa.phase<>'calculation' AND oa.operation_type<>'upstream.rate_sync' AND (
 			oa.writeback=1 OR (oa.operation_type='account.delete' AND oa.state='failed') OR
 			(oa.operation_type IN ('account.scheduling','routing.writeback')
@@ -541,14 +537,7 @@ func (s *Store) SearchAuditEvents(ctx context.Context, search string, limit *int
 	normalized := strings.ToLower(strings.TrimSpace(search))
 	query := `WITH recent AS (` + recent + `) SELECT source_id,operation_id,operation_type,state,phase,request_id,task_id,actor,source,error,
 		remote_confirmed,readback_confirmed,object_type,object_id,object_name,group_names_json,field_name,before_json,after_json,writeback,created_at
-		FROM recent WHERE instr(lower(CAST(source_id AS TEXT)),?)>0 OR instr(lower(operation_id),?)>0 OR
-		instr(lower(operation_type),?)>0 OR instr(lower(state),?)>0 OR instr(lower(phase),?)>0 OR
-		instr(lower(COALESCE(request_id,'')),?)>0 OR instr(lower(COALESCE(task_id,'')),?)>0 OR instr(lower(COALESCE(actor,'')),?)>0 OR
-		instr(lower(COALESCE(source,'')),?)>0 OR instr(lower(COALESCE(error,'')),?)>0 OR
-		instr(lower(COALESCE(object_id,'')),?)>0 OR instr(lower(COALESCE(object_name,'')),?)>0 OR
-		instr(lower(group_names_json),?)>0 OR instr(lower(COALESCE(field_name,'')),?)>0 OR
-		instr(lower(COALESCE(before_json,'')),?)>0 OR instr(lower(COALESCE(after_json,'')),?)>0 OR
-		instr(lower(created_at),?)>0 ORDER BY created_at DESC,CASE WHEN source_id < 0 THEN 0 ELSE 1 END,
+		FROM recent WHERE ` + historySearchPredicate(s.db.Driver(), "source_id", "operation_id", "operation_type", "state", "phase", "COALESCE(request_id,'')", "COALESCE(task_id,'')", "COALESCE(actor,'')", "COALESCE(source,'')", "COALESCE(error,'')", "COALESCE(object_id,'')", "COALESCE(object_name,'')", "group_names_json", "COALESCE(field_name,'')", "COALESCE(before_json,'')", "COALESCE(after_json,'')", "created_at") + ` ORDER BY created_at DESC,CASE WHEN source_id < 0 THEN 0 ELSE 1 END,
 		CASE WHEN source_id < 0 THEN source_id END ASC,CASE WHEN source_id >= 0 THEN source_id END DESC`
 	for range 17 {
 		arguments = append(arguments, normalized)

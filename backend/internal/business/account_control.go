@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/MIEnchating/sub2api-console/backend/internal/dbconn"
 	"sort"
 	"strings"
 	"time"
@@ -32,13 +33,13 @@ func (s *Store) CommitAccountSettings(ctx context.Context, accountID, actor stri
 	if !positiveNumericID(accountID) {
 		return errors.New("账号必须使用有效的稳定 ID")
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.beginPolicyTx(ctx, "control-plane")
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
 	var name, metadataRaw string
-	if err := tx.QueryRowContext(ctx, `SELECT name,metadata_json FROM accounts WHERE id=?`, accountID).Scan(&name, &metadataRaw); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT name,metadata_json FROM accounts WHERE id=?`+tx.LockClause(), accountID).Scan(&name, &metadataRaw); err != nil {
 		return err
 	}
 	document, err := s.readPolicyDocument(ctx, tx, "control-plane")
@@ -83,13 +84,14 @@ func (s *Store) CommitAccountSettings(ctx context.Context, accountID, actor stri
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE accounts SET priority=?,load_factor=?,concurrency=?,schedulable=?,
 		paused=?,paused_reason=?,routing_state=?,updated_at=? WHERE id=?`, update.Priority, loadFactor,
-		update.Concurrency, !update.Paused, update.Paused, pausedReason, routingState, now, accountID); err != nil {
+		update.Concurrency, boolDatabaseValue(!update.Paused), boolDatabaseValue(update.Paused), pausedReason, routingState, now, accountID); err != nil {
 		return err
 	}
 	if update.Paused {
-		if _, err := tx.ExecContext(ctx, `INSERT INTO paused_accounts(account_id,reason,enabled,updated_at)
+		if _, err := tx.ExecContext(ctx, tx.Dialect(`INSERT INTO paused_accounts(account_id,reason,enabled,updated_at)
 			VALUES(?,'人工暂停',1,?) ON CONFLICT(account_id) DO UPDATE SET
-			reason='人工暂停',enabled=1,updated_at=excluded.updated_at`, accountID, now); err != nil {
+			reason='人工暂停',enabled=1,updated_at=excluded.updated_at`, `INSERT INTO paused_accounts(account_id,reason,enabled,updated_at)
+			VALUES(?,'人工暂停',1,?) ON DUPLICATE KEY UPDATE reason='人工暂停',enabled=1,updated_at=VALUES(updated_at)`), accountID, now); err != nil {
 			return err
 		}
 	} else {
@@ -116,13 +118,9 @@ func (s *Store) CommitAccountSettings(ctx context.Context, accountID, actor stri
 	if err != nil {
 		return err
 	}
-	var minimum sql.NullInt64
-	if err := tx.QueryRowContext(ctx, `SELECT MIN(source_id) FROM runtime_events WHERE source_id < 0`).Scan(&minimum); err != nil {
+	sourceID, err := nextLocalEventID(ctx, tx, "runtime_events")
+	if err != nil {
 		return err
-	}
-	sourceID := int64(-1)
-	if minimum.Valid && minimum.Int64 <= -1 {
-		sourceID = minimum.Int64 - 1
 	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO runtime_events(source_id,event_type,created_at,status,summary,payload_json)
 		VALUES(?,?,?,?,?,?)`, sourceID, "account.settings", now, "succeeded",
@@ -172,7 +170,7 @@ func (s *Store) commitAccountControl(
 	if !valid {
 		return PolicySnapshot{}, errors.New("账号控制 action 无效")
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.beginPolicyTx(ctx, "control-plane")
 	if err != nil {
 		return PolicySnapshot{}, err
 	}
@@ -220,8 +218,8 @@ func (s *Store) commitAccountControl(
 		if _, err := tx.ExecContext(ctx, `UPDATE accounts SET paused=1,paused_reason='人工暂停',updated_at=? WHERE id=?`, now, accountID); err != nil {
 			return PolicySnapshot{}, err
 		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO paused_accounts(account_id,reason,enabled,updated_at) VALUES(?,'人工暂停',1,?)
-			ON CONFLICT(account_id) DO UPDATE SET reason='人工暂停',enabled=1,updated_at=excluded.updated_at`, accountID, now); err != nil {
+		if _, err := tx.ExecContext(ctx, tx.Dialect(`INSERT INTO paused_accounts(account_id,reason,enabled,updated_at) VALUES(?,'人工暂停',1,?)
+			ON CONFLICT(account_id) DO UPDATE SET reason='人工暂停',enabled=1,updated_at=excluded.updated_at`, `INSERT INTO paused_accounts(account_id,reason,enabled,updated_at) VALUES(?,'人工暂停',1,?) ON DUPLICATE KEY UPDATE reason='人工暂停',enabled=1,updated_at=VALUES(updated_at)`), accountID, now); err != nil {
 			return PolicySnapshot{}, err
 		}
 	}
@@ -248,7 +246,7 @@ func (s *Store) commitAccountControl(
 	}
 	if action == "resume" || action == "recover" {
 		var rawMetadata string
-		if err := tx.QueryRowContext(ctx, `SELECT metadata_json FROM accounts WHERE id=?`, accountID).Scan(&rawMetadata); err != nil {
+		if err := tx.QueryRowContext(ctx, `SELECT metadata_json FROM accounts WHERE id=?`+tx.LockClause(), accountID).Scan(&rawMetadata); err != nil {
 			return PolicySnapshot{}, err
 		}
 		metadata, err := clearedRoutingRuntimeMetadata(rawMetadata, accountID)
@@ -284,7 +282,7 @@ func (s *Store) SetAccountTestModels(ctx context.Context, accountID string, requ
 	if !positiveNumericID(accountID) {
 		return errors.New("账号必须使用有效的稳定 ID")
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.beginPolicyTx(ctx, "control-plane")
 	if err != nil {
 		return err
 	}
@@ -331,13 +329,9 @@ func (s *Store) SetAccountTestModels(ctx context.Context, accountID string, requ
 	if err != nil {
 		return err
 	}
-	var minimum sql.NullInt64
-	if err := tx.QueryRowContext(ctx, `SELECT MIN(source_id) FROM runtime_events WHERE source_id < 0`).Scan(&minimum); err != nil {
+	sourceID, err := nextLocalEventID(ctx, tx, "runtime_events")
+	if err != nil {
 		return err
-	}
-	sourceID := int64(-1)
-	if minimum.Valid && minimum.Int64 <= -1 {
-		sourceID = minimum.Int64 - 1
 	}
 	summary := fmt.Sprintf("账号 %s（%s）探测模型已更新", name, accountID)
 	if _, err := tx.ExecContext(ctx, `INSERT INTO runtime_events(source_id,event_type,created_at,status,summary,payload_json)
@@ -416,18 +410,14 @@ func sortedControlAccountIDs(values map[string]struct{}) []any {
 	return result
 }
 
-func recordAccountControlEvent(ctx context.Context, tx *sql.Tx, accountID, name, action, actor, now string) error {
+func recordAccountControlEvent(ctx context.Context, tx *dbconn.Tx, accountID, name, action, actor, now string) error {
 	payload, err := json.Marshal(map[string]any{"account_id": accountID, "account_name": name, "action": action, "actor": actor})
 	if err != nil {
 		return err
 	}
-	var minimum sql.NullInt64
-	if err := tx.QueryRowContext(ctx, `SELECT MIN(source_id) FROM runtime_events WHERE source_id < 0`).Scan(&minimum); err != nil {
+	sourceID, err := nextLocalEventID(ctx, tx, "runtime_events")
+	if err != nil {
 		return err
-	}
-	sourceID := int64(-1)
-	if minimum.Valid && minimum.Int64 <= -1 {
-		sourceID = minimum.Int64 - 1
 	}
 	labels := map[string]string{"pause": "暂停", "resume": "恢复调度", "exclude": "排除", "include": "恢复管控", "fuse": "人工熔断", "recover": "解除熔断"}
 	labels["ignore_cost_wall"], labels["respect_cost_wall"] = "开启无视成本墙", "关闭无视成本墙"

@@ -1,11 +1,17 @@
 package taskstore
 
-import "context"
+import (
+	"context"
+	"github.com/MIEnchating/sub2api-console/backend/internal/dbconn"
+)
 
 // AnimationHistory returns lightweight task references, retaining the latest
 // result and attempt for each stable target/stage as well as every active task.
 // A busy account must not evict another account's last animation or precheck.
 func (s *Store) AnimationHistory(ctx context.Context) ([]Task, error) {
+	if s.db.Driver() != dbconn.SQLite {
+		return s.serverAnimationHistory(ctx)
+	}
 	rows, err := s.db.QueryContext(ctx, `WITH animation_tasks AS (
   SELECT id,created_at,status,operation,result_json,updated_at FROM tasks
    WHERE skill='sub2api-model-animation' AND json_valid(result_json)

@@ -2,12 +2,16 @@ package taskstore
 
 import (
 	"context"
+	"github.com/MIEnchating/sub2api-console/backend/internal/dbconn"
 	"time"
 )
 
 // ModelCheckHistory projects only public verdict fields. It retains every check in
 // the statistics window plus the latest terminal task for each account.
 func (s *Store) ModelCheckHistory(ctx context.Context, since time.Time) ([]Task, error) {
+	if s.db.Driver() != dbconn.SQLite {
+		return s.serverModelHistory(ctx, since)
+	}
 	rows, err := s.db.QueryContext(ctx, `WITH terminal AS (
   SELECT id,skill,operation,status,progress,message,result_json,created_at,updated_at,
    CASE WHEN json_type(result_json,'$.account_ids')='array'

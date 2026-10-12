@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/MIEnchating/sub2api-console/backend/internal/dbconn"
 	"slices"
 	"sort"
 	"strings"
@@ -70,7 +71,7 @@ func (s *Store) SaveAccountEnabledModels(ctx context.Context, accountID string, 
 	}
 	defer tx.Rollback()
 	var rawMetadata string
-	if err := tx.QueryRowContext(ctx, `SELECT metadata_json FROM accounts WHERE id=?`, accountID).Scan(&rawMetadata); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT metadata_json FROM accounts WHERE id=?`+tx.LockClause(), accountID).Scan(&rawMetadata); err != nil {
 		return err
 	}
 	metadata, err := decodeJSONObject(rawMetadata)
@@ -106,8 +107,8 @@ func (s *Store) AccountModelCatalogs(ctx context.Context, accountIDs []string) (
 	// One statement keeps the selected catalogs in one SQLite snapshot. Drive
 	// the join from the request to retain its order and first missing-ID error.
 	rows, err := s.db.QueryContext(ctx, `SELECT requested.value,a.name,a.metadata_json
-		FROM json_each(?) requested LEFT JOIN accounts a ON a.id=requested.value
-		ORDER BY CAST(requested.key AS INTEGER)`, string(encoded))
+		FROM `+jsonScopeRows(s.db.Driver())+` requested LEFT JOIN accounts a ON a.id=requested.value
+		ORDER BY requested.ordinal`, string(encoded))
 	if err != nil {
 		return nil, err
 	}
@@ -290,7 +291,7 @@ func (s *Store) saveModelBlockRules(ctx context.Context, models, expected []stri
 	if err != nil {
 		return AccountModelSyncSettings{}, err
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.beginPolicyTx(ctx, "control-plane")
 	if err != nil {
 		return AccountModelSyncSettings{}, err
 	}
@@ -320,7 +321,7 @@ func (s *Store) saveModelBlockRules(ctx context.Context, models, expected []stri
 	return AccountModelSyncSettings{BlockedPatterns: normalized}, nil
 }
 
-func (s *Store) writeModelBlockPatterns(ctx context.Context, tx *sql.Tx, document map[string]any, normalized []string, actor string) error {
+func (s *Store) writeModelBlockPatterns(ctx context.Context, tx *dbconn.Tx, document map[string]any, normalized []string, actor string) error {
 	values := make([]any, len(normalized))
 	for index, model := range normalized {
 		values[index] = model
@@ -342,13 +343,9 @@ func (s *Store) writeModelBlockPatterns(ctx context.Context, tx *sql.Tx, documen
 	if err != nil {
 		return err
 	}
-	var minimum sql.NullInt64
-	if err := tx.QueryRowContext(ctx, `SELECT MIN(source_id) FROM runtime_events WHERE source_id < 0`).Scan(&minimum); err != nil {
+	sourceID, err := nextLocalEventID(ctx, tx, "runtime_events")
+	if err != nil {
 		return err
-	}
-	sourceID := int64(-1)
-	if minimum.Valid && minimum.Int64 <= -1 {
-		sourceID = minimum.Int64 - 1
 	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO runtime_events(source_id,event_type,created_at,status,summary,payload_json)
 		VALUES(?,?,?,?,?,?)`, sourceID, "account_model_policy.updated", now, "succeeded",

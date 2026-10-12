@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"github.com/MIEnchating/sub2api-console/backend/internal/dbconn"
 	"sort"
 	"strings"
 	"time"
@@ -125,7 +126,7 @@ func (s *Store) DeleteUpstreamProjection(ctx context.Context, host string, expec
 	if err := s.ensureStableUpstreamRelationsForHost(ctx, host); err != nil {
 		return UpstreamDeleteProjection{}, err
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.beginPolicyTx(ctx, "control-plane")
 	if err != nil {
 		return UpstreamDeleteProjection{}, err
 	}
@@ -200,7 +201,7 @@ func (s *Store) DeleteUpstreamProjection(ctx context.Context, host string, expec
 		return UpstreamDeleteProjection{}, err
 	}
 	var eventID int64
-	if err := tx.QueryRowContext(ctx, `SELECT MIN(source_id) FROM runtime_events WHERE source_id < 0`).Scan(&eventID); err != nil {
+	if err := tx.QueryRowContext(ctx, lastLocalEventIDSQL(tx, "runtime_events")).Scan(&eventID); err != nil {
 		return UpstreamDeleteProjection{}, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -210,6 +211,7 @@ func (s *Store) DeleteUpstreamProjection(ctx context.Context, host string, expec
 }
 
 type deletePreviewQueryer interface {
+	Driver() dbconn.Driver
 	QueryRowContext(context.Context, string, ...any) *sql.Row
 	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
 }
@@ -285,7 +287,7 @@ func upstreamDeleteAccountRows(ctx context.Context, queryer deletePreviewQueryer
 		FROM accounts a LEFT JOIN bindings b ON b.local_account_id=a.id
 		LEFT JOIN binding_identities bi ON bi.binding_id=b.id
 		WHERE a.upstream_host IN (SELECT host FROM upstream_identity_hosts WHERE upstream_id=?) OR bi.upstream_id=?
-		ORDER BY CASE WHEN a.id GLOB '[0-9]*' THEN CAST(a.id AS INTEGER) ELSE 0 END,a.id`, upstreamID, upstreamID)
+		ORDER BY `+numericIDOrder(queryer.Driver(), "a.id")+`,a.id`, upstreamID, upstreamID)
 	if err != nil {
 		return nil, err
 	}

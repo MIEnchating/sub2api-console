@@ -12,8 +12,36 @@ import (
 	"time"
 
 	"github.com/MIEnchating/sub2api-console/backend/internal/config"
+	"github.com/MIEnchating/sub2api-console/backend/internal/taskcontext"
 	"github.com/MIEnchating/sub2api-console/backend/internal/taskstore"
 )
+
+func TestDatabaseInstanceLossInterruptsRecoverableTasks(t *testing.T) {
+	parent, loseInstance := context.WithCancelCause(t.Context())
+	ctx, stop := newServiceContext(parent)
+	defer stop()
+	lostConnection := errors.New("database instance connection lost")
+	loseInstance(lostConnection)
+	select {
+	case <-ctx.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("database instance loss did not stop services")
+	}
+	if !taskstore.Interrupted(ctx) {
+		t.Fatal("database instance loss was classified as an ordinary failure instead of a recoverable interruption")
+	}
+	if !errors.Is(context.Cause(ctx), lostConnection) {
+		t.Fatal("database instance failure reason was lost")
+	}
+}
+
+func TestNormalServiceStopInterruptsRecoverableTasks(t *testing.T) {
+	ctx, stop := newServiceContext(t.Context())
+	stop()
+	if !errors.Is(context.Cause(ctx), taskcontext.ErrInterrupted) || !taskstore.Interrupted(ctx) {
+		t.Fatal("normal service stop did not interrupt recoverable tasks")
+	}
+}
 
 func TestHTTPServerDoesNotTerminateLongLivedSSEWrites(t *testing.T) {
 	server := newHTTPServer("127.0.0.1:0", http.NewServeMux())
@@ -65,6 +93,8 @@ func TestPortConflictDoesNotRecoverTasksOwnedByRunningInstance(t *testing.T) {
 	}
 
 	t.Setenv("SUB2API_CONSOLE_DATA_DIR", directory)
+	t.Setenv("SUB2API_CONSOLE_DB_DRIVER", "sqlite")
+	t.Setenv("SUB2API_CONSOLE_DB_DSN", "")
 	t.Setenv("SUB2API_CONSOLE_LISTEN", occupied.Addr().String())
 	if err := run(); err == nil {
 		t.Fatal("second instance unexpectedly started on an occupied port")

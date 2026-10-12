@@ -29,7 +29,11 @@ func (s *Store) PersistAnimationEvidence(ctx context.Context, values []Animation
 	if len(values) == 0 {
 		return nil
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
+	resources := make([]string, 0, len(values))
+	for _, value := range values {
+		resources = append(resources, "evidence/account/"+value.AccountID)
+	}
+	tx, err := s.beginResourceTx(ctx, resources)
 	if err != nil {
 		return err
 	}
@@ -73,9 +77,10 @@ func (s *Store) PersistAnimationEvidence(ctx context.Context, values []Animation
 			return marshalErr
 		}
 		for _, membership := range memberships {
-			if _, execErr := tx.ExecContext(ctx, `INSERT INTO health_samples(account_id,group_name,result,failure_reason,observed_at,source,evidence_key,payload_json)
+			if _, execErr := tx.ExecContext(ctx, tx.Dialect(`INSERT INTO health_samples(account_id,group_name,result,failure_reason,observed_at,source,evidence_key,payload_json)
 				VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(source,evidence_key,account_id,group_name) DO UPDATE SET
-				result=excluded.result,failure_reason=excluded.failure_reason,observed_at=excluded.observed_at,payload_json=excluded.payload_json`,
+				result=excluded.result,failure_reason=excluded.failure_reason,observed_at=excluded.observed_at,payload_json=excluded.payload_json`, `INSERT INTO health_samples(account_id,group_name,result,failure_reason,observed_at,source,evidence_key,payload_json)
+				VALUES(?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE result=VALUES(result),failure_reason=VALUES(failure_reason),observed_at=VALUES(observed_at),payload_json=VALUES(payload_json)`),
 				value.AccountID, membership.name, value.Verdict, value.Error, observed, "animation", value.TaskID+":"+value.Mode, string(payload)); execErr != nil {
 				return fmt.Errorf("保存动画证据失败：%w", execErr)
 			}
@@ -95,7 +100,7 @@ func (s *Store) RoutingAnimationEvidence(ctx context.Context, accountID, groupNa
 		clauses = append(clauses, "group_name=?")
 		args = append(args, strings.TrimSpace(*groupName))
 	}
-	query := `SELECT account_id,group_name,evidence_key,failure_reason,observed_at,payload_json FROM health_samples WHERE ` + strings.Join(clauses, " AND ") + ` ORDER BY CASE WHEN json_extract(payload_json,'$.mode')='precheck' THEN 0 ELSE 1 END, observed_at DESC,id DESC`
+	query := `SELECT account_id,group_name,evidence_key,failure_reason,observed_at,payload_json FROM health_samples WHERE ` + strings.Join(clauses, " AND ") + ` ORDER BY CASE WHEN ` + jsonFieldSQL(s.db.Driver(), "payload_json", "mode", false) + `='precheck' THEN 0 ELSE 1 END, observed_at DESC,id DESC`
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err

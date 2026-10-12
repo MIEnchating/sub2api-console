@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"github.com/MIEnchating/sub2api-console/backend/internal/dbconn"
 	"math/big"
 	"strings"
 	"time"
@@ -31,14 +32,15 @@ func (s *Store) ValidateNewAPIQuotaUnit(ctx context.Context, host string, rawUni
 	}
 	unitText := quotaUnitText(unit)
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	if _, err := tx.ExecContext(ctx, `INSERT INTO billing_quota_unit_observations(host,observed_at,quota_per_unit)
-		VALUES(?,?,?) ON CONFLICT(host,observed_at) DO UPDATE SET quota_per_unit=excluded.quota_per_unit`, host, now, unitText); err != nil {
+	if _, err := tx.ExecContext(ctx, tx.Dialect(`INSERT INTO billing_quota_unit_observations(host,observed_at,quota_per_unit)
+		VALUES(?,?,?) ON CONFLICT(host,observed_at) DO UPDATE SET quota_per_unit=excluded.quota_per_unit`, `INSERT INTO billing_quota_unit_observations(host,observed_at,quota_per_unit)
+		VALUES(?,?,?) ON DUPLICATE KEY UPDATE quota_per_unit=VALUES(quota_per_unit)`), host, now, unitText); err != nil {
 		return err
 	}
 
 	var baselineText string
 	err = tx.QueryRowContext(ctx, `SELECT quota_per_unit FROM billing_quota_unit_observations
-		WHERE host=? AND julianday(observed_at)<=julianday(?) ORDER BY julianday(observed_at) DESC LIMIT 1`,
+		WHERE host=? AND `+instantSQL(tx.Driver(), "observed_at")+`<=`+instantSQL(tx.Driver(), "?")+` ORDER BY `+instantSQL(tx.Driver(), "observed_at")+` DESC LIMIT 1`,
 		host, start.UTC().Format(time.RFC3339Nano)).Scan(&baselineText)
 	var validationErr error
 	if errors.Is(err, sql.ErrNoRows) {
@@ -80,8 +82,8 @@ func (s *Store) ValidateNewAPIQuotaUnit(ctx context.Context, host string, rawUni
 			validationErr = fmt.Errorf("NewAPI quota_per_unit 当前值 %s 与报告日前基线 %s 不一致", unitText, baselineText)
 		} else {
 			rows, queryErr := tx.QueryContext(ctx, `SELECT quota_per_unit FROM billing_quota_unit_observations
-				WHERE host=? AND julianday(observed_at)>julianday(?) AND julianday(observed_at)<=julianday(?)
-				ORDER BY julianday(observed_at)`, host,
+				WHERE host=? AND `+instantSQL(tx.Driver(), "observed_at")+`>`+instantSQL(tx.Driver(), "?")+` AND `+instantSQL(tx.Driver(), "observed_at")+`<=`+instantSQL(tx.Driver(), "?")+`
+				ORDER BY `+instantSQL(tx.Driver(), "observed_at")+``, host,
 				start.UTC().Format(time.RFC3339Nano), end.UTC().Format(time.RFC3339Nano))
 			if queryErr != nil {
 				return queryErr
@@ -116,7 +118,7 @@ func (s *Store) ValidateNewAPIQuotaUnit(ctx context.Context, host string, rawUni
 	return validationErr
 }
 
-func seedQuotaUnitFromUpstreamMetadata(ctx context.Context, tx *sql.Tx, host string, start time.Time) error {
+func seedQuotaUnitFromUpstreamMetadata(ctx context.Context, tx *dbconn.Tx, host string, start time.Time) error {
 	var metadataRaw string
 	var checkedAt sql.NullString
 	err := tx.QueryRowContext(ctx, `SELECT metadata_json,checked_at FROM upstreams WHERE host=?`, host).Scan(&metadataRaw, &checkedAt)
@@ -141,7 +143,7 @@ func seedQuotaUnitFromUpstreamMetadata(ctx context.Context, tx *sql.Tx, host str
 	if _, err := positiveQuotaUnit(unitText); err != nil {
 		return nil
 	}
-	_, err = tx.ExecContext(ctx, `INSERT OR IGNORE INTO billing_quota_unit_observations(host,observed_at,quota_per_unit) VALUES(?,?,?)`,
+	_, err = tx.InsertIfAbsentContext(ctx, `INSERT INTO billing_quota_unit_observations(host,observed_at,quota_per_unit) VALUES(?,?,?) ON CONFLICT(host,observed_at) DO NOTHING`,
 		host, observedAt.UTC().Format(time.RFC3339Nano), unitText)
 	return err
 }

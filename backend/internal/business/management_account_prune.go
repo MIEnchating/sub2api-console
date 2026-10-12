@@ -2,12 +2,12 @@ package business
 
 import (
 	"context"
-	"database/sql"
+	"github.com/MIEnchating/sub2api-console/backend/internal/dbconn"
 )
 
 func (s *Store) pruneManagementDeletedAccounts(
 	ctx context.Context,
-	tx *sql.Tx,
+	tx *dbconn.Tx,
 	remoteIDs map[string]struct{},
 	now string,
 ) ([]string, error) {

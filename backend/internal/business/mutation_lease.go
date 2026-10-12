@@ -130,8 +130,8 @@ func (s *Store) upstreamIdentityMutationAccountIDs(ctx context.Context, hosts, u
 		return nil, err
 	}
 	rows, err := s.db.QueryContext(ctx, `WITH
-		host_values(value) AS (SELECT CAST(value AS TEXT) FROM json_each(?)),
-		identity_values(value) AS (SELECT CAST(value AS TEXT) FROM json_each(?))
+		host_values(value) AS (SELECT value FROM `+jsonScopeRows(s.db.Driver())+` scope),
+		identity_values(value) AS (SELECT value FROM `+jsonScopeRows(s.db.Driver())+` scope)
 		SELECT DISTINCT account_id FROM (
 			SELECT id AS account_id FROM accounts WHERE upstream_host IN (SELECT value FROM host_values)
 			UNION ALL
@@ -139,7 +139,7 @@ func (s *Store) upstreamIdentityMutationAccountIDs(ctx context.Context, hosts, u
 			UNION ALL
 			SELECT b.local_account_id AS account_id FROM binding_identities bi
 			JOIN bindings b ON b.id=bi.binding_id WHERE bi.upstream_id IN (SELECT value FROM identity_values)
-		) WHERE TRIM(account_id)<>'' ORDER BY account_id`, string(hostValues), string(identityValues))
+		) identities WHERE TRIM(account_id)<>'' ORDER BY account_id`, string(hostValues), string(identityValues))
 	if err != nil {
 		return nil, err
 	}
@@ -175,7 +175,7 @@ func (s *Store) AcquireMutationLease(
 		}
 		return false, errors.New("变更租约参数无效")
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.beginResourceTx(ctx, resources)
 	if err != nil {
 		return false, preferContextError(ctx, err)
 	}
@@ -256,37 +256,7 @@ func (s *Store) RenewMutationLease(
 		}
 		return false, errors.New("变更租约参数无效")
 	}
-	current := now.UTC()
-	formattedNow := current.Format(time.RFC3339Nano)
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return false, err
-	}
-	defer tx.Rollback()
-	var count int64
-	for start := 0; start < len(resources); start += mutationLeaseSQLChunk {
-		chunk := resources[start:min(start+mutationLeaseSQLChunk, len(resources))]
-		placeholders, resourceArguments := mutationLeaseArguments(chunk)
-		arguments := []any{formattedNow, current.Add(ttl).Format(time.RFC3339Nano), ownerID, formattedNow}
-		arguments = append(arguments, resourceArguments...)
-		result, err := tx.ExecContext(ctx, `UPDATE scheduler_leases SET renewed_at=?,expires_at=?
-			WHERE owner_id=? AND julianday(expires_at)>julianday(?) AND lease_name IN (`+placeholders+`)`, arguments...)
-		if err != nil {
-			return false, err
-		}
-		changed, err := result.RowsAffected()
-		if err != nil {
-			return false, err
-		}
-		count += changed
-	}
-	if count != int64(len(resources)) {
-		return false, nil
-	}
-	if err := tx.Commit(); err != nil {
-		return false, err
-	}
-	return true, nil
+	return s.renewLeaseNames(ctx, ownerID, resources, now, ttl)
 }
 
 func (s *Store) ReleaseMutationLease(ctx context.Context, ownerID string, resources []string) error {
@@ -298,7 +268,7 @@ func (s *Store) ReleaseMutationLease(ctx context.Context, ownerID string, resour
 	if ownerID == "" {
 		return errors.New("变更租约参数无效")
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.beginResourceTx(ctx, resources)
 	if err != nil {
 		return err
 	}

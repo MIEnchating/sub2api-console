@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/MIEnchating/sub2api-console/backend/internal/dbconn"
 	"sort"
 	"strings"
 	"time"
@@ -157,7 +158,7 @@ func (s *Store) RoutingAccounts(ctx context.Context, accountID, groupName *strin
 	if len(clauses) > 0 {
 		query += " WHERE " + strings.Join(clauses, " AND ")
 	}
-	query += ` ORDER BY ag.group_name,CASE WHEN a.id GLOB '[0-9]*' THEN CAST(a.id AS INTEGER) ELSE 0 END,a.id`
+	query += ` ORDER BY ag.group_name,` + numericIDOrder(s.db.Driver(), "a.id") + `,a.id`
 	rows, err := s.db.QueryContext(ctx, query, arguments...)
 	if err != nil {
 		return nil, err
@@ -315,8 +316,12 @@ func previousRoutingDecisionsQuery(accountID, groupName *string) (string, []any)
 }
 
 func previousDecisionsQuery(accountID, groupName *string, includeWriteTimes bool) (string, []any) {
-	clauses := []string{`julianday(rd.updated_at)>=COALESCE(
-		(SELECT julianday(updated_at) FROM app_state WHERE key='routing-decision-epoch'),julianday(rd.updated_at))`}
+	return previousDecisionsQueryForDriver(dbconn.SQLite, accountID, groupName, includeWriteTimes)
+}
+
+func previousDecisionsQueryForDriver(driver dbconn.Driver, accountID, groupName *string, includeWriteTimes bool) (string, []any) {
+	clauses := []string{`` + instantSQL(driver, "rd.updated_at") + `>=COALESCE(
+		(SELECT ` + instantSQL(driver, "updated_at") + ` FROM app_state WHERE "key"='routing-decision-epoch'),` + instantSQL(driver, "rd.updated_at") + `)`}
 	arguments := []any{}
 	if accountID != nil {
 		clauses = append(clauses, "rd.account_id=?")
@@ -357,13 +362,13 @@ func previousDecisionsQuery(accountID, groupName *string, includeWriteTimes bool
 }
 
 func (s *Store) PreviousRoutingDecisions(ctx context.Context, accountID, groupName *string) ([]PreviousRoutingDecision, error) {
-	query, arguments := previousRoutingDecisionsQuery(accountID, groupName)
+	query, arguments := previousDecisionsQueryForDriver(s.db.Driver(), accountID, groupName, true)
 	return s.readPreviousDecisions(ctx, query, arguments)
 }
 
 // Health projection needs prior state, but not scheduling write cooldowns.
 func (s *Store) PreviousHealthDecisions(ctx context.Context, accountID, groupName *string) ([]PreviousRoutingDecision, error) {
-	query, arguments := previousDecisionsQuery(accountID, groupName, false)
+	query, arguments := previousDecisionsQueryForDriver(s.db.Driver(), accountID, groupName, false)
 	return s.readPreviousDecisions(ctx, query, arguments)
 }
 
@@ -485,7 +490,7 @@ func (s *Store) PersistRoutingRound(
 			return fmt.Errorf("路由决策无法严格 JSON 序列化：%w", err)
 		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO routing_decisions(
-			account_id,group_name,priority,schedulable,role,routing_state,rank,reason,updated_at,payload_json
+			account_id,group_name,priority,schedulable,role,routing_state,"rank",reason,updated_at,payload_json
 		) VALUES(?,?,?,?,?,?,?,?,?,?)`, item.AccountID, item.GroupName, item.Priority, boolDatabase(item.Schedulable),
 			item.Role, item.State, item.Rank, item.Reason, evaluatedAt, string(payload)); err != nil {
 			return err
@@ -509,8 +514,7 @@ func (s *Store) PersistRoutingRound(
 			}
 			continue
 		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO `+table+`(account_id,eligible_since,updated_at) VALUES(?,?,?)
-			ON CONFLICT(account_id) DO UPDATE SET eligible_since=excluded.eligible_since,updated_at=excluded.updated_at`,
+		if _, err := tx.ExecContext(ctx, `INSERT INTO `+table+`(account_id,eligible_since,updated_at) VALUES(?,?,?)`+tx.Dialect(` ON CONFLICT(account_id) DO UPDATE SET eligible_since=excluded.eligible_since,updated_at=excluded.updated_at`, ` ON DUPLICATE KEY UPDATE eligible_since=VALUES(eligible_since),updated_at=VALUES(updated_at)`),
 			item.AccountID, item.EligibleSince.UTC().Format(time.RFC3339Nano), evaluatedAt); err != nil {
 			return err
 		}
@@ -524,8 +528,8 @@ func (s *Store) PersistRoutingRound(
 			return err
 		}
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO app_state(key,value_json,updated_at) VALUES(?,?,?)
-		ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json,updated_at=excluded.updated_at`,
+	if _, err := tx.ExecContext(ctx, tx.Dialect(`INSERT INTO app_state("key",value_json,updated_at) VALUES(?,?,?)
+		ON CONFLICT("key") DO UPDATE SET value_json=excluded.value_json,updated_at=excluded.updated_at`, `INSERT INTO app_state("key",value_json,updated_at) VALUES(?,?,?) ON DUPLICATE KEY UPDATE value_json=VALUES(value_json),updated_at=VALUES(updated_at)`),
 		routingCalculationKey, `{}`, evaluatedAt); err != nil {
 		return err
 	}

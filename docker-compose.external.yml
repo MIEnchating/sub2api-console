@@ -1,0 +1,9 @@
+# Use with the base file for external PostgreSQL/MySQL or explicit SQLite.
+# Requires Docker Compose 2.24+ for !reset.
+services:
+  api:
+    depends_on: !reset {}
+    environment:
+      SUB2API_CONSOLE_DB_DSN: ${SUB2API_CONSOLE_DB_DSN:-}
+  postgres:
+    profiles: [bundled-db]

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"github.com/MIEnchating/sub2api-console/backend/internal/dbconn"
 	"path/filepath"
 	"reflect"
 	"runtime"
@@ -152,7 +153,7 @@ func TestOpenReservesWriteLockWhenTransactionBegins(t *testing.T) {
 	defer first.Rollback()
 
 	type transactionResult struct {
-		transaction *sql.Tx
+		transaction *dbconn.Tx
 		err         error
 	}
 	result := make(chan transactionResult, 1)

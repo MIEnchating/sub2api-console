@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/MIEnchating/sub2api-console/backend/internal/dbconn"
 	"io"
 	"math"
 	"sort"
@@ -16,7 +17,6 @@ import (
 
 	"github.com/MIEnchating/sub2api-console/backend/internal/accountquality"
 	"github.com/MIEnchating/sub2api-console/backend/internal/runtimepolicy"
-	"github.com/MIEnchating/sub2api-console/backend/internal/sqliteutil"
 
 	_ "modernc.org/sqlite"
 )
@@ -69,19 +69,17 @@ type policyNode struct {
 }
 
 func Open(path string) (*Store, error) {
-	if err := sqliteutil.Prepare(path); err != nil {
-		return nil, err
-	}
-	db, err := openDatabase(path)
+	return OpenDatabase(context.Background(), dbconn.Config{Driver: dbconn.SQLite, Path: path})
+}
+
+func OpenDatabase(ctx context.Context, config dbconn.Config) (*Store, error) {
+	connection, err := dbconn.Open(ctx, config)
 	if err != nil {
 		return nil, err
 	}
-	store := &Store{path: path, db: db}
-	if err := store.ensureSchema(context.Background()); err != nil {
-		return nil, errors.Join(err, db.Close())
-	}
-	if err := sqliteutil.Secure(path); err != nil {
-		return nil, errors.Join(err, db.Close())
+	store := &Store{path: config.Path, db: &database{Database: connection}}
+	if err := store.ensureSchema(ctx); err != nil {
+		return nil, errors.Join(err, connection.Close())
 	}
 	return store, nil
 }
@@ -92,7 +90,7 @@ func (s *Store) Close() error {
 
 func (s *Store) Ready(ctx context.Context) (bool, error) {
 	var marker int
-	err := s.db.QueryRowContext(ctx, `SELECT 1 FROM app_state WHERE key='config'`).Scan(&marker)
+	err := s.db.QueryRowContext(ctx, `SELECT 1 FROM app_state WHERE "key"='config'`).Scan(&marker)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
@@ -109,7 +107,7 @@ func (s *Store) Mode(ctx context.Context) (string, error) {
 
 func (s *Store) RuntimeSnapshot(ctx context.Context) (RuntimeSnapshot, error) {
 	var raw string
-	err := s.db.QueryRowContext(ctx, `SELECT value_json FROM app_state WHERE key='config'`).Scan(&raw)
+	err := s.db.QueryRowContext(ctx, `SELECT value_json FROM app_state WHERE "key"='config'`).Scan(&raw)
 	if errors.Is(err, sql.ErrNoRows) {
 		return RuntimeSnapshot{Available: false, Keys: []string{}, Mode: "未初始化", ConfigurationErrors: []string{}}, nil
 	}
@@ -145,7 +143,7 @@ func (s *Store) SetMode(ctx context.Context, mode string) (RuntimeSnapshot, erro
 	if !validMode(mode) {
 		return RuntimeSnapshot{}, errors.New("运行模式只能是监控模式或完全模式")
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.beginPolicyTx(ctx, "control-plane")
 	if err != nil {
 		return RuntimeSnapshot{}, err
 	}
@@ -160,12 +158,12 @@ func (s *Store) SetMode(ctx context.Context, mode string) (RuntimeSnapshot, erro
 	return s.RuntimeSnapshot(ctx)
 }
 
-func updateRuntimeModeTx(ctx context.Context, tx *sql.Tx, mode string, now string) error {
+func updateRuntimeModeTx(ctx context.Context, tx *dbconn.Tx, mode string, now string) error {
 	if !validMode(mode) {
 		return errors.New("运行模式只能是监控模式或完全模式")
 	}
 	var raw string
-	err := tx.QueryRowContext(ctx, `SELECT value_json FROM app_state WHERE key='config'`).Scan(&raw)
+	err := tx.QueryRowContext(ctx, `SELECT value_json FROM app_state WHERE "key"='config'`).Scan(&raw)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return err
 	}
@@ -193,14 +191,15 @@ func updateRuntimeModeTx(ctx context.Context, tx *sql.Tx, mode string, now strin
 	}
 	if _, err := tx.ExecContext(
 		ctx,
-		`INSERT INTO app_state(key,value_json,updated_at) VALUES('config',?,?)
-		 ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json,updated_at=excluded.updated_at`,
+		tx.Dialect(`INSERT INTO app_state("key",value_json,updated_at) VALUES('config',?,?)
+		 ON CONFLICT("key") DO UPDATE SET value_json=excluded.value_json,updated_at=excluded.updated_at`, `INSERT INTO app_state("key",value_json,updated_at) VALUES('config',?,?) ON DUPLICATE KEY UPDATE value_json=VALUES(value_json),updated_at=VALUES(updated_at)`),
 		string(encoded), now,
 	); err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO app_state(key,value_json,updated_at)
-		VALUES('routing-decision-epoch','{}',?) ON CONFLICT(key) DO UPDATE SET updated_at=excluded.updated_at`, now); err != nil {
+	if _, err := tx.ExecContext(ctx, tx.Dialect(`INSERT INTO app_state("key",value_json,updated_at)
+		VALUES('routing-decision-epoch','{}',?) ON CONFLICT("key") DO UPDATE SET updated_at=excluded.updated_at`, `INSERT INTO app_state("key",value_json,updated_at)
+		VALUES('routing-decision-epoch','{}',?) ON DUPLICATE KEY UPDATE updated_at=VALUES(updated_at)`), now); err != nil {
 		return err
 	}
 	return nil
@@ -254,7 +253,7 @@ func (s *Store) EnableNotificationChannel(ctx context.Context, channelType strin
 	if normalizedType == "" {
 		return errors.New("通知渠道类型不能为空")
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.beginPolicyTx(ctx, "control-plane")
 	if err != nil {
 		return err
 	}
@@ -314,7 +313,7 @@ func (s *Store) EnableNotificationChannel(ctx context.Context, channelType strin
 }
 
 func (s *Store) SetProbeEnabled(ctx context.Context, enabled bool) error {
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.beginPolicyTx(ctx, "control-plane")
 	if err != nil {
 		return err
 	}
@@ -536,8 +535,8 @@ func decodePolicyNode(id int64, nodes map[int64]policyNode, children map[int64][
 	}
 }
 
-func (s *Store) writePolicyDocument(ctx context.Context, tx *sql.Tx, policyKey string, value map[string]any, updatedAt string) error {
-	if _, err := tx.ExecContext(ctx, `DELETE FROM policy_nodes WHERE policy_key=?`, policyKey); err != nil {
+func (s *Store) writePolicyDocument(ctx context.Context, tx *dbconn.Tx, policyKey string, value map[string]any, updatedAt string) error {
+	if err := deletePolicyNodes(ctx, tx, policyKey); err != nil {
 		return err
 	}
 	if err := insertPolicyNode(ctx, tx, policyKey, value, nil, nil, nil, updatedAt); err != nil {
@@ -546,7 +545,7 @@ func (s *Store) writePolicyDocument(ctx context.Context, tx *sql.Tx, policyKey s
 	return nil
 }
 
-func insertPolicyNode(ctx context.Context, tx *sql.Tx, policyKey string, value any, parentID *int64, keyName *string, listIndex *int64, updatedAt string) error {
+func insertPolicyNode(ctx context.Context, tx *dbconn.Tx, policyKey string, value any, parentID *int64, keyName *string, listIndex *int64, updatedAt string) error {
 	var nodeType string
 	var scalar any
 	switch item := value.(type) {
@@ -577,16 +576,12 @@ func insertPolicyNode(ctx context.Context, tx *sql.Tx, policyKey string, value a
 	default:
 		return fmt.Errorf("策略包含不支持的值类型：%T", value)
 	}
-	result, err := tx.ExecContext(
+	id, err := tx.InsertID(
 		ctx,
 		`INSERT INTO policy_nodes(policy_key,parent_id,key_name,list_index,node_type,scalar_value,updated_at)
 		 VALUES(?,?,?,?,?,?,?)`,
 		policyKey, parentID, keyName, listIndex, nodeType, scalar, updatedAt,
 	)
-	if err != nil {
-		return err
-	}
-	id, err := result.LastInsertId()
 	if err != nil {
 		return err
 	}

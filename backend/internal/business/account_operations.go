@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/MIEnchating/sub2api-console/backend/internal/dbconn"
 	"math/big"
 	"strings"
 	"time"
@@ -46,7 +47,7 @@ func (s *Store) CommitAccountFieldsReadback(
 	notes *string,
 	operation AccountOperation,
 ) error {
-	return s.commitAccountMutation(ctx, accountID, operation, func(tx *sql.Tx, now string) error {
+	return s.commitAccountMutation(ctx, accountID, operation, func(tx *dbconn.Tx, now string) error {
 		updates := make([]string, 0, 8)
 		arguments := make([]any, 0, 9)
 		if name != nil {
@@ -89,7 +90,7 @@ func (s *Store) CommitAccountFieldsReadback(
 		}
 		if baseURL != nil || notesPresent {
 			var raw string
-			if err := tx.QueryRowContext(ctx, `SELECT metadata_json FROM accounts WHERE id=?`, accountID).Scan(&raw); err != nil {
+			if err := tx.QueryRowContext(ctx, `SELECT metadata_json FROM accounts WHERE id=?`+tx.LockClause(), accountID).Scan(&raw); err != nil {
 				return err
 			}
 			metadata, err := decodeJSONObject(raw)
@@ -152,7 +153,7 @@ func (s *Store) CommitAccountGroupsReadback(
 	if len(groups) == 0 {
 		return errors.New("账号至少需要保留一个本地分组")
 	}
-	return s.commitAccountMutation(ctx, accountID, operation, func(tx *sql.Tx, now string) error {
+	return s.commitAccountMutation(ctx, accountID, operation, func(tx *dbconn.Tx, now string) error {
 		if err := s.requireAccountGroupsUnlocked(ctx, tx, accountID); err != nil {
 			return err
 		}
@@ -180,7 +181,7 @@ func (s *Store) CommitAccountGroupsReadback(
 			}
 		} else {
 			var metadataRaw string
-			if err := tx.QueryRowContext(ctx, `SELECT metadata_json FROM accounts WHERE id=?`, accountID).Scan(&metadataRaw); err != nil {
+			if err := tx.QueryRowContext(ctx, `SELECT metadata_json FROM accounts WHERE id=?`+tx.LockClause(), accountID).Scan(&metadataRaw); err != nil {
 				return err
 			}
 			metadata, err := decodeObject(metadataRaw)
@@ -241,7 +242,7 @@ func (s *Store) SaveAccountModels(ctx context.Context, accountID string, models 
 	}
 	defer tx.Rollback()
 	var raw string
-	if err := tx.QueryRowContext(ctx, `SELECT metadata_json FROM accounts WHERE id=?`, accountID).Scan(&raw); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT metadata_json FROM accounts WHERE id=?`+tx.LockClause(), accountID).Scan(&raw); err != nil {
 		return err
 	}
 	metadata, err := decodeJSONObject(raw)
@@ -265,7 +266,7 @@ func (s *Store) commitAccountMutation(
 	ctx context.Context,
 	accountID string,
 	operation AccountOperation,
-	mutate func(*sql.Tx, string) error,
+	mutate func(*dbconn.Tx, string) error,
 ) error {
 	if !positiveNumericID(accountID) {
 		return errors.New("账号必须使用有效的稳定 ID")
@@ -294,7 +295,7 @@ func (s *Store) commitAccountMutation(
 	return tx.Commit()
 }
 
-func (s *Store) insertMultiplierChangeIncident(ctx context.Context, tx *sql.Tx, operation AccountOperation) error {
+func (s *Store) insertMultiplierChangeIncident(ctx context.Context, tx *dbconn.Tx, operation AccountOperation) error {
 	if operation.OperationType != "account.sync" || operation.State != "succeeded" ||
 		!operation.RemoteConfirmed || !operation.ReadbackConfirmed {
 		return nil
@@ -334,7 +335,7 @@ func (s *Store) insertMultiplierChangeIncident(ctx context.Context, tx *sql.Tx, 
 		return nil
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	_, err = tx.ExecContext(ctx, `INSERT INTO alert_incidents(
+	_, err = tx.InsertIfAbsentContext(ctx, `INSERT INTO alert_incidents(
 		incident_key,event_type,object_kind,object_id,cause_code,status,first_seen_at,last_seen_at,delivery_status,last_error
 	) VALUES(?,?,'account',?,?,'firing',?,?,'未配置渠道',NULL) ON CONFLICT(incident_key) DO NOTHING`,
 		"console:multiplier-change:"+operation.OperationID, eventType, operation.ObjectID,
@@ -361,7 +362,7 @@ func accountOperationMultiplier(value any) (*big.Rat, string, bool) {
 	return rate, decimalRatText(rate), true
 }
 
-func insertAccountOperation(ctx context.Context, tx *sql.Tx, operation AccountOperation) error {
+func insertAccountOperation(ctx context.Context, tx *dbconn.Tx, operation AccountOperation) error {
 	objectIDValid := positiveNumericID(operation.ObjectID)
 	if operation.OperationType == "account.onboarding" && operation.State == "failed" && strings.TrimSpace(operation.ObjectID) == "" {
 		objectIDValid = true
@@ -385,13 +386,9 @@ func insertAccountOperation(ctx context.Context, tx *sql.Tx, operation AccountOp
 	if skip, err := repeatedAutomaticReadback(ctx, tx, operation, before, after, string(groups)); err != nil || skip {
 		return err
 	}
-	var minimum sql.NullInt64
-	if err := tx.QueryRowContext(ctx, `SELECT MIN(source_id) FROM operation_audit WHERE source_id < 0`).Scan(&minimum); err != nil {
+	sourceID, err := nextLocalEventID(ctx, tx, "operation_audit")
+	if err != nil {
 		return err
-	}
-	sourceID := int64(-1)
-	if minimum.Valid && minimum.Int64 <= -1 {
-		sourceID = minimum.Int64 - 1
 	}
 	var objectID any
 	if strings.TrimSpace(operation.ObjectID) != "" {
@@ -408,9 +405,9 @@ func insertAccountOperation(ctx context.Context, tx *sql.Tx, operation AccountOp
 	) VALUES(?,?,?,?,?,NULL,?,?,?,?,?,?,'account',?,?,?,?,?,?,?,?)`,
 		sourceID, operation.OperationID, operation.OperationType, operation.State, operation.Phase,
 		taskID, strings.TrimSpace(operation.Actor), "console", managementNullableString(operation.Error),
-		operation.RemoteConfirmed, operation.ReadbackConfirmed, objectID,
+		boolDatabaseValue(operation.RemoteConfirmed), boolDatabaseValue(operation.ReadbackConfirmed), objectID,
 		managementNullableString(operation.ObjectName), string(groups), managementNullableString(operation.FieldName),
-		before, after, operation.Writeback, time.Now().UTC().Format(time.RFC3339Nano),
+		before, after, boolDatabaseValue(operation.Writeback), time.Now().UTC().Format(time.RFC3339Nano),
 	)
 	return err
 }

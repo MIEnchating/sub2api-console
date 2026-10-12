@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"github.com/MIEnchating/sub2api-console/backend/internal/dbconn"
 	"strings"
 	"time"
 )
@@ -20,8 +21,8 @@ type UpstreamKeySecret struct {
 var ErrUpstreamKeyAuthChanged = errors.New("上游授权已变化，请重新读取绑定 Key")
 
 // SaveUpstreamKeySecretForAuth only saves a revealed key while the private
-// authorization used to read it still matches. One statement serializes this
-// check and write with authorization replacement, host migration and deletion.
+// authorization used to read it still matches. A local transaction holds the
+// matching authorization until the key has been saved.
 func (s *Store) SaveUpstreamKeySecretForAuth(ctx context.Context, value UpstreamKeySecret, expected AuthRecord) error {
 	value, err := normalizedUpstreamKeySecret(value)
 	if err != nil {
@@ -47,28 +48,36 @@ func (s *Store) SaveUpstreamKeySecretForAuth(ctx context.Context, value Upstream
 	}
 	rawHeaders, _ := json.Marshal(headers)
 	rawCookies, _ := json.Marshal(cookies)
-	result, err := s.db.ExecContext(ctx, `INSERT INTO upstream_key_secrets(host,key_id,group_id,secret,updated_at)
-		SELECT ?,?,?,?,? FROM auth_records
-		WHERE host=? AND base_url=? AND upstream_type=? AND auth_mode=?
-		AND access_token IS ? AND refresh_token IS ? AND admin_key IS ? AND user_id IS ?
-		AND headers_json=? AND cookies_json=?
-		ON CONFLICT(host,key_id,group_id) DO UPDATE SET secret=excluded.secret,updated_at=excluded.updated_at`,
-		value.Host, value.KeyID, value.GroupID, value.Secret, value.UpdatedAt,
-		expected.Host, expected.BaseURL, expected.UpstreamType, expected.AuthMode,
-		expected.AccessToken, expected.RefreshToken, expected.AdminKey, expected.UserID,
-		string(rawHeaders), string(rawCookies),
-	)
+	tx, err := s.beginSettingsTx(ctx, "private.credentials")
 	if err != nil {
 		return err
 	}
-	count, err := result.RowsAffected()
-	if err != nil {
-		return err
+	defer tx.Rollback()
+	predicate := `host=? AND base_url=? AND upstream_type=? AND auth_mode=?
+ AND access_token IS ? AND refresh_token IS ? AND admin_key IS ? AND user_id IS ?
+ AND headers_json=? AND cookies_json=?`
+	lock := ""
+	if s.db.Driver() == dbconn.Postgres {
+		predicate = strings.ReplaceAll(predicate, " IS ?", " IS NOT DISTINCT FROM ?")
+		lock = " FOR UPDATE"
 	}
-	if count != 1 {
+	if s.db.Driver() == dbconn.MySQL {
+		predicate = strings.ReplaceAll(predicate, " IS ?", " <=> ?")
+		lock = " FOR UPDATE"
+	}
+	var host string
+	err = tx.QueryRowContext(ctx, `SELECT host FROM auth_records WHERE `+predicate+lock, expected.Host, expected.BaseURL, expected.UpstreamType, expected.AuthMode, expected.AccessToken, expected.RefreshToken, expected.AdminKey, expected.UserID, string(rawHeaders), string(rawCookies)).Scan(&host)
+	if errors.Is(err, sql.ErrNoRows) {
 		return ErrUpstreamKeyAuthChanged
 	}
-	return nil
+	if err != nil {
+		return err
+	}
+	_, err = tx.ExecContext(ctx, s.dialect(`INSERT INTO upstream_key_secrets(host,key_id,group_id,secret,updated_at) VALUES(?,?,?,?,?) ON CONFLICT(host,key_id,group_id) DO UPDATE SET secret=excluded.secret,updated_at=excluded.updated_at`, `INSERT INTO upstream_key_secrets(host,key_id,group_id,secret,updated_at) VALUES(?,?,?,?,?) ON DUPLICATE KEY UPDATE secret=VALUES(secret),updated_at=VALUES(updated_at)`), value.Host, value.KeyID, value.GroupID, value.Secret, value.UpdatedAt)
+	if err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (s *Store) UpstreamKeySecret(ctx context.Context, host, keyID, groupID string) (*UpstreamKeySecret, error) {
@@ -97,12 +106,22 @@ func (s *Store) SaveUpstreamKeySecret(ctx context.Context, value UpstreamKeySecr
 	if err != nil {
 		return err
 	}
-	_, err = s.db.ExecContext(ctx, `INSERT INTO upstream_key_secrets(host,key_id,group_id,secret,updated_at)
+	tx, err := s.beginSettingsTx(ctx, "private.credentials")
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	_, err = tx.ExecContext(ctx, s.dialect(`INSERT INTO upstream_key_secrets(host,key_id,group_id,secret,updated_at)
 		VALUES(?,?,?,?,?) ON CONFLICT(host,key_id,group_id) DO UPDATE SET
-		secret=excluded.secret,updated_at=excluded.updated_at`,
+		secret=excluded.secret,updated_at=excluded.updated_at`, `INSERT INTO upstream_key_secrets(host,key_id,group_id,secret,updated_at)
+		VALUES(?,?,?,?,?) ON DUPLICATE KEY UPDATE
+		secret=VALUES(secret),updated_at=VALUES(updated_at)`),
 		value.Host, value.KeyID, value.GroupID, value.Secret, value.UpdatedAt,
 	)
-	return err
+	if err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func normalizedUpstreamKeySecret(value UpstreamKeySecret) (UpstreamKeySecret, error) {
@@ -126,6 +145,13 @@ func (s *Store) DeleteUpstreamKeySecrets(ctx context.Context, host, keyID string
 	if host == "" || keyID == "" {
 		return errors.New("本地 Key 删除必须包含 Host 和 Key ID")
 	}
-	_, err := s.db.ExecContext(ctx, `DELETE FROM upstream_key_secrets WHERE host=? AND key_id=?`, host, keyID)
-	return err
+	tx, err := s.beginSettingsTx(ctx, "private.credentials")
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `DELETE FROM upstream_key_secrets WHERE host=? AND key_id=?`, host, keyID); err != nil {
+		return err
+	}
+	return tx.Commit()
 }

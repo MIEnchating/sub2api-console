@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"github.com/MIEnchating/sub2api-console/backend/internal/dbconn"
 	"strings"
 	"time"
 
@@ -12,7 +13,7 @@ import (
 )
 
 const businessSchema = `
-CREATE TABLE IF NOT EXISTS app_state (key TEXT PRIMARY KEY,value_json TEXT NOT NULL,updated_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS app_state ("key" TEXT PRIMARY KEY,value_json TEXT NOT NULL,updated_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS upstream_identities (
  upstream_id TEXT PRIMARY KEY,created_at TEXT NOT NULL,updated_at TEXT NOT NULL
 );
@@ -128,7 +129,7 @@ CREATE TRIGGER IF NOT EXISTS account_stability_delete_version AFTER DELETE ON ac
 END;
 CREATE TABLE IF NOT EXISTS routing_decisions (
  account_id TEXT NOT NULL,group_name TEXT NOT NULL,priority INTEGER,schedulable INTEGER,role TEXT,routing_state TEXT,
- rank INTEGER,reason TEXT,updated_at TEXT NOT NULL,payload_json TEXT NOT NULL DEFAULT '{}',PRIMARY KEY(account_id)
+ "rank" INTEGER,reason TEXT,updated_at TEXT NOT NULL,payload_json TEXT NOT NULL DEFAULT '{}',PRIMARY KEY(account_id)
 );
 CREATE TABLE IF NOT EXISTS account_health_evaluations (
  account_id TEXT NOT NULL,group_name TEXT NOT NULL,health_score REAL,short_score REAL,long_score REAL,
@@ -326,6 +327,9 @@ CREATE UNIQUE INDEX IF NOT EXISTS ux_onboarding_pending_identity ON onboarding_p
 const businessSchemaVersion = 12
 
 func (s *Store) ensureSchema(ctx context.Context) error {
+	if s.db.Driver() != dbconn.SQLite {
+		return s.db.Migrate(ctx, "business", []dbconn.Migration{{Version: 1, Statements: map[dbconn.Driver][]string{dbconn.Postgres: businessPostgresSchema, dbconn.MySQL: businessMySQLSchema}}})
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -377,7 +381,7 @@ func (s *Store) ensureSchema(ctx context.Context) error {
 	return s.ensureStableUpstreamRelations(ctx)
 }
 
-func ensureOnboardingPendingFrozenIntent(ctx context.Context, tx *sql.Tx) error {
+func ensureOnboardingPendingFrozenIntent(ctx context.Context, tx *dbconn.Tx) error {
 	var tableCount int
 	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_schema WHERE type='table' AND name='onboarding_pending'`).Scan(&tableCount); err != nil {
 		return err
@@ -529,7 +533,7 @@ func (s *Store) normalizeAccountCosts(ctx context.Context) error {
 }
 
 func (s *Store) bootstrapFresh(ctx context.Context) error {
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.beginPolicyTx(ctx, "control-plane")
 	if err != nil {
 		return err
 	}
@@ -549,7 +553,7 @@ func (s *Store) bootstrapFresh(ctx context.Context) error {
 		return fmt.Errorf("控制台业务库初始化状态不完整，拒绝覆盖已有数据：%s", strings.Join(populated, ","))
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	if _, err := tx.ExecContext(ctx, `INSERT INTO app_state(key,value_json,updated_at) VALUES('config',?,?)`,
+	if _, err := tx.ExecContext(ctx, `INSERT INTO app_state("key",value_json,updated_at) VALUES('config',?,?)`,
 		`{"mode":"`+runtimepolicy.Full+`","keys":[]}`, now); err != nil {
 		return err
 	}
@@ -566,7 +570,7 @@ type connectionQueryer interface {
 
 func readyOnConnection(ctx context.Context, queryer connectionQueryer) (bool, error) {
 	var marker int
-	err := queryer.QueryRowContext(ctx, `SELECT 1 FROM app_state WHERE key='config'`).Scan(&marker)
+	err := queryer.QueryRowContext(ctx, `SELECT 1 FROM app_state WHERE "key"='config'`).Scan(&marker)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}

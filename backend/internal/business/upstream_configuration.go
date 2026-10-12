@@ -144,8 +144,8 @@ func (s *Store) CreateUpstreamConfiguration(ctx context.Context, value UpstreamC
 	if err != nil {
 		return UpstreamConfigurationWriteResult{}, err
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO recharge_rates(host,recharge_rate,note,updated_at) VALUES(?,?,?,?)
-		ON CONFLICT(host) DO UPDATE SET recharge_rate=excluded.recharge_rate,note=excluded.note,updated_at=excluded.updated_at`,
+	if _, err := tx.ExecContext(ctx, tx.Dialect(`INSERT INTO recharge_rates(host,recharge_rate,note,updated_at) VALUES(?,?,?,?)
+		ON CONFLICT(host) DO UPDATE SET recharge_rate=excluded.recharge_rate,note=excluded.note,updated_at=excluded.updated_at`, `INSERT INTO recharge_rates(host,recharge_rate,note,updated_at) VALUES(?,?,?,?) ON DUPLICATE KEY UPDATE recharge_rate=VALUES(recharge_rate),note=VALUES(note),updated_at=VALUES(updated_at)`),
 		value.Host, recharge, "console-upstream-create", now); err != nil {
 		return UpstreamConfigurationWriteResult{}, err
 	}
@@ -174,7 +174,7 @@ func (s *Store) UpdateUpstreamConfiguration(ctx context.Context, value UpstreamC
 	defer tx.Rollback()
 	var rawBalance, legacyBalance sql.NullString
 	var metadataRaw string
-	err = tx.QueryRowContext(ctx, `SELECT raw_balance,CAST(balance AS TEXT),metadata_json FROM upstreams WHERE host=?`, value.Host).Scan(
+	err = tx.QueryRowContext(ctx, `SELECT raw_balance,`+textCastSQL(tx.Driver(), "balance")+`,metadata_json FROM upstreams WHERE host=?`+tx.LockClause(), value.Host).Scan(
 		&rawBalance, &legacyBalance, &metadataRaw,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -260,9 +260,10 @@ func (s *Store) UpdateUpstreamConfiguration(ctx context.Context, value UpstreamC
 			return UpstreamConfigurationWriteResult{}, err
 		}
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO recharge_rates(host,recharge_rate,note,updated_at)
+	if _, err := tx.ExecContext(ctx, tx.Dialect(`INSERT INTO recharge_rates(host,recharge_rate,note,updated_at)
 		SELECT host,?,?,? FROM upstream_identity_hosts WHERE upstream_id=?
-		ON CONFLICT(host) DO UPDATE SET recharge_rate=excluded.recharge_rate,note=excluded.note,updated_at=excluded.updated_at`,
+		ON CONFLICT(host) DO UPDATE SET recharge_rate=excluded.recharge_rate,note=excluded.note,updated_at=excluded.updated_at`, `INSERT INTO recharge_rates(host,recharge_rate,note,updated_at)
+		SELECT host,?,?,? FROM upstream_identity_hosts WHERE upstream_id=? ON DUPLICATE KEY UPDATE recharge_rate=VALUES(recharge_rate),note=VALUES(note),updated_at=VALUES(updated_at)`),
 		recharge, "console-upstream-edit", now, upstreamID); err != nil {
 		return UpstreamConfigurationWriteResult{}, err
 	}
@@ -290,7 +291,7 @@ func (s *Store) UpdateUpstreamClassification(ctx context.Context, host, upstream
 	}
 	defer tx.Rollback()
 	var metadataRaw string
-	if err := tx.QueryRowContext(ctx, `SELECT metadata_json FROM upstreams WHERE host=?`, host).Scan(&metadataRaw); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT metadata_json FROM upstreams WHERE host=?`+tx.LockClause(), host).Scan(&metadataRaw); err != nil {
 		return err
 	}
 	metadata, err := decodeObject(metadataRaw)

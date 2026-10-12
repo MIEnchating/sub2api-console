@@ -175,13 +175,9 @@ func (s *Store) RepairAccountUpstreamHosts(ctx context.Context, accountIDs []str
 		if err != nil {
 			return result, err
 		}
-		var minimum sql.NullInt64
-		if err := tx.QueryRowContext(ctx, `SELECT MIN(source_id) FROM runtime_events WHERE source_id < 0`).Scan(&minimum); err != nil {
+		result.EventID, err = nextLocalEventID(ctx, tx, "runtime_events")
+		if err != nil {
 			return result, err
-		}
-		result.EventID = -1
-		if minimum.Valid && minimum.Int64 <= -1 {
-			result.EventID = minimum.Int64 - 1
 		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO runtime_events(source_id,event_type,created_at,status,summary,payload_json)
 			VALUES(?,?,?,?,?,?)`, result.EventID, "account.upstream_host.repaired", now, "succeeded",
@@ -196,7 +192,7 @@ func (s *Store) RepairAccountUpstreamHosts(ctx context.Context, accountIDs []str
 }
 
 func (s *Store) AccountNamesForMaintenance(ctx context.Context, requestedIDs []string) (map[string]string, error) {
-	predicate, args, err := maintenanceAccountScope(requestedIDs)
+	predicate, args, err := s.maintenanceAccountScope(requestedIDs)
 	if err != nil {
 		return nil, err
 	}
@@ -222,7 +218,7 @@ func (s *Store) AccountNamesForMaintenance(ctx context.Context, requestedIDs []s
 
 // Empty input is the existing all-accounts maintenance scope. A nonempty
 // input stays scoped even when it contains only blank or missing IDs.
-func maintenanceAccountScope(requestedIDs []string) (string, []any, error) {
+func (s *Store) maintenanceAccountScope(requestedIDs []string) (string, []any, error) {
 	if len(requestedIDs) == 0 {
 		return "", nil, nil
 	}
@@ -239,11 +235,11 @@ func maintenanceAccountScope(requestedIDs []string) (string, []any, error) {
 	if err != nil {
 		return "", nil, err
 	}
-	return " IN (SELECT value FROM json_each(?))", []any{string(raw)}, nil
+	return " IN (SELECT value FROM " + jsonScopeRows(s.db.Driver()) + " scope)", []any{string(raw)}, nil
 }
 
 func (s *Store) BoundAccountsForMaintenance(ctx context.Context, requestedIDs []string) ([]BoundAccountMaintenance, error) {
-	predicate, args, err := maintenanceAccountScope(requestedIDs)
+	predicate, args, err := s.maintenanceAccountScope(requestedIDs)
 	if err != nil {
 		return nil, err
 	}
@@ -269,7 +265,7 @@ func (s *Store) BoundAccountsForMaintenance(ctx context.Context, requestedIDs []
 	if predicate != "" {
 		query += " WHERE a.id" + predicate
 	}
-	query += ` ORDER BY CASE WHEN a.id GLOB '[0-9]*' THEN CAST(a.id AS INTEGER) ELSE 0 END,a.id`
+	query += ` ORDER BY ` + numericIDOrder(s.db.Driver(), "a.id") + `,a.id`
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
@@ -444,7 +440,7 @@ func (s *Store) CleanupMissingBindings(ctx context.Context, accountIDs []string,
 	if len(accountIDs) == 0 {
 		return MissingBindingCleanupResult{}, errors.New("没有可清理的失效绑定")
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.beginPolicyTx(ctx, "control-plane")
 	if err != nil {
 		return MissingBindingCleanupResult{}, err
 	}
@@ -496,7 +492,7 @@ func (s *Store) CleanupMissingBindings(ctx context.Context, accountIDs []string,
 		return MissingBindingCleanupResult{}, err
 	}
 	var eventID int64
-	if err := tx.QueryRowContext(ctx, `SELECT MIN(source_id) FROM runtime_events WHERE source_id < 0`).Scan(&eventID); err != nil {
+	if err := tx.QueryRowContext(ctx, lastLocalEventIDSQL(tx, "runtime_events")).Scan(&eventID); err != nil {
 		return MissingBindingCleanupResult{}, err
 	}
 	if err := tx.Commit(); err != nil {

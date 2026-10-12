@@ -3,9 +3,9 @@ package configstore
 import (
 	"context"
 	"crypto/rand"
-	"database/sql"
 	"encoding/base64"
 	"errors"
+	"github.com/MIEnchating/sub2api-console/backend/internal/dbconn"
 	"strings"
 	"time"
 )
@@ -25,7 +25,7 @@ func (s *Store) InitializeSession(ctx context.Context, username, password, baseU
 	}
 	token := base64.RawURLEncoding.EncodeToString(bytes)
 	issued := now.UTC().Truncate(time.Second)
-	err := s.initialize(ctx, username, password, baseURL, adminKey, localExportOnly, func(tx *sql.Tx) error {
+	err := s.initialize(ctx, username, password, baseURL, adminKey, localExportOnly, func(tx *dbconn.Tx) error {
 		_, err := tx.ExecContext(ctx, `INSERT INTO console_sessions(token_hash,username,expires_at,created_at) VALUES(?,?,?,?)`, hashSessionToken(token), strings.TrimSpace(username), formatTime(issued.Add(ttl)), formatTime(issued))
 		return err
 	})

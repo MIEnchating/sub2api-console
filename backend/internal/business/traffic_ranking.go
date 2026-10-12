@@ -179,9 +179,8 @@ func (s *Store) TrafficRanking(ctx context.Context, query TrafficRankingQuery) (
 
 func (s *Store) trafficRankingAccounts(ctx context.Context, groupName string) (map[string]*trafficRankingAccumulator, []string, error) {
 	statement := `SELECT a.id,a.name,COALESCE(a.upstream_host,''),COALESCE(a.upstream_type,''),
-		CASE WHEN json_valid(a.metadata_json)=1 AND json_type(a.metadata_json)='object' AND json_type(a.metadata_json,'$.platform')='text'
-			THEN CAST(json_extract(a.metadata_json,'$.platform') AS TEXT) END,
-		CASE WHEN json_valid(a.metadata_json)=1 AND json_type(a.metadata_json)='object' THEN 1 ELSE 0 END,
+		` + jsonFieldSQL(s.db.Driver(), "a.metadata_json", "platform", true) + `,
+ CASE WHEN ` + jsonObjectSQL(s.db.Driver(), "a.metadata_json") + ` THEN 1 ELSE 0 END,
 		COALESCE(ag.group_name,'') FROM accounts a
 		LEFT JOIN account_groups ag ON ag.account_id=a.id
 		`
@@ -191,8 +190,8 @@ func (s *Store) trafficRankingAccounts(ctx context.Context, groupName string) (m
 			WHERE selected_ag.account_id=a.id AND selected_ag.group_name=?) `
 		args = append(args, groupName)
 	}
-	statement += `ORDER BY CASE WHEN a.id GLOB '[0-9]*' THEN CAST(a.id AS INTEGER) ELSE 0 END,a.id,ag.group_name`
-	rows, err := s.db.QueryContext(ctx, statement, args...)
+	statement += `ORDER BY ` + numericIDOrder(s.db.Driver(), "a.id") + `,a.id,ag.group_name`
+	rows, err := s.db.QueryContext(ctx, strings.ReplaceAll(statement, " INDEXED BY ix_usage_records_traffic_window", sqliteIndexHint(s.db.Driver(), "ix_usage_records_traffic_window")), args...)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -277,7 +276,7 @@ func (s *Store) accumulateTrafficRanking(
 		statement += ` AND account_id IN (SELECT account_id FROM account_groups WHERE group_name=?)`
 		arguments = append(arguments, query.GroupName)
 	}
-	rows, err := s.db.QueryContext(ctx, statement+results, arguments...)
+	rows, err := s.db.QueryContext(ctx, strings.ReplaceAll(statement+results, " INDEXED BY ix_usage_records_traffic_window", sqliteIndexHint(s.db.Driver(), "ix_usage_records_traffic_window")), arguments...)
 	if err != nil {
 		return err
 	}

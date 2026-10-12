@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/base64"
 	"errors"
+	"github.com/MIEnchating/sub2api-console/backend/internal/dbconn"
 	"strings"
 	"time"
 )
@@ -27,7 +28,7 @@ func (s *Store) UpdateSessionCredentials(ctx context.Context, token, currentPass
 		token = base64.RawURLEncoding.EncodeToString(bytes)
 	}
 	hash := hashSessionToken(token)
-	name, err := s.updateCredentials(ctx, currentPassword, username, newPassword, func(tx *sql.Tx, previousUsername string) error {
+	name, err := s.updateCredentials(ctx, currentPassword, username, newPassword, func(tx *dbconn.Tx, previousUsername string) error {
 		if preserve {
 			var sessionName, expiry string
 			err := tx.QueryRowContext(ctx, `SELECT username,expires_at FROM console_sessions WHERE token_hash=?`, hash).Scan(&sessionName, &expiry)

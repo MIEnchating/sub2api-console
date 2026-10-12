@@ -74,7 +74,7 @@ func (s *Store) RenameAuthRecord(ctx context.Context, oldHost, newHost string) e
 	if oldHost == newHost {
 		return nil
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.beginSettingsTx(ctx, "private.credentials")
 	if err != nil {
 		return err
 	}
@@ -168,6 +168,10 @@ func CanonicalHost(value string) string {
 }
 
 func (s *Store) AuthRecord(ctx context.Context, host string) (*AuthRecord, error) {
+	return readAuthRecord(ctx, s.db, host)
+}
+
+func readAuthRecord(ctx context.Context, reader privateRowReader, host string) (*AuthRecord, error) {
 	normalizedHost := CanonicalHost(host)
 	if normalizedHost == "" {
 		return nil, errors.New("上游 Host 不能为空")
@@ -175,7 +179,7 @@ func (s *Store) AuthRecord(ctx context.Context, host string) (*AuthRecord, error
 	var record AuthRecord
 	var accessToken, refreshToken, adminKey, userID sql.NullString
 	var rawHeaders, rawCookies string
-	err := s.db.QueryRowContext(ctx, `SELECT host,base_url,upstream_type,auth_mode,access_token,refresh_token,
+	err := reader.QueryRowContext(ctx, `SELECT host,base_url,upstream_type,auth_mode,access_token,refresh_token,
 		admin_key,user_id,headers_json,cookies_json FROM auth_records WHERE host=?`, normalizedHost).Scan(
 		&record.Host, &record.BaseURL, &record.UpstreamType, &record.AuthMode, &accessToken, &refreshToken,
 		&adminKey, &userID, &rawHeaders, &rawCookies,
@@ -203,7 +207,12 @@ func (s *Store) SaveAuthRecord(ctx context.Context, record AuthRecord, present m
 	if record.Host == "" {
 		return errors.New("授权记录必须包含 Host")
 	}
-	current, err := s.AuthRecord(ctx, record.Host)
+	tx, err := s.beginSettingsTx(ctx, "private.credentials")
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	current, err := readAuthRecord(ctx, tx, record.Host)
 	if err != nil {
 		return err
 	}
@@ -230,21 +239,29 @@ func (s *Store) SaveAuthRecord(ctx context.Context, record AuthRecord, present m
 	}
 	rawHeaders, _ := json.Marshal(headers)
 	rawCookies, _ := json.Marshal(cookies)
-	_, err = s.db.ExecContext(ctx, `INSERT INTO auth_records(
+	_, err = tx.ExecContext(ctx, s.dialect(`INSERT INTO auth_records(
 		host,base_url,upstream_type,auth_mode,access_token,refresh_token,admin_key,user_id,headers_json,cookies_json,updated_at
 	) VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(host) DO UPDATE SET
 		base_url=excluded.base_url,upstream_type=excluded.upstream_type,auth_mode=excluded.auth_mode,
 		access_token=excluded.access_token,refresh_token=excluded.refresh_token,admin_key=excluded.admin_key,
-		user_id=excluded.user_id,headers_json=excluded.headers_json,cookies_json=excluded.cookies_json,updated_at=excluded.updated_at`,
+		user_id=excluded.user_id,headers_json=excluded.headers_json,cookies_json=excluded.cookies_json,updated_at=excluded.updated_at`, `INSERT INTO auth_records(
+		host,base_url,upstream_type,auth_mode,access_token,refresh_token,admin_key,user_id,headers_json,cookies_json,updated_at
+	) VALUES(?,?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE
+		base_url=VALUES(base_url),upstream_type=VALUES(upstream_type),auth_mode=VALUES(auth_mode),
+		access_token=VALUES(access_token),refresh_token=VALUES(refresh_token),admin_key=VALUES(admin_key),
+		user_id=VALUES(user_id),headers_json=VALUES(headers_json),cookies_json=VALUES(cookies_json),updated_at=VALUES(updated_at)`),
 		record.Host, record.BaseURL, record.UpstreamType, record.AuthMode, record.AccessToken, record.RefreshToken,
 		record.AdminKey, record.UserID, string(rawHeaders), string(rawCookies), time.Now().UTC().Format(time.RFC3339Nano),
 	)
-	return err
+	if err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (s *Store) DeleteAuthRecord(ctx context.Context, host string) (bool, error) {
 	host = CanonicalHost(host)
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.beginSettingsTx(ctx, "private.credentials")
 	if err != nil {
 		return false, err
 	}

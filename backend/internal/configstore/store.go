@@ -20,7 +20,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/MIEnchating/sub2api-console/backend/internal/sqliteutil"
+	"github.com/MIEnchating/sub2api-console/backend/internal/dbconn"
 	"golang.org/x/crypto/pbkdf2"
 	_ "modernc.org/sqlite"
 )
@@ -28,7 +28,7 @@ import (
 const passwordRounds = 310_000
 
 type Store struct {
-	db                  *sqliteutil.Database
+	db                  *dbconn.Database
 	sessionOwnerMu      sync.Mutex
 	sessionOwnerChanges chan struct{}
 	workbenchWriteMu    sync.Mutex
@@ -106,24 +106,21 @@ type LogCleanupSettings struct {
 }
 
 func Open(path string) (*Store, error) {
-	if err := sqliteutil.Prepare(path); err != nil {
-		return nil, err
-	}
-	db, err := sqliteutil.OpenDatabase(path)
+	return OpenDatabase(context.Background(), dbconn.Config{Driver: dbconn.SQLite, Path: path})
+}
+func OpenDatabase(ctx context.Context, config dbconn.Config) (*Store, error) {
+	db, err := dbconn.Open(ctx, config)
 	if err != nil {
 		return nil, err
 	}
 	store := &Store{db: db}
-	if err := store.ensureSchema(context.Background()); err != nil {
+	if err := store.ensureSchema(ctx); err != nil {
 		return nil, errors.Join(err, db.Close())
 	}
 	for kind, values := range builtInDictionaryValues {
-		if err := store.SyncDictionaryValues(context.Background(), kind, values); err != nil {
+		if err := store.SyncDictionaryValues(ctx, kind, values); err != nil {
 			return nil, errors.Join(err, db.Close())
 		}
-	}
-	if err := sqliteutil.Secure(path); err != nil {
-		return nil, errors.Join(err, db.Close())
 	}
 	return store, nil
 }
@@ -134,11 +131,17 @@ func (s *Store) Close() error {
 }
 
 func (s *Store) ensureSchema(ctx context.Context) error {
+	if s.db.Driver() != dbconn.SQLite {
+		return s.ensureServerSchema(ctx)
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
+	if err := tx.CheckSQLiteVersion(ctx, 1); err != nil {
+		return err
+	}
 	statements := []string{
 		`CREATE TABLE IF NOT EXISTS uptime_kuma_config (
 			id INTEGER PRIMARY KEY CHECK(id=1), base_url TEXT NOT NULL, api_key TEXT NOT NULL,
@@ -149,7 +152,7 @@ func (s *Store) ensureSchema(ctx context.Context) error {
 			template_revision INTEGER NOT NULL, template_name TEXT NOT NULL, template_model TEXT NOT NULL,
 			body_encoding TEXT NOT NULL, PRIMARY KEY(base_url, monitor_id)
 		)`,
-		`CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)`,
+		`CREATE TABLE IF NOT EXISTS settings ("key" TEXT PRIMARY KEY, value TEXT NOT NULL)`,
 		`CREATE TABLE IF NOT EXISTS account_workbench_documents (id TEXT PRIMARY KEY,revision INTEGER NOT NULL CHECK(revision>0),payload BLOB NOT NULL)`,
 		`CREATE TABLE IF NOT EXISTS model_pricing_cache (
 			cache_key TEXT PRIMARY KEY, content TEXT NOT NULL, fetched_at TEXT NOT NULL
@@ -196,10 +199,13 @@ func (s *Store) ensureSchema(ctx context.Context) error {
 			return err
 		}
 	}
-	if _, err := tx.ExecContext(ctx, `DELETE FROM settings WHERE key='runtime.probes_enabled'`); err != nil {
+	if _, err := tx.ExecContext(ctx, `DELETE FROM settings WHERE "key"='runtime.probes_enabled'`); err != nil {
 		return err
 	}
 	if err := removeEmptyRetiredTables(ctx, tx); err != nil {
+		return err
+	}
+	if err := tx.SetSQLiteVersion(ctx, 1); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -358,7 +364,7 @@ func (s *Store) ConfigureAccountCreationSettings(ctx context.Context, settings A
 	if err != nil {
 		return AccountCreationSettings{}, errors.New("账号创建设置编码失败")
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.beginSettingsTx(ctx, "accounts.creation_settings", "accounts.default_concurrency", "accounts.default_priority")
 	if err != nil {
 		return AccountCreationSettings{}, err
 	}
@@ -369,7 +375,7 @@ func (s *Store) ConfigureAccountCreationSettings(ctx context.Context, settings A
 		"accounts.default_priority":    strconv.FormatInt(normalized.Default.Priority, 10),
 	}
 	for key, value := range values {
-		if _, err := tx.ExecContext(ctx, `INSERT OR REPLACE INTO settings(key,value) VALUES(?,?)`, key, value); err != nil {
+		if _, err := tx.ExecContext(ctx, s.dialect(`INSERT INTO settings("key",value) VALUES(?,?) ON CONFLICT("key") DO UPDATE SET value=excluded.value`, `INSERT INTO settings("key",value) VALUES(?,?) ON DUPLICATE KEY UPDATE value=VALUES(value)`), key, value); err != nil {
 			return AccountCreationSettings{}, err
 		}
 	}
@@ -609,7 +615,7 @@ func (s *Store) ConfigureLogCleanup(ctx context.Context, enabled bool, retention
 		{"logs.cleanup_enabled", strconv.FormatBool(enabled)},
 		{"logs.retention_days", strconv.Itoa(retentionDays)},
 	} {
-		if _, err := tx.ExecContext(ctx, `INSERT OR REPLACE INTO settings(key,value) VALUES(?,?)`, update[0], update[1]); err != nil {
+		if _, err := tx.ExecContext(ctx, s.dialect(`INSERT INTO settings("key",value) VALUES(?,?) ON CONFLICT("key") DO UPDATE SET value=excluded.value`, `INSERT INTO settings("key",value) VALUES(?,?) ON DUPLICATE KEY UPDATE value=VALUES(value)`), update[0], update[1]); err != nil {
 			return LogCleanupSettings{}, err
 		}
 	}
@@ -620,7 +626,7 @@ func (s *Store) ConfigureLogCleanup(ctx context.Context, enabled bool, retention
 }
 
 func (s *Store) MarkLogCleanupRun(ctx context.Context, completedAt time.Time) error {
-	_, err := s.db.ExecContext(ctx, `INSERT OR REPLACE INTO settings(key,value) VALUES('logs.cleanup_last_run_at',?)`,
+	_, err := s.db.ExecContext(ctx, s.dialect(`INSERT INTO settings("key",value) VALUES('logs.cleanup_last_run_at',?) ON CONFLICT("key") DO UPDATE SET value=excluded.value`, `INSERT INTO settings("key",value) VALUES('logs.cleanup_last_run_at',?) ON DUPLICATE KEY UPDATE value=VALUES(value)`),
 		completedAt.UTC().Format(time.RFC3339Nano))
 	return err
 }
@@ -645,7 +651,7 @@ func (s *Store) InitializeLocalExport(ctx context.Context, username, password st
 	return s.initialize(ctx, username, password, "", "", true, nil)
 }
 
-func (s *Store) initialize(ctx context.Context, username string, password string, baseURL string, adminKey string, localExportOnly bool, createSession func(*sql.Tx) error) error {
+func (s *Store) initialize(ctx context.Context, username string, password string, baseURL string, adminKey string, localExportOnly bool, createSession func(*dbconn.Tx) error) error {
 	username = strings.TrimSpace(username)
 	adminKey = strings.TrimSpace(adminKey)
 	if textLength(username) < 2 || textLength(username) > 80 {
@@ -672,7 +678,7 @@ func (s *Store) initialize(ctx context.Context, username string, password string
 	if err != nil {
 		return err
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.beginSettingsTx(ctx, "console.username", "console.password_hash", "target.base_url", "target.admin_key")
 	if err != nil {
 		return err
 	}
@@ -699,7 +705,7 @@ func (s *Store) initialize(ctx context.Context, username string, password string
 		updates["target.admin_key"] = adminKey
 	}
 	for key, value := range updates {
-		if _, err := tx.ExecContext(ctx, `INSERT OR REPLACE INTO settings(key,value) VALUES(?,?)`, key, value); err != nil {
+		if _, err := tx.ExecContext(ctx, s.dialect(`INSERT INTO settings("key",value) VALUES(?,?) ON CONFLICT("key") DO UPDATE SET value=excluded.value`, `INSERT INTO settings("key",value) VALUES(?,?) ON DUPLICATE KEY UPDATE value=VALUES(value)`), key, value); err != nil {
 			return err
 		}
 	}
@@ -750,7 +756,7 @@ func (s *Store) createSession(ctx context.Context, username string, password *st
 		return "", err
 	}
 	token := base64.RawURLEncoding.EncodeToString(tokenBytes)
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.beginSettingsTx(ctx, "console.username", "console.password_hash")
 	if err != nil {
 		return "", err
 	}
@@ -825,7 +831,7 @@ func (s *Store) UpdateCredentials(ctx context.Context, currentPassword string, u
 	return s.updateCredentials(ctx, currentPassword, username, newPassword, nil)
 }
 
-func (s *Store) updateCredentials(ctx context.Context, currentPassword string, username string, newPassword *string, updateSessions func(*sql.Tx, string) error) (string, error) {
+func (s *Store) updateCredentials(ctx context.Context, currentPassword string, username string, newPassword *string, updateSessions func(*dbconn.Tx, string) error) (string, error) {
 	username = strings.TrimSpace(username)
 	if textLength(username) < 2 || textLength(username) > 80 {
 		return "", errors.New("控制台账号长度必须为 2 到 80 个字符")
@@ -833,14 +839,14 @@ func (s *Store) updateCredentials(ctx context.Context, currentPassword string, u
 	if newPassword != nil && (textLength(*newPassword) < 10 || textLength(*newPassword) > 256) {
 		return "", errors.New("控制台密码长度必须为 10 到 256 个字符")
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.beginSettingsTx(ctx, "console.username", "console.password_hash")
 	if err != nil {
 		return "", err
 	}
 	defer tx.Rollback()
 	var storedUsername string
 	var storedHash string
-	rows, err := tx.QueryContext(ctx, `SELECT key,value FROM settings WHERE key IN ('console.username','console.password_hash')`)
+	rows, err := tx.QueryContext(ctx, `SELECT "key",value FROM settings WHERE "key" IN ('console.username','console.password_hash')`)
 	if err != nil {
 		return "", err
 	}
@@ -871,7 +877,7 @@ func (s *Store) updateCredentials(ctx context.Context, currentPassword string, u
 	if newPassword != nil && verifyPassword(*newPassword, storedHash) {
 		return "", errors.New("新密码不能与当前密码相同")
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT OR REPLACE INTO settings(key,value) VALUES('console.username',?)`, username); err != nil {
+	if _, err := tx.ExecContext(ctx, s.dialect(`INSERT INTO settings("key",value) VALUES('console.username',?) ON CONFLICT("key") DO UPDATE SET value=excluded.value`, `INSERT INTO settings("key",value) VALUES('console.username',?) ON DUPLICATE KEY UPDATE value=VALUES(value)`), username); err != nil {
 		return "", err
 	}
 	if newPassword != nil {
@@ -879,7 +885,7 @@ func (s *Store) updateCredentials(ctx context.Context, currentPassword string, u
 		if err != nil {
 			return "", err
 		}
-		if _, err := tx.ExecContext(ctx, `INSERT OR REPLACE INTO settings(key,value) VALUES('console.password_hash',?)`, hash); err != nil {
+		if _, err := tx.ExecContext(ctx, s.dialect(`INSERT INTO settings("key",value) VALUES('console.password_hash',?) ON CONFLICT("key") DO UPDATE SET value=excluded.value`, `INSERT INTO settings("key",value) VALUES('console.password_hash',?) ON DUPLICATE KEY UPDATE value=VALUES(value)`), hash); err != nil {
 			return "", err
 		}
 	}
@@ -905,7 +911,12 @@ func (s *Store) ConfigureTarget(ctx context.Context, baseURL string, adminKey st
 	if _, err := validateRequestTimeout(strconv.Itoa(timeoutSeconds)); err != nil {
 		return err
 	}
-	values, err := s.settings(ctx, "target.base_url", "target.admin_key")
+	tx, err := s.beginSettingsTx(ctx, "target.base_url", "target.admin_key", "target.timeout_seconds")
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	values, err := settingsFrom(ctx, tx, "target.base_url", "target.admin_key")
 	if err != nil {
 		return err
 	}
@@ -916,18 +927,13 @@ func (s *Store) ConfigureTarget(ctx context.Context, baseURL string, adminKey st
 	if normalizedKey == "" || textLength(normalizedKey) > 4096 {
 		return errors.New("管理密钥无效")
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
 	updates := [][2]string{
 		{"target.base_url", normalizedURL},
 		{"target.admin_key", normalizedKey},
 		{"target.timeout_seconds", strconv.Itoa(timeoutSeconds)},
 	}
 	for _, update := range updates {
-		if _, err := tx.ExecContext(ctx, `INSERT OR REPLACE INTO settings(key,value) VALUES(?,?)`, update[0], update[1]); err != nil {
+		if _, err := tx.ExecContext(ctx, s.dialect(`INSERT INTO settings("key",value) VALUES(?,?) ON CONFLICT("key") DO UPDATE SET value=excluded.value`, `INSERT INTO settings("key",value) VALUES(?,?) ON DUPLICATE KEY UPDATE value=VALUES(value)`), update[0], update[1]); err != nil {
 			return err
 		}
 	}
@@ -1009,22 +1015,22 @@ func ValidateNotificationSettings(appID string, clientSecret string, homeChannel
 }
 
 func (s *Store) ConfigureNotifications(ctx context.Context, appID string, clientSecret string, homeChannel string, homeChannelType string) error {
+	tx, err := s.beginSettingsTx(ctx, "qqbot.app_id", "qqbot.client_secret", "qqbot.home_channel", "qqbot.home_channel_type")
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
 	if strings.TrimSpace(clientSecret) == "" {
-		current, err := s.NotificationSettings(ctx)
+		current, err := settingsFrom(ctx, tx, "qqbot.client_secret")
 		if err != nil {
 			return err
 		}
-		clientSecret = current.ClientSecret
+		clientSecret = current["qqbot.client_secret"]
 	}
 	settings, err := ValidateNotificationSettings(appID, clientSecret, homeChannel, homeChannelType)
 	if err != nil {
 		return err
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
 	updates := [][2]string{
 		{"qqbot.app_id", settings.AppID},
 		{"qqbot.client_secret", settings.ClientSecret},
@@ -1032,7 +1038,7 @@ func (s *Store) ConfigureNotifications(ctx context.Context, appID string, client
 		{"qqbot.home_channel_type", settings.HomeChannelType},
 	}
 	for _, update := range updates {
-		if _, err := tx.ExecContext(ctx, `INSERT OR REPLACE INTO settings(key,value) VALUES(?,?)`, update[0], update[1]); err != nil {
+		if _, err := tx.ExecContext(ctx, s.dialect(`INSERT INTO settings("key",value) VALUES(?,?) ON CONFLICT("key") DO UPDATE SET value=excluded.value`, `INSERT INTO settings("key",value) VALUES(?,?) ON DUPLICATE KEY UPDATE value=VALUES(value)`), update[0], update[1]); err != nil {
 			return err
 		}
 	}
@@ -1058,7 +1064,7 @@ func (s *Store) settings(ctx context.Context, keys ...string) (map[string]string
 
 func (s *Store) JSONSetting(ctx context.Context, key string) (string, error) {
 	var value string
-	err := s.db.QueryRowContext(ctx, `SELECT value FROM settings WHERE key=?`, key).Scan(&value)
+	err := s.db.QueryRowContext(ctx, `SELECT value FROM settings WHERE "key"=?`, key).Scan(&value)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", nil
 	}
@@ -1069,17 +1075,16 @@ func (s *Store) SaveJSONSetting(ctx context.Context, key, value string) error {
 	if strings.TrimSpace(key) == "" || len(value) > 4<<20 {
 		return errors.New("设置内容无效")
 	}
-	_, err := s.db.ExecContext(ctx, `INSERT OR REPLACE INTO settings(key,value) VALUES(?,?)`, key, value)
-	return err
+	return s.UpdateJSONSettings(ctx, []string{key}, func(map[string]string) (map[string]string, error) { return map[string]string{key: value}, nil })
 }
 
 func settingsFrom(ctx context.Context, queryer interface {
 	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
 }, keys ...string) (map[string]string, error) {
-	query := `SELECT key,value FROM settings`
+	query := `SELECT "key",value FROM settings`
 	arguments := make([]any, len(keys))
 	if len(keys) > 0 {
-		query += ` WHERE key IN (` + strings.TrimSuffix(strings.Repeat("?,", len(keys)), ",") + `)`
+		query += ` WHERE "key" IN (` + strings.TrimSuffix(strings.Repeat("?,", len(keys)), ",") + `)`
 		for index, key := range keys {
 			arguments[index] = key
 		}
@@ -1101,7 +1106,7 @@ func settingsFrom(ctx context.Context, queryer interface {
 }
 
 func (s *Store) settingKeys(ctx context.Context) ([]string, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT key FROM settings ORDER BY key`)
+	rows, err := s.db.QueryContext(ctx, `SELECT "key" FROM settings ORDER BY "key"`)
 	if err != nil {
 		return nil, err
 	}

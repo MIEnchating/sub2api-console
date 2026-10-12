@@ -2,6 +2,7 @@ package business
 
 import (
 	"context"
+	"github.com/MIEnchating/sub2api-console/backend/internal/dbconn"
 	"strconv"
 	"time"
 )
@@ -15,6 +16,9 @@ func (s *Store) ClearLogRecords(ctx context.Context, before *time.Time) (LogClea
 // Each statement commits at most 2000 rows, releasing the writer between batches.
 // Progress contains committed counts, including when a later batch fails.
 func (s *Store) ClearLogRecordsWithProgress(ctx context.Context, before *time.Time, report func(LogCleanupResult) error) (LogCleanupResult, error) {
+	if s.db.Driver() != dbconn.SQLite {
+		return s.clearServerLogRecords(ctx, before, report)
+	}
 	result := LogCleanupResult{}
 	deletions := []struct {
 		table, column, extra string

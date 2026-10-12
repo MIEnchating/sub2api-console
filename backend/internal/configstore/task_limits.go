@@ -8,7 +8,7 @@ import (
 
 func (s *Store) TaskLimits(ctx context.Context) (string, error) {
 	var raw string
-	err := s.db.QueryRowContext(ctx, `SELECT value FROM settings WHERE key='tasks.limits'`).Scan(&raw)
+	err := s.db.QueryRowContext(ctx, `SELECT value FROM settings WHERE "key"='tasks.limits'`).Scan(&raw)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", nil
 	}
@@ -20,9 +20,9 @@ func (s *Store) SaveTaskLimits(ctx context.Context, previous, next string) error
 	var result sql.Result
 	var err error
 	if previous == "" {
-		result, err = s.db.ExecContext(ctx, `INSERT INTO settings(key,value) VALUES('tasks.limits',?) ON CONFLICT(key) DO NOTHING`, next)
+		result, err = s.db.InsertIfAbsentContext(ctx, `INSERT INTO settings("key",value) VALUES('tasks.limits',?) ON CONFLICT("key") DO NOTHING`, next)
 	} else {
-		result, err = s.db.ExecContext(ctx, `UPDATE settings SET value=? WHERE key='tasks.limits' AND value=?`, next, previous)
+		result, err = s.db.ExecContext(ctx, `UPDATE settings SET value=? WHERE "key"='tasks.limits' AND value=?`, next, previous)
 	}
 	if err != nil {
 		return err

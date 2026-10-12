@@ -7,9 +7,12 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"github.com/MIEnchating/sub2api-console/backend/internal/dbconn"
 )
 
 type Config struct {
+	Database           dbconn.Config
 	DataDir            string
 	TaskDB             string
 	ConfigDB           string
@@ -81,7 +84,12 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	database, err := databaseEnv()
+	if err != nil {
+		return Config{}, err
+	}
 	return Config{
+		Database:           database,
 		DataDir:            dataDir,
 		TaskDB:             taskDB,
 		ConfigDB:           configDB,

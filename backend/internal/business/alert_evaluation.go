@@ -101,9 +101,10 @@ func (s *Store) evaluateAlertIncidents(ctx context.Context, balanceHost string) 
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return AlertEvidenceResult{}, err
 		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO alert_incidents(incident_key,event_type,object_kind,object_id,cause_code,status,first_seen_at,last_seen_at,delivery_status,last_error)
+		if _, err := tx.ExecContext(ctx, tx.Dialect(`INSERT INTO alert_incidents(incident_key,event_type,object_kind,object_id,cause_code,status,first_seen_at,last_seen_at,delivery_status,last_error)
 			VALUES(?,?,?,?,?,'firing',?,?,'未配置渠道',NULL) ON CONFLICT(incident_key) DO UPDATE SET
-			status='firing',last_seen_at=excluded.last_seen_at,cause_code=excluded.cause_code`,
+			status='firing',last_seen_at=excluded.last_seen_at,cause_code=excluded.cause_code`, `INSERT INTO alert_incidents(incident_key,event_type,object_kind,object_id,cause_code,status,first_seen_at,last_seen_at,delivery_status,last_error)
+			VALUES(?,?,?,?,?,'firing',?,?,'未配置渠道',NULL) ON DUPLICATE KEY UPDATE status='firing',last_seen_at=VALUES(last_seen_at),cause_code=VALUES(cause_code)`),
 			finding.key, finding.eventType, finding.objectKind, finding.objectID, finding.causeCode, now, now); err != nil {
 			return AlertEvidenceResult{}, err
 		}
@@ -309,7 +310,7 @@ func (s *Store) RecordAlertEvaluation(ctx context.Context, startedAt string, evi
 		return AlertEvaluationRecord{}, err
 	}
 	var eventID int64
-	if err := tx.QueryRowContext(ctx, `SELECT MIN(source_id) FROM runtime_events WHERE source_id < 0`).Scan(&eventID); err != nil {
+	if err := tx.QueryRowContext(ctx, lastLocalEventIDSQL(tx, "runtime_events")).Scan(&eventID); err != nil {
 		return AlertEvaluationRecord{}, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -319,7 +320,7 @@ func (s *Store) RecordAlertEvaluation(ctx context.Context, startedAt string, evi
 }
 
 func (s *Store) alertFindings(ctx context.Context, policy AlertPolicy, balanceHost string) ([]alertFinding, map[string]string, error) {
-	query := `SELECT host,auth_status,COALESCE(mapped_balance,CAST(balance AS TEXT)),metadata_json FROM upstreams`
+	query := `SELECT host,auth_status,COALESCE(mapped_balance,` + textCastSQL(s.db.Driver(), "balance") + `),metadata_json FROM upstreams`
 	var args []any
 	if balanceHost != "" {
 		query += " WHERE host=?"
@@ -445,7 +446,7 @@ func (s *Store) routingAlertFindings(ctx context.Context, policy AlertPolicy) ([
 		FROM routing_decisions rd LEFT JOIN account_groups ag ON ag.account_id=rd.account_id`
 	arguments := []any{}
 	if epoch != nil {
-		query += ` WHERE julianday(rd.updated_at)>=julianday(?)`
+		query += ` WHERE ` + instantSQL(s.db.Driver(), "rd.updated_at") + `>=` + instantSQL(s.db.Driver(), "?") + ``
 		arguments = append(arguments, *epoch)
 	}
 	query += ` ORDER BY rd.account_id,ag.group_name`
@@ -543,7 +544,7 @@ func (s *Store) routingAlertFindings(ctx context.Context, policy AlertPolicy) ([
 
 func (s *Store) routingDecisionEpoch(ctx context.Context) (*string, error) {
 	var value string
-	err := s.db.QueryRowContext(ctx, `SELECT updated_at FROM app_state WHERE key='routing-decision-epoch'`).Scan(&value)
+	err := s.db.QueryRowContext(ctx, `SELECT updated_at FROM app_state WHERE "key"='routing-decision-epoch'`).Scan(&value)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -560,7 +561,7 @@ func (s *Store) invalidatedRoutingAlertIncidents(ctx context.Context, epoch *str
 	}
 	rows, err := s.db.QueryContext(ctx, `SELECT incident_key FROM alert_incidents WHERE status IN ('firing','suppressed')
 		AND event_type IN ('account.binding_invalid','account.routing_breaker','account.routing_degraded','account.routing_survivor',
-		'group.routing_unavailable','group.routing_survivor') AND julianday(last_seen_at)<julianday(?)`, *epoch)
+		'group.routing_unavailable','group.routing_survivor') AND `+instantSQL(s.db.Driver(), "last_seen_at")+`<`+instantSQL(s.db.Driver(), "?")+``, *epoch)
 	if err != nil {
 		return nil, err
 	}
@@ -578,7 +579,7 @@ func (s *Store) invalidatedRoutingAlertIncidents(ctx context.Context, epoch *str
 func (s *Store) routingApplyFailureFindings(ctx context.Context) ([]alertFinding, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT a.id,COALESCE(latest.error,''),latest.operation_type,
 		COALESCE(latest.remote_confirmed,0),COALESCE(latest.readback_confirmed,0)
-		FROM accounts a JOIN operation_audit latest ON latest.source_id=(`+latestRoutingOutcomeSQL+`
+		FROM accounts a JOIN operation_audit latest ON latest.source_id=(`+latestRoutingOutcomeQuery(s.db.Driver())+`
 		) WHERE latest.state='failed' ORDER BY a.id`)
 	if err != nil {
 		return nil, err
@@ -683,7 +684,7 @@ func (s *Store) probeFailureFindings(ctx context.Context, policy AlertPolicy) ([
 	for _, group := range policy.ProbeGroups {
 		selected[strings.ToLower(strings.TrimSpace(group))] = struct{}{}
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT DISTINCT account_id,group_name FROM health_samples INDEXED BY ix_health_samples_probe_recent
+	rows, err := s.db.QueryContext(ctx, `SELECT DISTINCT account_id,group_name FROM health_samples`+sqliteIndexHint(s.db.Driver(), "ix_health_samples_probe_recent")+`
 		WHERE LOWER(REPLACE(source,'_','-')) IN ('active-probe','probe') ORDER BY account_id,group_name`)
 	if err != nil {
 		return nil, nil, err
@@ -775,7 +776,7 @@ func (s *Store) probeEvidence(
 	limit int,
 	cutoff time.Time,
 ) (int, int, int, string, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT result,failure_reason,observed_at,attempts FROM health_samples INDEXED BY ix_health_samples_probe_recent
+	rows, err := s.db.QueryContext(ctx, `SELECT result,failure_reason,observed_at,attempts FROM health_samples`+sqliteIndexHint(s.db.Driver(), "ix_health_samples_probe_recent")+`
 		WHERE account_id=? AND group_name=? AND LOWER(REPLACE(source,'_','-')) IN ('active-probe','probe')
 		AND LOWER(TRIM(result)) IN ('通过','passed','pass','success','succeeded','healthy','ok',
 			'失败','failed','error','timeout','超时','probe failed','unhealthy','管理 api 异常')

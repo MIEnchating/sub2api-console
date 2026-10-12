@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"github.com/MIEnchating/sub2api-console/backend/internal/dbconn"
 	"strings"
 	"time"
 )
@@ -36,8 +37,8 @@ func (s *Store) MarkCleanupPaused(ctx context.Context, accountID, reason string)
 	if count, err := result.RowsAffected(); err != nil || count != 1 {
 		return sql.ErrNoRows
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO paused_accounts(account_id,reason,enabled,updated_at) VALUES(?,?,1,?)
-		ON CONFLICT(account_id) DO UPDATE SET reason=excluded.reason,enabled=1,updated_at=excluded.updated_at`, accountID, reason, now); err != nil {
+	if _, err := tx.ExecContext(ctx, tx.Dialect(`INSERT INTO paused_accounts(account_id,reason,enabled,updated_at) VALUES(?,?,1,?)
+		ON CONFLICT(account_id) DO UPDATE SET reason=excluded.reason,enabled=1,updated_at=excluded.updated_at`, `INSERT INTO paused_accounts(account_id,reason,enabled,updated_at) VALUES(?,?,1,?) ON DUPLICATE KEY UPDATE reason=VALUES(reason),enabled=1,updated_at=VALUES(updated_at)`), accountID, reason, now); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -53,7 +54,7 @@ func (s *Store) MarkCleanupDisabled(ctx context.Context, accountID string) error
 	}
 	defer tx.Rollback()
 	var raw string
-	if err := tx.QueryRowContext(ctx, `SELECT metadata_json FROM accounts WHERE id=?`, accountID).Scan(&raw); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT metadata_json FROM accounts WHERE id=?`+tx.LockClause(), accountID).Scan(&raw); err != nil {
 		return err
 	}
 	metadata, err := decodeJSONObject(raw)
@@ -158,7 +159,7 @@ func (s *Store) deleteAccountProjection(
 	if !positiveNumericID(accountID) {
 		return errors.New("账号必须使用有效的稳定 ID")
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.beginPolicyTx(ctx, "control-plane")
 	if err != nil {
 		return err
 	}
@@ -212,7 +213,7 @@ func (s *Store) deleteAccountProjection(
 	return tx.Commit()
 }
 
-func deleteUpstreamKeyProjection(ctx context.Context, tx *sql.Tx, scope AccountDeleteScope) error {
+func deleteUpstreamKeyProjection(ctx context.Context, tx *dbconn.Tx, scope AccountDeleteScope) error {
 	if _, err := tx.ExecContext(ctx, `DELETE FROM upstream_keys WHERE key_id=? AND host IN (
 		SELECT host FROM upstream_identity_hosts WHERE upstream_id=?
 	)`, scope.UpstreamKeyID, scope.UpstreamID); err != nil {
@@ -272,7 +273,7 @@ func confirmAccountDeleteScope(
 	return nil
 }
 
-func (s *Store) removeDeletedAccountPolicyReferences(ctx context.Context, tx *sql.Tx, accountIDs []string, now string) error {
+func (s *Store) removeDeletedAccountPolicyReferences(ctx context.Context, tx *dbconn.Tx, accountIDs []string, now string) error {
 	if len(accountIDs) == 0 {
 		return nil
 	}

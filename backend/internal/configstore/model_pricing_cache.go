@@ -27,7 +27,8 @@ func (s *Store) ModelPricingCache(ctx context.Context, key string) (*ModelPricin
 }
 
 func (s *Store) SaveModelPricingCache(ctx context.Context, key string, item ModelPricingCache) error {
-	_, err := s.db.ExecContext(ctx, `INSERT INTO model_pricing_cache(cache_key,content,fetched_at) VALUES(?,?,?)
-		ON CONFLICT(cache_key) DO UPDATE SET content=excluded.content,fetched_at=excluded.fetched_at`, key, item.Content, item.FetchedAt.UTC().Format(time.RFC3339Nano))
+	_, err := s.db.ExecContext(ctx, s.dialect(`INSERT INTO model_pricing_cache(cache_key,content,fetched_at) VALUES(?,?,?)
+		ON CONFLICT(cache_key) DO UPDATE SET content=excluded.content,fetched_at=excluded.fetched_at`, `INSERT INTO model_pricing_cache(cache_key,content,fetched_at) VALUES(?,?,?)
+		ON DUPLICATE KEY UPDATE content=VALUES(content),fetched_at=VALUES(fetched_at)`), key, item.Content, item.FetchedAt.UTC().Format(time.RFC3339Nano))
 	return err
 }

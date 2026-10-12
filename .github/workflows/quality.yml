@@ -68,6 +68,24 @@ jobs:
       - name: Build
         run: go build ./...
 
+  database-contracts:
+    name: Database business and migration contracts (PostgreSQL, MySQL, SQLite)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+      - name: Isolated database contracts
+        run: bash scripts/check-db-contract.sh
+
   browser:
     name: Browser regressions (${{ matrix.shard }}/4)
     runs-on: ubuntu-latest

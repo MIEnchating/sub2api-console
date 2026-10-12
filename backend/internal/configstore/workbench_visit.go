@@ -3,6 +3,7 @@ package configstore
 import (
 	"context"
 	"errors"
+	"github.com/MIEnchating/sub2api-console/backend/internal/dbconn"
 )
 
 // VisitWorkbenchDocuments visits at most limit records in reverse insertion
@@ -13,13 +14,17 @@ func (s *Store) VisitWorkbenchDocuments(ctx context.Context, prefix string, limi
 	if prefix == "" || len(prefix) > 200 || limit < 1 || limit > 501 {
 		return errors.New("工作台查询范围无效")
 	}
-	where, args := workbenchDocumentRange(prefix)
+	where, args := s.workbenchDocumentRange(prefix)
 	args = append(args, limit)
 	// Sort narrow rowids before loading private JSON. Stream only the rows the
 	// caller inspects, keeping one record at a time rather than the entire list.
-	rows, err := s.db.QueryContext(ctx, `SELECT id,revision,payload FROM account_workbench_documents WHERE rowid IN (
-		SELECT rowid FROM account_workbench_documents WHERE `+where+` ORDER BY rowid DESC LIMIT ?
-	) ORDER BY rowid DESC`, args...)
+	query := `SELECT id,revision,payload FROM account_workbench_documents WHERE rowid IN (
+		SELECT rowid FROM account_workbench_documents WHERE ` + where + ` ORDER BY rowid DESC LIMIT ?
+ ) ORDER BY rowid DESC`
+	if s.db.Driver() != dbconn.SQLite {
+		query = `SELECT id,revision,payload FROM account_workbench_documents WHERE ` + where + ` ORDER BY insertion_order DESC LIMIT ?`
+	}
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return err
 	}

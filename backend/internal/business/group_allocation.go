@@ -77,16 +77,16 @@ func (s *Store) GroupAllocation(ctx context.Context, groupID string) (GroupAlloc
 		AverageHealthScore: group.AverageHealthScore, AssignedConcurrency: new(int64), Channels: []GroupAllocationChannel{},
 	}
 	rows, err := s.db.QueryContext(ctx, `SELECT a.id,a.name,a.multiplier,rd.priority,rd.schedulable,rd.role,rd.routing_state,
-		rd.rank,rd.reason,rd.updated_at,rd.payload_json,he.health_score,he.short_score,he.long_score,
+		rd."rank",rd.reason,rd.updated_at,rd.payload_json,he.health_score,he.short_score,he.long_score,
 		he.sample_count,he.ttfb_p95_ms,
 		a.schedulable,a.routing_state,a.health_status,a.paused,a.metadata_json,m.priority,a.concurrency
 		FROM account_groups ag
 		JOIN accounts a ON a.id=ag.account_id
 		LEFT JOIN manual_priority_accounts m ON m.account_id=a.id
 		LEFT JOIN routing_decisions rd ON rd.account_id=a.id AND m.account_id IS NULL AND rd.updated_at>=COALESCE(
-			(SELECT updated_at FROM app_state WHERE key='routing-decision-epoch'),rd.updated_at)
+			(SELECT updated_at FROM app_state WHERE "key"='routing-decision-epoch'),rd.updated_at)
 		LEFT JOIN account_health_evaluations he ON he.account_id=a.id
-		WHERE ag.group_id=? OR (ag.group_id IS NULL AND LOWER(TRIM(ag.group_name))=LOWER(TRIM(?)))
+		WHERE ag.group_id=? OR (ag.group_id IS NULL AND `+lowerTextSQL(s.db.Driver(), "TRIM(ag.group_name)")+`=LOWER(TRIM(?)))
 		ORDER BY a.name,a.id`, groupID, group.Name)
 	if err != nil {
 		return GroupAllocation{}, err

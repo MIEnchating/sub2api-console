@@ -6,6 +6,10 @@ services:
       dockerfile: backend/Dockerfile
     restart: unless-stopped
     environment:
+      SUB2API_CONSOLE_DB_DRIVER: ${SUB2API_CONSOLE_DB_DRIVER:-postgres}
+      SUB2API_CONSOLE_DB_DSN: ${SUB2API_CONSOLE_DB_DSN:-postgres://console:${SUB2API_CONSOLE_POSTGRES_PASSWORD:-}@postgres:5432/console?sslmode=disable}
+      SUB2API_CONSOLE_DB_MAX_OPEN_CONNS: ${SUB2API_CONSOLE_DB_MAX_OPEN_CONNS:-16}
+      SUB2API_CONSOLE_DB_MAX_IDLE_CONNS: ${SUB2API_CONSOLE_DB_MAX_IDLE_CONNS:-4}
       SUB2API_CONSOLE_SETUP_TOKEN: ${SUB2API_CONSOLE_SETUP_TOKEN:-}
       SUB2API_TASK_QUEUE_CAPACITY: ${SUB2API_TASK_QUEUE_CAPACITY:-100}
       SUB2API_TASK_CONCURRENCY_ACCOUNT: ${SUB2API_TASK_CONCURRENCY_ACCOUNT:-8}
@@ -17,6 +21,9 @@ services:
     volumes:
       - ./data:/app/data
     command: sub2api-console
+    depends_on:
+      postgres:
+        condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8080/api/setup/status"]
       interval: 10s
@@ -26,3 +33,21 @@ services:
 
     ports:
       - "${SUB2API_CONSOLE_FRONTEND_PORT:-3004}:8080"
+
+  postgres:
+    image: postgres:18-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: console
+      POSTGRES_DB: console
+      POSTGRES_PASSWORD: ${SUB2API_CONSOLE_POSTGRES_PASSWORD:-}
+    volumes:
+      - postgres-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U console -d console"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+volumes:
+  postgres-data:

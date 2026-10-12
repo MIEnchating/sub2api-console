@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/MIEnchating/sub2api-console/backend/internal/dbconn"
 	"strings"
 	"time"
 )
@@ -142,7 +143,7 @@ func (s *Store) ApplyUpstreamSync(ctx context.Context, value UpstreamSyncWrite) 
 	var metadataRaw string
 	var existingRaw, existingMapped sql.NullString
 	var existingAuthStatus string
-	if err := tx.QueryRowContext(ctx, `SELECT metadata_json,raw_balance,mapped_balance,auth_status FROM upstreams WHERE host=?`, host).
+	if err := tx.QueryRowContext(ctx, `SELECT metadata_json,raw_balance,mapped_balance,auth_status FROM upstreams WHERE host=?`+tx.LockClause(), host).
 		Scan(&metadataRaw, &existingRaw, &existingMapped, &existingAuthStatus); errors.Is(err, sql.ErrNoRows) {
 		return UpstreamSyncWriteResult{}, errors.New("上游 Host 不存在")
 	} else if err != nil {
@@ -166,7 +167,7 @@ func (s *Store) ApplyUpstreamSync(ctx context.Context, value UpstreamSyncWrite) 
 		if rechargeSourceHost == "" {
 			note = "console-sync-default"
 		}
-		if _, insertErr := tx.ExecContext(ctx, `INSERT INTO recharge_rates(host,recharge_rate,note,updated_at)
+		if _, insertErr := tx.InsertIfAbsentContext(ctx, `INSERT INTO recharge_rates(host,recharge_rate,note,updated_at)
 			VALUES(?,?,?,?) ON CONFLICT(host) DO NOTHING`, host, rechargeRaw, note, now); insertErr != nil {
 			return UpstreamSyncWriteResult{}, insertErr
 		}
@@ -287,7 +288,7 @@ func (s *Store) ApplyUpstreamSync(ctx context.Context, value UpstreamSyncWrite) 
 
 func catalogAccountRateCounts(
 	ctx context.Context,
-	tx *sql.Tx,
+	tx *dbconn.Tx,
 	host string,
 	keys []UpstreamCatalogKey,
 	partial bool,
@@ -351,7 +352,7 @@ func (s *Store) RecordUpstreamSyncFailure(ctx context.Context, host, scope, reas
 	}
 	defer tx.Rollback()
 	var raw, existingAuthStatus string
-	if err := tx.QueryRowContext(ctx, `SELECT metadata_json,auth_status FROM upstreams WHERE host=?`, host).Scan(&raw, &existingAuthStatus); errors.Is(err, sql.ErrNoRows) {
+	if err := tx.QueryRowContext(ctx, `SELECT metadata_json,auth_status FROM upstreams WHERE host=?`+tx.LockClause(), host).Scan(&raw, &existingAuthStatus); errors.Is(err, sql.ErrNoRows) {
 		return errors.New("上游 Host 不存在")
 	} else if err != nil {
 		return err
@@ -480,7 +481,7 @@ func normalizeUpstreamBalance(value *UpstreamBalanceObservation) (*UpstreamBalan
 	return &result, nil
 }
 
-func persistCatalogTx(ctx context.Context, tx *sql.Tx, host string, groups []UpstreamCatalogGroup, keys []UpstreamCatalogKey, recharge *string, now string, partial, hasCatalogBaseline bool) error {
+func persistCatalogTx(ctx context.Context, tx *dbconn.Tx, host string, groups []UpstreamCatalogGroup, keys []UpstreamCatalogKey, recharge *string, now string, partial, hasCatalogBaseline bool) error {
 	upstreamID, identityHosts, err := upstreamIdentityHostsForQueryer(ctx, tx, host)
 	if err != nil {
 		return err
@@ -504,10 +505,13 @@ func persistCatalogTx(ctx context.Context, tx *sql.Tx, host string, groups []Ups
 	for _, item := range groups {
 		groupIDs[item.GroupID] = struct{}{}
 		effective := divideMultiplierPointers(item.RawRate, recharge)
-		if _, err := tx.ExecContext(ctx, `INSERT INTO upstream_groups(host,group_id,name,description,platform,status,raw_rate,effective_rate,rate_source,updated_at)
+		if _, err := tx.ExecContext(ctx, tx.Dialect(`INSERT INTO upstream_groups(host,group_id,name,description,platform,status,raw_rate,effective_rate,rate_source,updated_at)
 			VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(host,group_id) DO UPDATE SET name=excluded.name,description=excluded.description,
 			platform=excluded.platform,status=excluded.status,raw_rate=excluded.raw_rate,effective_rate=excluded.effective_rate,
-			rate_source=excluded.rate_source,updated_at=excluded.updated_at`, host, item.GroupID, item.Name, item.Description,
+			rate_source=excluded.rate_source,updated_at=excluded.updated_at`, `INSERT INTO upstream_groups(host,group_id,name,description,platform,status,raw_rate,effective_rate,rate_source,updated_at)
+			VALUES(?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE name=VALUES(name),description=VALUES(description),
+			platform=VALUES(platform),status=VALUES(status),raw_rate=VALUES(raw_rate),effective_rate=VALUES(effective_rate),
+			rate_source=VALUES(rate_source),updated_at=VALUES(updated_at)`), host, item.GroupID, item.Name, item.Description,
 			item.Platform, item.Status, item.RawRate, effective, "live-catalog-mapped", now); err != nil {
 			return err
 		}
@@ -515,9 +519,11 @@ func persistCatalogTx(ctx context.Context, tx *sql.Tx, host string, groups []Ups
 	keyIDs := map[string]struct{}{}
 	for _, item := range keys {
 		keyIDs[item.KeyID] = struct{}{}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO upstream_keys(host,key_id,name,upstream_group,rate,status,metadata_json,updated_at)
+		if _, err := tx.ExecContext(ctx, tx.Dialect(`INSERT INTO upstream_keys(host,key_id,name,upstream_group,rate,status,metadata_json,updated_at)
 			VALUES(?,?,?,?,?,?,'{}',?) ON CONFLICT(host,key_id) DO UPDATE SET name=excluded.name,upstream_group=excluded.upstream_group,
-			rate=excluded.rate,status=excluded.status,metadata_json='{}',updated_at=excluded.updated_at`, host, item.KeyID, item.Name,
+			rate=excluded.rate,status=excluded.status,metadata_json='{}',updated_at=excluded.updated_at`, `INSERT INTO upstream_keys(host,key_id,name,upstream_group,rate,status,metadata_json,updated_at)
+			VALUES(?,?,?,?,?,?,'{}',?) ON DUPLICATE KEY UPDATE name=VALUES(name),upstream_group=VALUES(upstream_group),
+			rate=VALUES(rate),status=VALUES(status),metadata_json='{}',updated_at=VALUES(updated_at)`), host, item.KeyID, item.Name,
 			item.UpstreamGroup, item.Rate, item.Status, now); err != nil {
 			return err
 		}
@@ -537,7 +543,7 @@ func persistCatalogTx(ctx context.Context, tx *sql.Tx, host string, groups []Ups
 	return reconcileCatalogEntitiesTx(ctx, tx, upstreamID, "key", keyIDs, now)
 }
 
-func repairBindingCatalogReferences(ctx context.Context, tx *sql.Tx, hosts []string, groups []UpstreamCatalogGroup, keys []UpstreamCatalogKey, now string) error {
+func repairBindingCatalogReferences(ctx context.Context, tx *dbconn.Tx, hosts []string, groups []UpstreamCatalogGroup, keys []UpstreamCatalogKey, now string) error {
 	byID := make(map[string]UpstreamCatalogGroup, len(groups))
 	byName := make(map[string]UpstreamCatalogGroup, len(groups))
 	ambiguousNames := map[string]struct{}{}

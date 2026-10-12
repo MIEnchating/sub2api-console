@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/MIEnchating/sub2api-console/backend/internal/dbconn"
 )
 
 type OnboardingCandidate struct {
@@ -254,6 +256,9 @@ func (s *Store) SavePendingOnboarding(ctx context.Context, value PendingOnboardi
 	if value.CreatedAt == "" {
 		value.CreatedAt = now
 	}
+	if s.db.Driver() == dbconn.MySQL {
+		return s.saveMySQLPendingOnboarding(ctx, value, upstreamID, selectionJSON, now)
+	}
 	_, err = s.db.ExecContext(ctx, `INSERT INTO onboarding_pending(operation_id,upstream_id,upstream_host,upstream_type,
 		upstream_key_id,upstream_key_name,upstream_account_id,upstream_group_id,upstream_group_name,local_group_id,local_group_name,
 		local_group_ids_json,multiplier,intent_hash,frozen_intent_json,reason,key_commit_unknown,account_commit_unknown,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
@@ -265,8 +270,8 @@ func (s *Store) SavePendingOnboarding(ctx context.Context, value PendingOnboardi
 		updated_at=excluded.updated_at`,
 		value.OperationID, upstreamID, canonicalHost(value.UpstreamHost), strings.TrimSpace(value.UpstreamType), value.UpstreamKeyID,
 		managementNullableString(value.UpstreamKeyName), value.UpstreamAccountID, value.UpstreamGroupID, value.UpstreamGroupName, value.LocalGroupID,
-		value.LocalGroupName, selectionJSON, value.Multiplier, value.IntentHash, strings.TrimSpace(value.FrozenIntentJSON), safeOnboardingReason(value.Reason), value.KeyCommitUnknown,
-		value.AccountCommitUnknown, value.CreatedAt, now)
+		value.LocalGroupName, selectionJSON, value.Multiplier, value.IntentHash, strings.TrimSpace(value.FrozenIntentJSON), safeOnboardingReason(value.Reason), boolDatabaseValue(value.KeyCommitUnknown),
+		boolDatabaseValue(value.AccountCommitUnknown), value.CreatedAt, now)
 	return err
 }
 
@@ -354,7 +359,7 @@ func (s *Store) CommitOnboardingProjection(ctx context.Context, value Onboarding
 	if err != nil {
 		return err
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.beginPolicyTx(ctx, "control-plane")
 	if err != nil {
 		return err
 	}
@@ -364,12 +369,15 @@ func (s *Store) CommitOnboardingProjection(ctx context.Context, value Onboarding
 	if err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO accounts(id,name,upstream_host,upstream_type,schedulable,priority,concurrency,
+	if _, err := tx.ExecContext(ctx, tx.Dialect(`INSERT INTO accounts(id,name,upstream_host,upstream_type,schedulable,priority,concurrency,
 		multiplier,paused,metadata_json,updated_at) VALUES(?,?,?,?,?,?,?,?,0,?,?)
 		ON CONFLICT(id) DO UPDATE SET name=excluded.name,upstream_host=excluded.upstream_host,
 		upstream_type=excluded.upstream_type,schedulable=excluded.schedulable,priority=excluded.priority,concurrency=excluded.concurrency,
-		multiplier=excluded.multiplier,metadata_json=excluded.metadata_json,updated_at=excluded.updated_at`,
-		value.AccountID, value.AccountName, canonicalHost(value.UpstreamHost), value.UpstreamType, value.Schedulable,
+		multiplier=excluded.multiplier,metadata_json=excluded.metadata_json,updated_at=excluded.updated_at`, `INSERT INTO accounts(id,name,upstream_host,upstream_type,schedulable,priority,concurrency,
+		multiplier,paused,metadata_json,updated_at) VALUES(?,?,?,?,?,?,?,?,0,?,?) ON DUPLICATE KEY UPDATE name=VALUES(name),upstream_host=VALUES(upstream_host),
+		upstream_type=VALUES(upstream_type),schedulable=VALUES(schedulable),priority=VALUES(priority),concurrency=VALUES(concurrency),
+		multiplier=VALUES(multiplier),metadata_json=VALUES(metadata_json),updated_at=VALUES(updated_at)`),
+		value.AccountID, value.AccountName, canonicalHost(value.UpstreamHost), value.UpstreamType, boolDatabaseValue(value.Schedulable),
 		value.Priority, value.Concurrency, value.Multiplier, string(metadata), now); err != nil {
 		return err
 	}
@@ -391,12 +399,16 @@ func (s *Store) CommitOnboardingProjection(ctx context.Context, value Onboarding
 			return err
 		}
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO bindings(local_account_id,upstream_host,upstream_key_id,
+	if _, err := tx.ExecContext(ctx, tx.Dialect(`INSERT INTO bindings(local_account_id,upstream_host,upstream_key_id,
 		upstream_key_name,upstream_group,upstream_group_id,local_group,local_rate,description,status,metadata_json,updated_at)
 		VALUES(?,?,?,?,?,?,?,?,?,'active',?,?) ON CONFLICT(local_account_id,upstream_host,upstream_key_id) DO UPDATE SET
 		upstream_key_name=excluded.upstream_key_name,upstream_group=excluded.upstream_group,
 		upstream_group_id=excluded.upstream_group_id,local_group=excluded.local_group,local_rate=excluded.local_rate,
-		status=excluded.status,metadata_json=excluded.metadata_json,updated_at=excluded.updated_at`,
+		status=excluded.status,metadata_json=excluded.metadata_json,updated_at=excluded.updated_at`, `INSERT INTO bindings(local_account_id,upstream_host,upstream_key_id,
+		upstream_key_name,upstream_group,upstream_group_id,local_group,local_rate,description,status,metadata_json,updated_at)
+		VALUES(?,?,?,?,?,?,?,?,?,'active',?,?) ON DUPLICATE KEY UPDATE upstream_key_name=VALUES(upstream_key_name),upstream_group=VALUES(upstream_group),
+		upstream_group_id=VALUES(upstream_group_id),local_group=VALUES(local_group),local_rate=VALUES(local_rate),
+		status=VALUES(status),metadata_json=VALUES(metadata_json),updated_at=VALUES(updated_at)`),
 		value.AccountID, canonicalHost(value.UpstreamHost), value.UpstreamKeyID, value.UpstreamKeyName,
 		value.UpstreamGroupName, value.UpstreamGroupID, value.LocalGroupName, value.Multiplier,
 		onboardingBindingDescription(value.ReadbackConfirmed), fmt.Sprintf(`{"operation_id":%q,"local_group_id":%q}`, value.OperationID, value.LocalGroupID), now); err != nil {

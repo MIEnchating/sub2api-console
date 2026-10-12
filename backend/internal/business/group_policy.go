@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/MIEnchating/sub2api-console/backend/internal/dbconn"
 	"math"
 	"sort"
 	"strings"
@@ -79,7 +80,7 @@ func (s *Store) UpdateGroupPolicy(ctx context.Context, groupID string, raw map[s
 	if err != nil {
 		return GroupStatus{}, err
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.beginPolicyTx(ctx, "control-plane")
 	if err != nil {
 		return GroupStatus{}, err
 	}
@@ -131,7 +132,7 @@ func (s *Store) ClearGroupPolicy(ctx context.Context, groupID string, actor stri
 	if !stableNumericID(groupID) {
 		return GroupStatus{}, fmt.Errorf("分组必须使用已登记的稳定数字 ID")
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.beginPolicyTx(ctx, "control-plane")
 	if err != nil {
 		return GroupStatus{}, err
 	}
@@ -192,7 +193,7 @@ func (s *Store) SetGroupExcluded(ctx context.Context, groupID string, excluded b
 	if !stableNumericID(groupID) {
 		return GroupStatus{}, fmt.Errorf("分组必须使用已登记的稳定数字 ID")
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.beginPolicyTx(ctx, "control-plane")
 	if err != nil {
 		return GroupStatus{}, err
 	}
@@ -266,7 +267,7 @@ func (s *Store) BatchGroupPolicy(ctx context.Context, groupIDs []string, action 
 		}
 		seen[groupID] = struct{}{}
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.beginPolicyTx(ctx, "control-plane")
 	if err != nil {
 		return 0, err
 	}
@@ -415,7 +416,7 @@ func normalizeGroupPolicyBinding(payload map[string]any) (map[string]any, error)
 	return result, nil
 }
 
-func registeredGroup(ctx context.Context, tx *sql.Tx, groupID string) (string, error) {
+func registeredGroup(ctx context.Context, tx *dbconn.Tx, groupID string) (string, error) {
 	var name string
 	if err := tx.QueryRowContext(ctx, `SELECT name FROM local_groups WHERE remote_id=?`, groupID).Scan(&name); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -426,7 +427,7 @@ func registeredGroup(ctx context.Context, tx *sql.Tx, groupID string) (string, e
 	return name, nil
 }
 
-func insertRuntimeEvent(ctx context.Context, tx *sql.Tx, eventType, summary string, payload map[string]any, now string) error {
+func insertRuntimeEvent(ctx context.Context, tx *dbconn.Tx, eventType, summary string, payload map[string]any, now string) error {
 	return insertRuntimeEventWithStatus(ctx, tx, eventType, "succeeded", summary, payload, now)
 }
 
@@ -444,7 +445,7 @@ func (s *Store) RecordRuntimeEvent(ctx context.Context, eventType, status, summa
 		return 0, err
 	}
 	var eventID int64
-	if err := tx.QueryRowContext(ctx, `SELECT MIN(source_id) FROM runtime_events WHERE source_id < 0`).Scan(&eventID); err != nil {
+	if err := tx.QueryRowContext(ctx, lastLocalEventIDSQL(tx, "runtime_events")).Scan(&eventID); err != nil {
 		return 0, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -461,7 +462,7 @@ func copyRuntimeEventPayload(payload map[string]any) map[string]any {
 	return copy
 }
 
-func insertRuntimeEventWithStatus(ctx context.Context, tx *sql.Tx, eventType, status, summary string, payload map[string]any, now string) error {
+func insertRuntimeEventWithStatus(ctx context.Context, tx *dbconn.Tx, eventType, status, summary string, payload map[string]any, now string) error {
 	if taskID := taskcontext.ID(ctx); taskID != "" {
 		payload = copyRuntimeEventPayload(payload)
 		if strings.TrimSpace(stringValue(payload["task_id"])) == "" {
@@ -472,13 +473,9 @@ func insertRuntimeEventWithStatus(ctx context.Context, tx *sql.Tx, eventType, st
 	if err != nil {
 		return err
 	}
-	var minimum sql.NullInt64
-	if err := tx.QueryRowContext(ctx, `SELECT MIN(source_id) FROM runtime_events WHERE source_id < 0`).Scan(&minimum); err != nil {
+	sourceID, err := nextLocalEventID(ctx, tx, "runtime_events")
+	if err != nil {
 		return err
-	}
-	sourceID := int64(-1)
-	if minimum.Valid && minimum.Int64 <= -1 {
-		sourceID = minimum.Int64 - 1
 	}
 	_, err = tx.ExecContext(ctx, `INSERT INTO runtime_events(source_id,event_type,created_at,status,summary,payload_json)
 		VALUES(?,?,?,?,?,?)`, sourceID, eventType, now, status, summary, string(encoded))

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/MIEnchating/sub2api-console/backend/internal/dbconn"
 	"strings"
 	"time"
 )
@@ -77,20 +78,20 @@ func (s *Store) EvidenceTargets(ctx context.Context, accountID, groupName *strin
 		EXISTS (SELECT 1 FROM manual_priority_accounts m WHERE m.account_id=a.id),
 		(SELECT COALESCE(NULLIF(TRIM(rd.routing_state),''),NULLIF(TRIM(rd.role),'')) FROM routing_decisions rd
 		 WHERE rd.account_id=a.id
-		 AND (decision_epoch.updated_at IS NULL OR julianday(rd.updated_at)>=julianday(decision_epoch.updated_at))),
+		 AND (decision_epoch.updated_at IS NULL OR ` + instantSQL(s.db.Driver(), "rd.updated_at") + `>=` + instantSQL(s.db.Driver(), "decision_epoch.updated_at") + `)),
 		(SELECT hs.observed_at FROM health_samples hs
 		 WHERE hs.account_id=a.id AND LOWER(REPLACE(hs.source,'_','-'))='traffic'
 		 ORDER BY hs.observed_at DESC,hs.id DESC LIMIT 1),
-		(SELECT st.updated_at FROM app_state st WHERE st.key='evidence-traffic-fetch:' || a.id),
+		(SELECT st.updated_at FROM app_state st WHERE st."key"=` + s.db.Dialect(`'evidence-traffic-fetch:' || a.id`, `CONCAT('evidence-traffic-fetch:',a.id)`) + `),
 		(SELECT hs.observed_at FROM health_samples hs
 		 WHERE hs.account_id=a.id AND LOWER(REPLACE(hs.source,'_','-'))='active-probe' AND hs.observed_at<=?
 		 ORDER BY hs.observed_at DESC,hs.id DESC LIMIT 1)
 		FROM accounts a JOIN account_groups ag ON ag.account_id=a.id
-		LEFT JOIN app_state decision_epoch ON decision_epoch.key='routing-decision-epoch'`
+		LEFT JOIN app_state decision_epoch ON decision_epoch."key"='routing-decision-epoch'`
 	if len(clauses) > 0 {
 		query += " WHERE " + strings.Join(clauses, " AND ")
 	}
-	query += " ORDER BY CASE WHEN a.id GLOB '[0-9]*' THEN CAST(a.id AS INTEGER) ELSE 0 END,a.id,ag.group_name"
+	query += " ORDER BY " + numericIDOrder(s.db.Driver(), "a.id") + ",a.id,ag.group_name"
 	rows, err := s.db.QueryContext(ctx, query, arguments...)
 	if err != nil {
 		return nil, err
@@ -150,8 +151,8 @@ func (s *Store) PersistTrafficFetches(ctx context.Context, accountIDs []string, 
 		if accountID == "" {
 			return errors.New("真实流量拉取记录缺少账号 ID")
 		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO app_state(key,value_json,updated_at) VALUES(?,?,?)
-			ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json,updated_at=excluded.updated_at`,
+		if _, err := tx.ExecContext(ctx, tx.Dialect(`INSERT INTO app_state("key",value_json,updated_at) VALUES(?,?,?)
+			ON CONFLICT("key") DO UPDATE SET value_json=excluded.value_json,updated_at=excluded.updated_at`, `INSERT INTO app_state("key",value_json,updated_at) VALUES(?,?,?) ON DUPLICATE KEY UPDATE value_json=VALUES(value_json),updated_at=VALUES(updated_at)`),
 			"evidence-traffic-fetch:"+accountID, `{}`, stamp); err != nil {
 			return err
 		}
@@ -163,7 +164,11 @@ func (s *Store) PersistTrafficSamples(ctx context.Context, samples []TrafficSamp
 	if len(samples) == 0 {
 		return 0, nil
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
+	resources := make([]string, 0, len(samples))
+	for _, sample := range samples {
+		resources = append(resources, "evidence/account/"+sample.AccountID)
+	}
+	tx, err := s.beginResourceTx(ctx, resources)
 	if err != nil {
 		return 0, err
 	}
@@ -184,7 +189,14 @@ func (s *Store) PersistTrafficSamples(ctx context.Context, samples []TrafficSamp
 		if err != nil {
 			return 0, fmt.Errorf("流量样本无法严格 JSON 序列化：%w", err)
 		}
-		result, err := tx.ExecContext(ctx, `INSERT INTO health_samples(
+		changed := 0
+		if tx.Driver() != dbconn.SQLite {
+			changed, err = persistServerTrafficSample(ctx, tx, sample, payload)
+			if err != nil {
+				return 0, err
+			}
+		} else {
+			result, err := tx.ExecContext(ctx, `INSERT INTO health_samples(
 			account_id,group_name,result,latency_p50,latency_p95,latency_p99,sample_count,attempts,
 			failure_reason,observed_at,source,evidence_key,payload_json
 		) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
@@ -215,16 +227,18 @@ func (s *Store) PersistTrafficSamples(ctx context.Context, samples []TrafficSamp
 			 AND json_extract(excluded.payload_json,'$.first_token_ms') IS NOT NULL)
 		)) OR (json_type(excluded.payload_json,'$.token_usage')='object'
 		 AND json_extract(excluded.payload_json,'$.token_usage') IS NOT json_extract(health_samples.payload_json,'$.token_usage'))`, sample.AccountID, sample.GroupName, sample.Result,
-			sample.LatencyP50, sample.LatencyP95, sample.LatencyP99, sample.SampleCount, sample.Attempts,
-			sample.FailureReason, sample.ObservedAt, "traffic", sample.EvidenceKey, string(payload))
-		if err != nil {
-			return 0, err
+				sample.LatencyP50, sample.LatencyP95, sample.LatencyP99, sample.SampleCount, sample.Attempts,
+				sample.FailureReason, sample.ObservedAt, "traffic", sample.EvidenceKey, string(payload))
+			if err != nil {
+				return 0, err
+			}
+			count, err := result.RowsAffected()
+			if err != nil {
+				return 0, err
+			}
+			changed = int(count)
 		}
-		count, err := result.RowsAffected()
-		if err != nil {
-			return 0, err
-		}
-		inserted += int(count)
+		inserted += changed
 		// Read back the merged usage: later enrichment revises this request's
 		// outcome without counting it a second time.
 		var qualityResult, qualityReason, qualityPayload string
@@ -254,16 +268,22 @@ func (s *Store) PersistTrafficSamples(ctx context.Context, samples []TrafficSamp
 		} else if metric, _ := sample.Payload["latency_metric"].(string); strings.EqualFold(strings.TrimSpace(metric), "first_token") {
 			firstToken = sample.LatencyP95
 		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO usage_records(
+		if tx.Driver() != dbconn.SQLite {
+			if err := persistServerTrafficUsage(ctx, tx, sample, payload, isError, firstToken); err != nil {
+				return 0, err
+			}
+		} else {
+			if _, err := tx.ExecContext(ctx, `INSERT INTO usage_records(
 			request_id,account_id,account_name,group_name,is_error,error_reason,first_token_ms,observed_at,source,payload_json
 		) VALUES(?,?,(SELECT name FROM accounts WHERE id=?),?,?,?,?,?,'traffic',?)
 		ON CONFLICT(request_id,account_id,group_name,observed_at) DO UPDATE SET
 			account_name=excluded.account_name,is_error=excluded.is_error,error_reason=excluded.error_reason,
 			first_token_ms=COALESCE(excluded.first_token_ms,usage_records.first_token_ms),
 			payload_json=json_patch(usage_records.payload_json,excluded.payload_json)`,
-			sample.EvidenceKey, sample.AccountID, sample.AccountID, sample.GroupName, isError, sample.FailureReason,
-			firstToken, sample.ObservedAt, string(payload)); err != nil {
-			return 0, err
+				sample.EvidenceKey, sample.AccountID, sample.AccountID, sample.GroupName, isError, sample.FailureReason,
+				firstToken, sample.ObservedAt, string(payload)); err != nil {
+				return 0, err
+			}
 		}
 	}
 	for accountID, latest := range latestTraffic {
@@ -297,7 +317,7 @@ const retainedHealthSamplesPerAccount = 200
 // Fixed precision UTC keeps indexed text ordering identical to instant ordering.
 const healthSampleTimeLayout = "2006-01-02T15:04:05.000000000Z"
 
-func pruneHealthSamples(ctx context.Context, tx *sql.Tx, accountIDs map[string]struct{}) error {
+func pruneHealthSamples(ctx context.Context, tx *dbconn.Tx, accountIDs map[string]struct{}) error {
 	for accountID := range accountIDs {
 		if _, err := tx.ExecContext(ctx, `DELETE FROM account_stability_samples WHERE account_id=? AND observed_at<?`, accountID,
 			time.Now().UTC().Add(-30*24*time.Hour).Format(healthSampleTimeLayout)); err != nil {
@@ -309,7 +329,7 @@ func pruneHealthSamples(ctx context.Context, tx *sql.Tx, accountIDs map[string]s
 		if _, err := tx.ExecContext(ctx, `WITH deduplicated AS (
 			SELECT id,observed_at,LOWER(REPLACE(source,'_','-')) normalized_source,
 				ROW_NUMBER() OVER(PARTITION BY LOWER(REPLACE(source,'_','-')),
-					COALESCE(NULLIF(evidence_key,''),'row:'||id)
+					COALESCE(NULLIF(evidence_key,''),`+tx.Dialect(`'row:'||id`, `CONCAT('row:',id)`)+`)
 					ORDER BY COALESCE(observed_at,'') DESC,id DESC) duplicate_rank
 			FROM health_samples WHERE account_id=?
 		), ranked AS (
@@ -329,7 +349,7 @@ func pruneHealthSamples(ctx context.Context, tx *sql.Tx, accountIDs map[string]s
 
 // Merge before pruning so changing a request's group cannot erase known latency.
 // Keep the same winner as pruning and only fill missing/invalid latency fields.
-func mergeDuplicateTrafficLatencies(ctx context.Context, tx *sql.Tx, accountID string) error {
+func mergeDuplicateTrafficLatencies(ctx context.Context, tx *dbconn.Tx, accountID string) error {
 	rows, err := tx.QueryContext(ctx, `WITH traffic AS (
 		SELECT id,evidence_key,observed_at,latency_p50,latency_p95,latency_p99,payload_json,
 			COUNT(*) OVER(PARTITION BY evidence_key) duplicates

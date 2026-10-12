@@ -116,7 +116,7 @@ func (s *Store) ReplaceNewAPIGroupBindings(ctx context.Context, platformID strin
 		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO newapi_group_bindings(
 			platform_id,newapi_group_id,newapi_group_name,sub2api_group_id,sync_ratio,updated_at
-		) VALUES(?,?,?,?,?,?)`, platformID, item.NewAPIGroupID, item.NewAPIGroupName, item.Sub2APIGroupID, item.SyncRatio, now); err != nil {
+		) VALUES(?,?,?,?,?,?)`, platformID, item.NewAPIGroupID, item.NewAPIGroupName, item.Sub2APIGroupID, boolDatabaseValue(item.SyncRatio), now); err != nil {
 			return err
 		}
 	}

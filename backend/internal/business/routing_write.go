@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/MIEnchating/sub2api-console/backend/internal/dbconn"
 	"strings"
 	"time"
 )
@@ -68,7 +69,7 @@ func (s *Store) routingBaselines(ctx context.Context, accountID *string) ([]Rout
 		query += ` WHERE account_id=?`
 		arguments = append(arguments, *accountID)
 	} else {
-		query += ` WHERE ownership_version<>2 ORDER BY CASE WHEN account_id GLOB '[0-9]*' THEN CAST(account_id AS INTEGER) ELSE 0 END,account_id`
+		query += ` WHERE ownership_version<>2 ORDER BY ` + numericIDOrder(s.db.Driver(), "account_id") + `,account_id`
 	}
 	rows, err := s.db.QueryContext(ctx, query, arguments...)
 	if err != nil {
@@ -107,7 +108,7 @@ func (s *Store) CaptureRoutingBaseline(ctx context.Context, baseline RoutingBase
 	if capturedAt == "" {
 		capturedAt = time.Now().UTC().Format(time.RFC3339Nano)
 	}
-	result, err := s.db.ExecContext(ctx, `INSERT INTO routing_baselines(
+	result, err := s.db.ExecContext(ctx, s.db.Dialect(`INSERT INTO routing_baselines(
 		account_id,target_fingerprint,schedulable,priority,load_factor,concurrency,status,captured_at,ownership_version
 	) VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(account_id) DO UPDATE SET
 		target_fingerprint=excluded.target_fingerprint,
@@ -122,13 +123,28 @@ func (s *Store) CaptureRoutingBaseline(ctx context.Context, baseline RoutingBase
 		managed_priority=CASE WHEN routing_baselines.ownership_version=2 OR routing_baselines.target_fingerprint<>excluded.target_fingerprint THEN NULL ELSE routing_baselines.managed_priority END,
 		managed_load_factor=CASE WHEN routing_baselines.ownership_version=2 OR routing_baselines.target_fingerprint<>excluded.target_fingerprint THEN NULL ELSE routing_baselines.managed_load_factor END,
 		managed_concurrency=CASE WHEN routing_baselines.ownership_version=2 OR routing_baselines.target_fingerprint<>excluded.target_fingerprint THEN NULL ELSE routing_baselines.managed_concurrency END,
-		managed_status=CASE WHEN routing_baselines.ownership_version=2 OR routing_baselines.target_fingerprint<>excluded.target_fingerprint THEN NULL ELSE routing_baselines.managed_status END`,
+		managed_status=CASE WHEN routing_baselines.ownership_version=2 OR routing_baselines.target_fingerprint<>excluded.target_fingerprint THEN NULL ELSE routing_baselines.managed_status END`, `INSERT INTO routing_baselines(
+		account_id,target_fingerprint,schedulable,priority,load_factor,concurrency,status,captured_at,ownership_version
+	) VALUES(?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE
+		schedulable=CASE WHEN routing_baselines.ownership_version=2 OR routing_baselines.target_fingerprint<>VALUES(target_fingerprint) THEN VALUES(schedulable) ELSE routing_baselines.schedulable END,
+		priority=CASE WHEN routing_baselines.ownership_version=2 OR routing_baselines.target_fingerprint<>VALUES(target_fingerprint) THEN VALUES(priority) ELSE routing_baselines.priority END,
+		load_factor=CASE WHEN routing_baselines.ownership_version=2 OR routing_baselines.target_fingerprint<>VALUES(target_fingerprint) THEN VALUES(load_factor) ELSE routing_baselines.load_factor END,
+		concurrency=CASE WHEN routing_baselines.ownership_version=2 OR routing_baselines.target_fingerprint<>VALUES(target_fingerprint) THEN VALUES(concurrency) ELSE routing_baselines.concurrency END,
+		status=CASE WHEN routing_baselines.ownership_version=2 OR routing_baselines.target_fingerprint<>VALUES(target_fingerprint) THEN VALUES(status) ELSE routing_baselines.status END,
+		captured_at=CASE WHEN routing_baselines.ownership_version=2 OR routing_baselines.target_fingerprint<>VALUES(target_fingerprint) THEN VALUES(captured_at) ELSE routing_baselines.captured_at END,
+		managed_schedulable=CASE WHEN routing_baselines.ownership_version=2 OR routing_baselines.target_fingerprint<>VALUES(target_fingerprint) THEN NULL ELSE routing_baselines.managed_schedulable END,
+		managed_priority=CASE WHEN routing_baselines.ownership_version=2 OR routing_baselines.target_fingerprint<>VALUES(target_fingerprint) THEN NULL ELSE routing_baselines.managed_priority END,
+		managed_load_factor=CASE WHEN routing_baselines.ownership_version=2 OR routing_baselines.target_fingerprint<>VALUES(target_fingerprint) THEN NULL ELSE routing_baselines.managed_load_factor END,
+		managed_concurrency=CASE WHEN routing_baselines.ownership_version=2 OR routing_baselines.target_fingerprint<>VALUES(target_fingerprint) THEN NULL ELSE routing_baselines.managed_concurrency END,
+		managed_status=CASE WHEN routing_baselines.ownership_version=2 OR routing_baselines.target_fingerprint<>VALUES(target_fingerprint) THEN NULL ELSE routing_baselines.managed_status END,
+		ownership_version=CASE WHEN routing_baselines.ownership_version=2 OR routing_baselines.target_fingerprint<>VALUES(target_fingerprint) THEN 1 ELSE routing_baselines.ownership_version END,
+		target_fingerprint=VALUES(target_fingerprint)`),
 		baseline.AccountID, baseline.TargetFingerprint, boolDatabase(baseline.Schedulable), baseline.Priority,
 		baseline.LoadFactor, baseline.Concurrency, baseline.Status, capturedAt, baseline.OwnershipVersion)
 	if err != nil {
 		return err
 	}
-	if affected, rowsErr := result.RowsAffected(); rowsErr != nil || affected != 1 {
+	if affected, rowsErr := result.RowsAffected(); rowsErr != nil || (affected != 1 && !(s.db.Driver() == dbconn.MySQL && affected == 2)) {
 		return fmt.Errorf("账号 %s 的调度基线属于其他管理目标", baseline.AccountID)
 	}
 	return nil
@@ -185,7 +201,7 @@ func (s *Store) CommitRoutingReadback(
 	deleteBaseline bool,
 	operation AccountOperation,
 ) error {
-	return s.commitAccountMutation(ctx, accountID, operation, func(tx *sql.Tx, now string) error {
+	return s.commitAccountMutation(ctx, accountID, operation, func(tx *dbconn.Tx, now string) error {
 		if deleteBaseline || intent != nil {
 			if err := requireRoutingBaselineTarget(ctx, tx, accountID, targetFingerprint); err != nil {
 				return err
@@ -235,7 +251,7 @@ func (s *Store) AbandonRoutingControl(
 	readback RoutingReadback,
 	operation AccountOperation,
 ) error {
-	return s.commitAccountMutation(ctx, accountID, operation, func(tx *sql.Tx, now string) error {
+	return s.commitAccountMutation(ctx, accountID, operation, func(tx *dbconn.Tx, now string) error {
 		if err := requireRoutingBaselineTarget(ctx, tx, accountID, targetFingerprint); err != nil {
 			return err
 		}
@@ -271,7 +287,7 @@ func (s *Store) ClearRoutingRuntimeBlocks(ctx context.Context, accountID string)
 	}
 	defer tx.Rollback()
 	var raw string
-	if err := tx.QueryRowContext(ctx, `SELECT metadata_json FROM accounts WHERE id=?`, accountID).Scan(&raw); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT metadata_json FROM accounts WHERE id=?`+tx.LockClause(), accountID).Scan(&raw); err != nil {
 		return err
 	}
 	encoded, err := clearedRoutingRuntimeMetadata(raw, accountID)

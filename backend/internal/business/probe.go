@@ -72,7 +72,7 @@ func (s *Store) ProbeCandidates(ctx context.Context, accountID, groupName, platf
 	if len(clauses) > 0 {
 		query += " WHERE " + strings.Join(clauses, " AND ")
 	}
-	query += " ORDER BY CAST(a.id AS INTEGER),a.id,ag.group_name"
+	query += " ORDER BY " + numericIDOrder(s.db.Driver(), "a.id") + ",a.id,ag.group_name"
 	rows, err := s.db.QueryContext(ctx, query, arguments...)
 	if err != nil {
 		return nil, err
@@ -135,7 +135,11 @@ func (s *Store) PersistProbeSamples(ctx context.Context, samples []ProbeSample) 
 	if len(samples) == 0 {
 		return 0, nil
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
+	resources := make([]string, 0, len(samples))
+	for _, sample := range samples {
+		resources = append(resources, "evidence/account/"+sample.AccountID)
+	}
+	tx, err := s.beginResourceTx(ctx, resources)
 	if err != nil {
 		return 0, err
 	}
@@ -163,10 +167,12 @@ func (s *Store) PersistProbeSamples(ctx context.Context, samples []ProbeSample) 
 			payloadValue["retry_recovered"] = sample.RetryRecovered
 		}
 		if sample.IgnoredPlaceholder {
-			if _, err := tx.ExecContext(ctx, `INSERT INTO operational_snapshots(namespace,state_key,value_json,observed_at,updated_at)
+			if _, err := tx.ExecContext(ctx, tx.Dialect(`INSERT INTO operational_snapshots(namespace,state_key,value_json,observed_at,updated_at)
     SELECT 'probe-placeholder',id,'{}',?,? FROM accounts WHERE id=?
     ON CONFLICT(namespace,state_key) DO UPDATE SET observed_at=excluded.observed_at,updated_at=excluded.updated_at
-    WHERE excluded.observed_at>operational_snapshots.observed_at`, sample.ObservedAt, sample.ObservedAt, sample.AccountID); err != nil {
+    WHERE excluded.observed_at>operational_snapshots.observed_at`, `INSERT INTO operational_snapshots(namespace,state_key,value_json,observed_at,updated_at)
+ SELECT 'probe-placeholder',id,'{}',?,? FROM accounts WHERE id=?
+ ON DUPLICATE KEY UPDATE updated_at=IF(VALUES(observed_at)>observed_at,VALUES(updated_at),updated_at),observed_at=IF(VALUES(observed_at)>observed_at,VALUES(observed_at),observed_at)`), sample.ObservedAt, sample.ObservedAt, sample.AccountID); err != nil {
 				return 0, err
 			}
 		}
@@ -178,14 +184,19 @@ func (s *Store) PersistProbeSamples(ctx context.Context, samples []ProbeSample) 
 		if strings.TrimSpace(sample.RequestModel) != "" {
 			evidenceKey += "|" + strings.ToLower(strings.TrimSpace(sample.RequestModel))
 		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO health_samples(
+		if _, err := tx.ExecContext(ctx, tx.Dialect(`INSERT INTO health_samples(
 			account_id,group_name,result,latency_p50,latency_p95,latency_p99,sample_count,attempts,
 			failure_reason,observed_at,source,evidence_key,payload_json
 		) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(source,evidence_key,account_id,group_name) DO UPDATE SET
 			result=excluded.result,latency_p50=excluded.latency_p50,latency_p95=excluded.latency_p95,
 			latency_p99=excluded.latency_p99,sample_count=excluded.sample_count,attempts=excluded.attempts,
-			failure_reason=excluded.failure_reason,payload_json=excluded.payload_json`,
+			failure_reason=excluded.failure_reason,payload_json=excluded.payload_json`, `INSERT INTO health_samples(
+			account_id,group_name,result,latency_p50,latency_p95,latency_p99,sample_count,attempts,
+			failure_reason,observed_at,source,evidence_key,payload_json
+		) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE result=VALUES(result),latency_p50=VALUES(latency_p50),latency_p95=VALUES(latency_p95),
+			latency_p99=VALUES(latency_p99),sample_count=VALUES(sample_count),attempts=VALUES(attempts),
+			failure_reason=VALUES(failure_reason),payload_json=VALUES(payload_json)`),
 			sample.AccountID, sample.GroupName, sample.Result, sample.LatencyP50, sample.LatencyP95,
 			sample.LatencyP99, sample.SampleCount, sample.Attempts, sample.FailureReason, sample.ObservedAt,
 			"active-probe", evidenceKey, string(payload)); err != nil {

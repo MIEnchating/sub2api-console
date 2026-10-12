@@ -208,7 +208,7 @@ func (s *Store) AccountIDsByGroups(ctx context.Context, groupIDs []string) ([]st
 		LEFT JOIN local_groups lg ON lg.name=ag.group_name
 		WHERE ag.group_id IN (SELECT id FROM selected_group_ids)
 		   OR (ag.group_id IS NULL AND lg.remote_id IN (SELECT id FROM selected_group_ids))
-		ORDER BY CASE WHEN ag.account_id GLOB '[0-9]*' THEN CAST(ag.account_id AS INTEGER) ELSE 0 END, ag.account_id`
+		ORDER BY ` + numericIDOrder(s.db.Driver(), "ag.account_id") + `, ag.account_id`
 	args := make([]any, len(uniqueGroupIDs))
 	for index, groupID := range uniqueGroupIDs {
 		args[index] = groupID
@@ -363,7 +363,7 @@ func (s *Store) accountProjectionsWithOptions(ctx context.Context, options accou
 		query += ` WHERE a.id=?`
 		arguments = append(arguments, options.accountID)
 	}
-	query += ` ORDER BY CASE WHEN a.id GLOB '[0-9]*' THEN CAST(a.id AS INTEGER) ELSE 0 END,a.id`
+	query += ` ORDER BY ` + numericIDOrder(s.db.Driver(), "a.id") + `,a.id`
 	rows, err := s.db.QueryContext(ctx, query, arguments...)
 	if err != nil {
 		return nil, err
@@ -714,7 +714,7 @@ func (s *Store) loadAccountDecisions(ctx context.Context, accounts map[string]*a
 	args := []any{}
 	clauses := []string{}
 	var epoch string
-	err := s.db.QueryRowContext(ctx, `SELECT updated_at FROM app_state WHERE key='routing-decision-epoch'`).Scan(&epoch)
+	err := s.db.QueryRowContext(ctx, `SELECT updated_at FROM app_state WHERE "key"='routing-decision-epoch'`).Scan(&epoch)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return nil, err
 	}
@@ -785,7 +785,7 @@ func (s *Store) loadAccountEvaluations(ctx context.Context, accounts map[string]
 	// Old or calculation-only evaluations may not have a matching decision.
 	query := `SELECT e.account_id,e.group_name,e.health_score,e.short_score,e.long_score,
 		e.sample_count,e.ttfb_p50_ms,e.ttfb_p95_ms,e.latest_event,
-		CASE WHEN json_valid(d.payload_json) THEN json_extract(d.payload_json,'$.short_sample_count') END
+		` + jsonFieldSQL(s.db.Driver(), "d.payload_json", "short_sample_count", false) + `
 		FROM account_health_evaluations e LEFT JOIN routing_decisions d
 		ON d.account_id=e.account_id AND d.group_name=e.group_name AND d.updated_at=e.evaluated_at`
 	filter, arguments := projectionAccountFilter(accounts, "e.account_id", groupNames...)
@@ -928,7 +928,7 @@ func (s *Store) loadApplyErrors(ctx context.Context, accountID string) (map[stri
 	at      *string
 }, error) {
 	query := `SELECT a.id,latest.error,latest.created_at
-		FROM accounts a JOIN operation_audit latest ON latest.source_id=(` + latestRoutingOutcomeSQL + `
+		FROM accounts a JOIN operation_audit latest ON latest.source_id=(` + latestRoutingOutcomeQuery(s.db.Driver()) + `
 		) WHERE latest.state='failed'`
 	arguments := []any{}
 	if accountID != "" {

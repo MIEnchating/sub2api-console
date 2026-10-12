@@ -56,12 +56,25 @@ func (s *Store) SaveAuthRecoveryPreference(ctx context.Context, value AuthRecove
 	} else if _, err := time.Parse(time.RFC3339Nano, value.SucceededAt); err != nil {
 		return errors.New("鉴权恢复偏好的成功时间无效")
 	}
-	_, err := s.db.ExecContext(ctx, `INSERT INTO auth_recovery_preferences(
+	tx, err := s.beginSettingsTx(ctx, "private.credentials")
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	_, err = tx.ExecContext(ctx, s.dialect(`INSERT INTO auth_recovery_preferences(
 		host,auth_mode,recovery_method,vault_entry,succeeded_at
 	) VALUES(?,?,?,?,?) ON CONFLICT(host) DO UPDATE SET
 		auth_mode=excluded.auth_mode,recovery_method=excluded.recovery_method,
 		vault_entry=COALESCE(excluded.vault_entry,auth_recovery_preferences.vault_entry),
-		succeeded_at=excluded.succeeded_at`, value.Host, value.AuthMode, value.RecoveryMethod,
+		succeeded_at=excluded.succeeded_at`, `INSERT INTO auth_recovery_preferences(
+		host,auth_mode,recovery_method,vault_entry,succeeded_at
+	) VALUES(?,?,?,?,?) ON DUPLICATE KEY UPDATE
+		auth_mode=VALUES(auth_mode),recovery_method=VALUES(recovery_method),
+		vault_entry=COALESCE(VALUES(vault_entry),auth_recovery_preferences.vault_entry),
+		succeeded_at=VALUES(succeeded_at)`), value.Host, value.AuthMode, value.RecoveryMethod,
 		value.VaultEntry, value.SucceededAt)
-	return err
+	if err != nil {
+		return err
+	}
+	return tx.Commit()
 }

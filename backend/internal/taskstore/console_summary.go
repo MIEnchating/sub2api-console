@@ -38,7 +38,7 @@ func (s *Store) ListConsoleSummaries(ctx context.Context, limit *int) ([]Task, e
 		query += ` LIMIT ?`
 		arguments = append(arguments, *limit)
 	}
-	rows, err := s.db.QueryContext(ctx, query, arguments...)
+	rows, err := s.db.QueryContext(ctx, s.summarySQL(query), arguments...)
 	if err != nil {
 		return nil, err
 	}

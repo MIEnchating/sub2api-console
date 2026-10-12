@@ -389,7 +389,7 @@ func (s *Store) UpstreamGroups(ctx context.Context, host string, includeBound bo
 	var authStatus string
 	var mappedBalance, legacyBalance sql.NullString
 	var metadataRaw, upstreamUpdatedAt string
-	err = s.db.QueryRowContext(ctx, `SELECT auth_status,mapped_balance,CAST(balance AS TEXT),metadata_json,updated_at
+	err = s.db.QueryRowContext(ctx, `SELECT auth_status,mapped_balance,`+textCastSQL(s.db.Driver(), "balance")+`,metadata_json,updated_at
 		FROM upstreams WHERE host=?`, normalized).Scan(&authStatus, &mappedBalance, &legacyBalance, &metadataRaw, &upstreamUpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, sql.ErrNoRows

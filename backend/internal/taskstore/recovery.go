@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/MIEnchating/sub2api-console/backend/internal/dbconn"
 	"time"
 
 	"github.com/MIEnchating/sub2api-console/backend/internal/taskcontext"
@@ -78,6 +79,9 @@ func (s *Store) PendingRecovery(ctx context.Context) ([]RecoveryRef, error) {
 }
 
 func (s *Store) prepareRecovery(ctx context.Context, id string) (bool, error) {
+	if s.db.Driver() != dbconn.SQLite {
+		return s.prepareServerRecovery(ctx, id)
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return false, err
@@ -169,6 +173,9 @@ func (s *Store) CancelTask(ctx context.Context, id string) (bool, error) {
 }
 
 func (s *Store) cancelTask(ctx context.Context, id string, recoveryOnly bool) (bool, error) {
+	if s.db.Driver() != dbconn.SQLite {
+		return s.cancelServerTask(ctx, id, recoveryOnly)
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return false, err

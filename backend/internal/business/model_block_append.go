@@ -15,7 +15,7 @@ func (s *Store) AddAccountModelBlock(ctx context.Context, model, actor string) (
 	if model == "" || utf8.RuneCountInString(model) > 256 || strings.ContainsAny(model, "*?") || strings.IndexFunc(model, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) }) >= 0 {
 		return AccountModelSyncSettings{}, errors.New("屏蔽模型必须是不含空白和通配符的具体模型名称，且不能超过 256 个字符")
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.beginPolicyTx(ctx, "control-plane")
 	if err != nil {
 		return AccountModelSyncSettings{}, err
 	}

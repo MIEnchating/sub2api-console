@@ -2,9 +2,9 @@ package business
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
+	"github.com/MIEnchating/sub2api-console/backend/internal/dbconn"
 	"math/big"
 	"sort"
 	"strings"
@@ -85,7 +85,7 @@ func (s *Store) UpdateAlertPolicy(ctx context.Context, raw map[string]any) (Aler
 	if err != nil {
 		return AlertPolicy{}, err
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.beginPolicyTx(ctx, "alert-policy")
 	if err != nil {
 		return AlertPolicy{}, err
 	}
@@ -103,7 +103,7 @@ func (s *Store) UpdateAlertPolicy(ctx context.Context, raw map[string]any) (Aler
 	return policy, nil
 }
 
-func suppressDisabledAlertRules(ctx context.Context, tx *sql.Tx, policy AlertPolicy, now string) error {
+func suppressDisabledAlertRules(ctx context.Context, tx *dbconn.Tx, policy AlertPolicy, now string) error {
 	if !policy.Enabled {
 		if _, err := tx.ExecContext(ctx, `UPDATE alert_incidents SET status='suppressed',last_seen_at=?,delivery_status='告警总开关已关闭',last_error=NULL WHERE status='firing'`, now); err != nil {
 			return err

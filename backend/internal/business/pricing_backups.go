@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/MIEnchating/sub2api-console/backend/internal/dbconn"
 	"sort"
 	"strings"
 	"time"
@@ -101,7 +102,7 @@ func (s *Store) PricingBackup(ctx context.Context, id string) (PricingBackup, er
 		return PricingBackup{}, err
 	}
 	rows, err := s.db.QueryContext(ctx, `SELECT account_id,account_name,group_ids_json,group_names_json
-		FROM pricing_backup_accounts WHERE backup_id=? ORDER BY CAST(account_id AS INTEGER),account_id`, id)
+		FROM pricing_backup_accounts WHERE backup_id=? ORDER BY `+numericIDOrder(s.db.Driver(), "account_id")+`,account_id`, id)
 	if err != nil {
 		return PricingBackup{}, err
 	}
@@ -140,11 +141,15 @@ func (s *Store) DeletePricingBackup(ctx context.Context, id string) error {
 	return nil
 }
 
-func pricingBackupAccounts(ctx context.Context, queryer policyQueryer) ([]PricingBackupAccount, error) {
-	rows, err := queryer.QueryContext(ctx, `SELECT a.id,a.name,COALESCE(ag.group_id,lg.remote_id),ag.group_name FROM accounts a
+func pricingBackupAccounts(ctx context.Context, queryer *dbconn.Tx) ([]PricingBackupAccount, error) {
+	query := `SELECT a.id,a.name,COALESCE(ag.group_id,lg.remote_id),ag.group_name FROM accounts a
 		LEFT JOIN account_groups ag ON ag.account_id=a.id LEFT JOIN local_groups lg ON lg.name=ag.group_name
 		WHERE a.id GLOB '[0-9]*' AND CAST(a.id AS INTEGER)>0
-		ORDER BY CAST(a.id AS INTEGER),a.id,CAST(COALESCE(ag.group_id,lg.remote_id) AS INTEGER),COALESCE(ag.group_id,lg.remote_id),ag.group_name`)
+		ORDER BY CAST(a.id AS INTEGER),a.id,CAST(COALESCE(ag.group_id,lg.remote_id) AS INTEGER),COALESCE(ag.group_id,lg.remote_id),ag.group_name`
+	if queryer.Driver() != dbconn.SQLite {
+		query = `SELECT a.id,a.name,COALESCE(ag.group_id,lg.remote_id),ag.group_name FROM accounts a LEFT JOIN account_groups ag ON ag.account_id=a.id LEFT JOIN local_groups lg ON lg.name=ag.group_name WHERE ` + numericIDOrder(queryer.Driver(), "a.id") + `>0 ORDER BY ` + numericIDOrder(queryer.Driver(), "a.id") + `,a.id,` + numericIDOrder(queryer.Driver(), "COALESCE(ag.group_id,lg.remote_id)") + `,COALESCE(ag.group_id,lg.remote_id),ag.group_name`
+	}
+	rows, err := queryer.QueryContext(ctx, query)
 	if err != nil {
 		return nil, err
 	}
