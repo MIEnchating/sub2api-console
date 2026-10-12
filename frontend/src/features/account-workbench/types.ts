@@ -1,4 +1,12 @@
+export type AccountUsageWindow = { used_percent: number; reset_at?: string };
+export type AccountUsage = {
+  five_hour?: AccountUsageWindow;
+  seven_day?: AccountUsageWindow;
+  updated_at?: string;
+};
+
 export type WorkbenchAccount = {
+  usage?: AccountUsage;
   id: string;
   name: string;
   email: string;

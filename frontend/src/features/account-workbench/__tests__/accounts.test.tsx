@@ -108,3 +108,10 @@ it("筛选框初始与选择后均显示中文状态和分组名称，不显示�
   await user.click(await screen.findByRole("option", { name: "团队组" }));
   expect(group).toHaveTextContent("团队组");
 });
+
+it("账号数量仅在分页显示，顶部操作栏不重复计数", () => {
+  mount();
+  const toolbar = within(screen.getByRole("group", { name: "工作台操作" }));
+  expect(toolbar.queryByText(/显示.*个账号/)).not.toBeInTheDocument();
+  expect(screen.getByRole("navigation", { name: "表格分页" })).toHaveTextContent(/共\s*2/);
+});

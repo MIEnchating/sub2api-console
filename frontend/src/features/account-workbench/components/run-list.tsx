@@ -1,10 +1,11 @@
-import { useMemo, useState, type ReactElement } from "react";
+import { useId, useMemo, useState, type ReactElement } from "react";
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { RefreshCw, ChevronDown, Trash2, History, Search } from "lucide-react";
 
 import { api } from "@/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { SegmentedControl, SegmentedControlItem } from "@/components/ui/segmented-control";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   Dialog,
@@ -19,7 +20,14 @@ import { TaskStartupState } from "@/components/task-startup-state";
 import { notifyOperationError } from "@/lib/operation-feedback";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
-import { runKeys, runStatusLabels, runStatusVariants, workbenchKeys } from "../constants";
+import {
+  recordStatusTabs,
+  type RecordStatusTab,
+  runKeys,
+  runStatusLabels,
+  runStatusVariants,
+  workbenchKeys,
+} from "../constants";
 import type { WorkbenchRun } from "../types";
 import { WorkbenchToolbar, WorkbenchEmptyState } from "./workbench-section";
 import { RunItems } from "./run-items";
@@ -62,6 +70,8 @@ export function RunList(): ReactElement {
     () => new Map(activeRuns.map((run, index) => [run.id, activeQueries[index].data])),
     [activeRuns, activeQueries],
   );
+  const tabID = useId();
+  const [statusTab, setStatusTab] = useState<RecordStatusTab>("all");
   const [search, setSearch] = useState("");
   const [expanded, setExpanded] = useState<string | null>(null);
   const [confirmation, setConfirmation] = useState<RunAction | null>(null);
@@ -87,6 +97,12 @@ export function RunList(): ReactElement {
         return updated && updated.revision >= run.revision ? updated : run;
       })
       .filter((run) => {
+        if (statusTab === "active") return active(run);
+        if (statusTab === "completed") return run.status === "completed";
+        if (statusTab === "attention") return !active(run) && run.status !== "completed";
+        return true;
+      })
+      .filter((run) => {
         if (!queryText) return true;
         return run.items.some((item) =>
           (item.email + " " + item.name + " " + (item.account_id || ""))
@@ -94,7 +110,7 @@ export function RunList(): ReactElement {
             .includes(queryText),
         );
       });
-  }, [activeUpdates, query.data, search]);
+  }, [activeUpdates, query.data, search, statusTab]);
   const pending = update.isPending;
   return (
     <section aria-label="处理记录" className="grid min-w-0 gap-4">
@@ -126,106 +142,133 @@ export function RunList(): ReactElement {
               onChange={(event) => setSearch(event.target.value)}
             />
           </div>
-          {query.data && (
-            <span className="text-xs text-muted-foreground">共 {runs.length} 个批次</span>
-          )}
         </div>
       </WorkbenchToolbar>
-      {query.isPending && (
-        <div aria-busy="true" aria-label="正在读取处理记录" className="grid gap-3">
-          <Skeleton className="h-24" />
-          <Skeleton className="h-24" />
-        </div>
-      )}
-      {query.isError && !query.data && (
-        <ContentRetry pending={query.isFetching} onRetry={() => void query.refetch()} />
-      )}
-      {query.data && runs.length === 0 && (
-        <WorkbenchEmptyState
-          icon={History}
-          title={search ? "没有匹配的处理记录" : "暂无处理记录，请先导入账号资料"}
-          description={
-            search ? "调整搜索词后重试。" : "开始处理后，可在这里查看进度与每个账号的结果。"
-          }
-        />
-      )}
-      {runs.map((run, index) => {
-        const open = expanded === run.id || (expanded === null && index === 0);
-        const expired = new Date(run.expires_at).getTime() <= Date.now();
-        return (
-          <article key={run.id} className="min-w-0 overflow-hidden rounded-lg border bg-card">
-            <div className="flex flex-wrap items-center justify-between gap-2 bg-muted/20 p-3 sm:p-4">
-              <Button
-                variant="ghost"
-                aria-expanded={open}
-                aria-controls={`run-${run.id}`}
-                onClick={() => setExpanded(open ? "" : run.id)}
-              >
-                <ChevronDown
-                  aria-hidden="true"
-                  className={cn("transition-transform", !open && "-rotate-90")}
-                />
-                账号导入 · {run.items.length} 项
-              </Button>
-              <Badge variant={runStatusVariants[run.status] ?? "neutral"}>
-                {runStatusLabels[run.status] || "状态待确认"}
-              </Badge>
-              <span className="w-full pl-2 text-xs text-muted-foreground sm:ml-auto sm:w-auto sm:pl-0">
-                {new Date(run.created_at).toLocaleString("zh-CN")}
-              </span>
-            </div>
-            {open && (
-              <div id={`run-${run.id}`} className="grid min-w-0 gap-4 border-t p-3 sm:p-4">
-                {run.status === "queued" && <TaskStartupState message="账号处理任务已排队" />}
-                {expired && (
-                  <p className="text-sm text-muted-foreground">
-                    本批登录资料已到期，请重新导入；处理结果仍可查看。
-                  </p>
-                )}
-                <RunItems
-                  run={run}
-                  pending={pending || active(run) || expired}
-                  onEnable={(item) => setConfirmation({ run, action: "enable", ids: [item.id] })}
-                />
-                <div className="flex flex-wrap items-center gap-2 border-t pt-3">
-                  {active(run) ? (
-                    <Button
-                      variant="outline"
-                      disabled={pending}
-                      onClick={() => setConfirmation({ run, action: "cancel" })}
-                    >
-                      取消任务
-                    </Button>
-                  ) : (
-                    <Button
-                      variant="outline"
-                      disabled={
-                        pending ||
-                        expired ||
-                        !run.items.some(
-                          (item) => item.status !== "completed" && item.status !== "exported",
-                        )
-                      }
-                      onClick={() => setConfirmation({ run, action: "retry" })}
-                    >
-                      继续 / 重试
-                    </Button>
-                  )}
-                  <Button
-                    variant="destructive"
-                    disabled={pending}
-                    className="ml-auto"
-                    onClick={() => setConfirmation({ run, action: "delete" })}
-                  >
-                    <Trash2 aria-hidden="true" />
-                    删除记录
-                  </Button>
-                </div>
+      <SegmentedControl role="tablist" aria-label="处理记录状态">
+        {recordStatusTabs.map((tab) => (
+          <SegmentedControlItem
+            key={tab.id}
+            role="tab"
+            id={tabID + tab.id}
+            aria-controls={tabID + "panel"}
+            selected={statusTab === tab.id}
+            onClick={() => {
+              setStatusTab(tab.id);
+              setExpanded(null);
+            }}
+          >
+            {tab.label}
+          </SegmentedControlItem>
+        ))}
+      </SegmentedControl>
+      <div
+        role="tabpanel"
+        id={tabID + "panel"}
+        aria-labelledby={tabID + statusTab}
+        className="grid min-w-0 gap-4"
+      >
+        {query.isPending && (
+          <div aria-busy="true" aria-label="正在读取处理记录" className="grid gap-3">
+            <Skeleton className="h-24" />
+            <Skeleton className="h-24" />
+          </div>
+        )}
+        {query.isError && !query.data && (
+          <ContentRetry pending={query.isFetching} onRetry={() => void query.refetch()} />
+        )}
+        {query.data && runs.length === 0 && (
+          <WorkbenchEmptyState
+            icon={History}
+            title={
+              search || statusTab !== "all"
+                ? "没有匹配的处理记录"
+                : "暂无处理记录，请先导入账号资料"
+            }
+            description={
+              search || statusTab !== "all"
+                ? "调整搜索词或状态筛选后重试。"
+                : "开始处理后，可在这里查看进度与每个账号的结果。"
+            }
+          />
+        )}
+        {runs.map((run, index) => {
+          const open = expanded === run.id || (expanded === null && index === 0);
+          const expired = new Date(run.expires_at).getTime() <= Date.now();
+          return (
+            <article key={run.id} className="min-w-0 overflow-hidden rounded-lg border bg-card">
+              <div className="flex flex-wrap items-center justify-between gap-2 bg-muted/20 p-3 sm:p-4">
+                <Button
+                  variant="ghost"
+                  aria-expanded={open}
+                  aria-controls={`run-${run.id}`}
+                  onClick={() => setExpanded(open ? "" : run.id)}
+                >
+                  <ChevronDown
+                    aria-hidden="true"
+                    className={cn("transition-transform", !open && "-rotate-90")}
+                  />
+                  账号导入 · {run.items.length} 项
+                </Button>
+                <Badge variant={runStatusVariants[run.status] ?? "neutral"}>
+                  {runStatusLabels[run.status] || "状态待确认"}
+                </Badge>
+                <span className="w-full pl-2 text-xs text-muted-foreground sm:ml-auto sm:w-auto sm:pl-0">
+                  {new Date(run.created_at).toLocaleString("zh-CN")}
+                </span>
               </div>
-            )}
-          </article>
-        );
-      })}
+              {open && (
+                <div id={`run-${run.id}`} className="grid min-w-0 gap-4 border-t p-3 sm:p-4">
+                  {run.status === "queued" && <TaskStartupState message="账号处理任务已排队" />}
+                  {expired && (
+                    <p className="text-sm text-muted-foreground">
+                      本批登录资料已到期，请重新导入；处理结果仍可查看。
+                    </p>
+                  )}
+                  <RunItems
+                    run={run}
+                    pending={pending || active(run) || expired}
+                    onEnable={(item) => setConfirmation({ run, action: "enable", ids: [item.id] })}
+                  />
+                  <div className="flex flex-wrap items-center gap-2 border-t pt-3">
+                    {active(run) ? (
+                      <Button
+                        variant="outline"
+                        disabled={pending}
+                        onClick={() => setConfirmation({ run, action: "cancel" })}
+                      >
+                        取消任务
+                      </Button>
+                    ) : (
+                      <Button
+                        variant="outline"
+                        disabled={
+                          pending ||
+                          expired ||
+                          !run.items.some(
+                            (item) => item.status !== "completed" && item.status !== "exported",
+                          )
+                        }
+                        onClick={() => setConfirmation({ run, action: "retry" })}
+                      >
+                        继续 / 重试
+                      </Button>
+                    )}
+                    <Button
+                      variant="destructive"
+                      disabled={pending}
+                      className="ml-auto"
+                      onClick={() => setConfirmation({ run, action: "delete" })}
+                    >
+                      <Trash2 aria-hidden="true" />
+                      删除记录
+                    </Button>
+                  </div>
+                </div>
+              )}
+            </article>
+          );
+        })}
+      </div>
       {confirmation && (
         <Dialog
           open

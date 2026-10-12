@@ -1,4 +1,4 @@
-import { act, cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, render, screen, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, expect, it, vi } from "vitest";
 import { RunList } from "../components/run-list";
@@ -85,7 +85,7 @@ it("运行批次每秒只读取自身，完成后停止高频读取并更新可�
   ).toMatchObject({
     status: "completed",
   });
-  expect(screen.getByText("已完成")).toBeVisible();
+  expect(within(screen.getByRole("article")).getByText("已完成")).toBeVisible();
 
   await act(async () => {
     await vi.advanceTimersByTimeAsync(1000);
@@ -96,6 +96,6 @@ it("运行批次每秒只读取自身，完成后停止高频读取并更新可�
     await vi.advanceTimersByTimeAsync(10);
   });
   expect(detailReads).toBe(3);
-  expect(screen.getAllByText("处理中")).toHaveLength(2);
+  expect(within(screen.getByRole("article")).getAllByText("处理中")).toHaveLength(2);
   client.clear();
 });

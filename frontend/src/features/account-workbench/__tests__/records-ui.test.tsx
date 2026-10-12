@@ -53,11 +53,11 @@ const run: WorkbenchRun = {
     },
   ],
 };
-function mount(fetcher: typeof fetch, record: WorkbenchRun = run): void {
+function mount(fetcher: typeof fetch, record: WorkbenchRun | WorkbenchRun[] = run): void {
   vi.stubGlobal("fetch", fetcher);
   vi.stubGlobal("PointerEvent", MouseEvent);
   client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
-  client.setQueryData(runKeys.list, [record]);
+  client.setQueryData(runKeys.list, Array.isArray(record) ? record : [record]);
   render(
     <QueryClientProvider client={client}>
       <RunList />
@@ -196,4 +196,29 @@ it("处理记录仅显示账号导入，旧独立导出记录不显示为导入"
   expect(screen.queryByRole("button", { name: /账号导入/ })).not.toBeInTheDocument();
   expect(screen.queryByText("JSON 输出")).not.toBeInTheDocument();
   expect(screen.getByText("暂无处理记录，请先导入账号资料")).toBeVisible();
+});
+
+it("处理记录按状态切换 Tab，键盘与搜索保留一致的筛选结果", async () => {
+  mount(vi.fn(), [
+    run,
+    {
+      ...run,
+      id: "done",
+      status: "completed",
+      items: [{ ...run.items[0], email: "done@example.test", status: "completed" }],
+    },
+  ]);
+  const tabs = within(screen.getByRole("tablist", { name: "处理记录状态" }));
+  expect(tabs.getByRole("tab", { name: "全部" })).toHaveAttribute("aria-selected", "true");
+  expect(screen.queryByText(/共.*个批次/)).not.toBeInTheDocument();
+  const user = userEvent.setup();
+  await user.click(tabs.getByRole("tab", { name: "已完成" }));
+  expect(screen.getByText("done@example.test")).toBeVisible();
+  expect(screen.queryByText("review@example.test")).not.toBeInTheDocument();
+  await user.keyboard("{ArrowLeft}");
+  expect(tabs.getByRole("tab", { name: "需要处理" })).toHaveFocus();
+  expect(tabs.getByRole("tab", { name: "需要处理" })).toHaveAttribute("aria-selected", "true");
+  expect(screen.getByText("review@example.test")).toBeVisible();
+  await user.type(screen.getByRole("searchbox", { name: "搜索处理记录" }), "done@");
+  expect(screen.getByText("没有匹配的处理记录")).toBeVisible();
 });

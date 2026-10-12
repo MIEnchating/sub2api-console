@@ -42,6 +42,7 @@ import {
 import { accountStatus, createAccountSearchIndex, filterAccountSearchIndex } from "../lib/accounts";
 import type { WorkbenchAccount } from "../types";
 import { WorkbenchToolbar, WorkbenchEmptyState } from "./workbench-section";
+import { AccountUsageCell } from "./account-usage-cell";
 import { AccountDetails } from "./account-details";
 import { AccountGroupFilter } from "./account-group-filter";
 import { RememberedAccountList } from "./remembered-account-list";
@@ -84,13 +85,6 @@ export function AccountList(props: { onStarted?: () => void }): ReactElement {
     <section aria-label="线上账号列表" className="grid min-w-0 gap-4">
       <WorkbenchToolbar
         description="查看线上账号状态、分组与连接配置。"
-        meta={
-          query.data && (
-            <Badge variant="secondary">
-              显示 {filtered.length} / {accounts.length} 个账号
-            </Badge>
-          )
-        }
         actions={
           <div className="flex flex-wrap gap-2">
             <Button
@@ -194,16 +188,17 @@ export function AccountList(props: { onStarted?: () => void }): ReactElement {
             aria-label="账号列表"
             actionColumn
             uniformTextSize={false}
-            className="min-w-[800px]"
+            className="min-w-[1000px]"
             containerClassName="overflow-auto"
           >
             <TableHeader>
               <TableRow>
-                <TableHead className="w-[25%]">账号</TableHead>
+                <TableHead className="w-[20%]">账号</TableHead>
                 <TableHead className="w-[12%]">状态</TableHead>
-                <TableHead className="w-[16%]">订阅</TableHead>
-                <TableHead className="w-[16%]">分组</TableHead>
-                <TableHead className="w-[16%]">代理</TableHead>
+                <TableHead className="w-[12%]">订阅</TableHead>
+                <TableHead className="w-[12%]">分组</TableHead>
+                <TableHead className="w-[12%]">代理</TableHead>
+                <TableHead className="w-52">用量（已用）</TableHead>
                 <TableHead className="w-44">操作</TableHead>
               </TableRow>
             </TableHeader>
@@ -242,6 +237,9 @@ export function AccountList(props: { onStarted?: () => void }): ReactElement {
                   </TableCell>
                   <TableCell className="whitespace-normal wrap-anywhere" overflowTooltip={false}>
                     {account.proxy_name || "直连"}
+                  </TableCell>
+                  <TableCell className="whitespace-normal" overflowTooltip={false}>
+                    <AccountUsageCell usage={account.usage} />
                   </TableCell>
                   <TableCell>
                     <div className="flex items-center gap-1">

@@ -37,6 +37,7 @@ func (s *Service) runOAuthAnimationTarget(ctx context.Context, account selectedA
 	}
 	defer closeTransport()
 	sender := oauthBundleSender{
+		stream: true,
 		client: &http.Client{Transport: transport,
 			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }},
 		credential: *credential, models: []string{result.Model}, slots: make(chan struct{}, 1), requestID: result.RequestID, usage: result.Usage,

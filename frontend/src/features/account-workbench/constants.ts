@@ -150,3 +150,11 @@ export const maintenanceStatusVariants: Record<string, ComponentProps<typeof Bad
 };
 
 export const importModelKey = ["account-workbench", "import-model"] as const;
+
+export const recordStatusTabs = [
+  { id: "all", label: "全部" },
+  { id: "active", label: "处理中" },
+  { id: "attention", label: "需要处理" },
+  { id: "completed", label: "已完成" },
+] as const;
+export type RecordStatusTab = (typeof recordStatusTabs)[number]["id"];

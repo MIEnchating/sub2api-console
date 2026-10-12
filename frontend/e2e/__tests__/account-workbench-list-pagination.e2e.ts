@@ -14,6 +14,11 @@ for (const compact of [false, true]) {
     page.on("pageerror", (error) => errors.push(error));
     const accounts = accountListFixture(500);
     const run = runItemsFixture(500);
+    accounts[0].usage = {
+      five_hour: { used_percent: 0 },
+      seven_day: { used_percent: 62.5 },
+      updated_at: "2026-10-12T00:00:00Z",
+    };
     const longEmail = `${"long-account-".repeat(24)}@example.test`;
     accounts[0].email = longEmail;
     run.items[0].email = longEmail;
@@ -47,6 +52,18 @@ for (const compact of [false, true]) {
     const accountSection = page.getByRole("region", { name: "线上账号列表" });
     const accountTable = accountSection.getByRole("table", { name: "账号列表" });
     await expect(accountTable.getByRole("row")).toHaveCount(21);
+    await expect(accountTable.getByRole("meter", { name: "5h 已用" })).toHaveAttribute(
+      "aria-valuenow",
+      "0",
+    );
+    await expect(accountTable.getByRole("meter", { name: "7d 已用" })).toHaveAttribute(
+      "aria-valuenow",
+      "62.5",
+    );
+    await expect(
+      accountSection.getByRole("group", { name: "工作台操作", exact: true }),
+    ).not.toContainText("个账号");
+
     await expect(accountTable.getByRole("cell", { name: longEmail, exact: false })).toBeVisible();
     expect(
       await page.locator("body").evaluate((element) => element.scrollWidth <= element.clientWidth),
@@ -76,6 +93,14 @@ for (const compact of [false, true]) {
     await page.getByRole("tab", { name: "处理记录", exact: true }).click();
     const results = page.getByRole("region", { name: "处理记录" });
     const resultTable = results.getByRole("table", { name: "账号处理结果" });
+    await results.getByRole("tab", { name: "已完成", exact: true }).click();
+    await expect(results.getByText("没有匹配的处理记录")).toBeVisible();
+    await results.getByRole("tab", { name: "需要处理", exact: true }).click();
+    await expect(results.getByRole("tab", { name: "需要处理", exact: true })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+
     await expect(resultTable.getByRole("row")).toHaveCount(21);
     expect(
       await page.locator("body").evaluate((element) => element.scrollWidth <= element.clientWidth),

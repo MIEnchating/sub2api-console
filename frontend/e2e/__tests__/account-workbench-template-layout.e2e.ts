@@ -220,3 +220,21 @@ test("手动创建模板桌面分区并排、手机顺序排列，低高度时�
   await cancel.click();
   await expect(dialog).toHaveCount(0);
 });
+
+test("配置模板顶部单栏包含当前模板和操作，窄屏自动换行且不溢出", async ({ page }, info) => {
+  const toolbar = page.getByRole("group", { name: "工作台操作", exact: true });
+  const current = toolbar.getByText(/当前模板：/);
+  const create = toolbar.getByRole("button", { name: "创建模板", exact: true });
+  await expect(current).toContainText(preview.name);
+  await expect(toolbar.getByRole("button", { name: "自动匹配", exact: true })).toBeVisible();
+  const currentBox = await current.boundingBox();
+  const createBox = await create.boundingBox();
+  if (info.project.name === "desktop-light") {
+    expect(
+      Math.abs(currentBox!.y + currentBox!.height / 2 - createBox!.y - createBox!.height / 2),
+    ).toBeLessThan(2);
+  }
+  expect(await toolbar.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(
+    true,
+  );
+});
