@@ -236,7 +236,7 @@ func (s *Store) commitAccountControl(
 			"pause": "paused", "resume": "unknown", "fuse": "fused", "recover": "unknown",
 		}[action]
 		result, err := tx.ExecContext(ctx, `UPDATE accounts SET schedulable=?,routing_state=?,updated_at=? WHERE id=?`,
-			*schedulable, routingState, now, accountID)
+			boolDatabaseValue(*schedulable), routingState, now, accountID)
 		if err != nil {
 			return PolicySnapshot{}, err
 		}
