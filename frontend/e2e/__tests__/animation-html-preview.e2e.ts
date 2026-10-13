@@ -4,6 +4,11 @@ import { account } from "../../src/features/accounts/__tests__/fixtures";
 import { pageFixtures } from "./fixtures/page-shell";
 import { buildAnimationPreviewDocument } from "../../src/features/model-check/lib/animation-preview-document";
 
+// Keep historical fixtures on the displayed Beijing calendar day.
+test.beforeEach(async ({ page }) => {
+  await page.clock.setFixedTime(new Date("2026-09-24T08:00:00Z"));
+});
+
 const source = `<!DOCTYPE html><html><head><style>body{margin:0;background:#e3eeea;color:#274b4d;font:16px sans-serif}h1{text-align:center}svg{display:block;width:100%;height:auto}.wheel{transform-box:fill-box;transform-origin:center;animation:spin 2s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}</style></head><body><h1>鹈鹕骑行</h1><svg viewBox="0 0 640 400"><circle class="wheel" cx="180" cy="280" r="70" fill="none" stroke="#274b4d" stroke-width="8"/><circle class="wheel" cx="450" cy="280" r="70" fill="none" stroke="#274b4d" stroke-width="8"/><path d="M180 280L280 150L340 280Z M280 150L400 150L340 280 M400 150L450 280" fill="none" stroke="#609c91" stroke-width="10"/><ellipse cx="280" cy="100" rx="75" ry="48" fill="#faf7df"/><path d="M325 80L425 95L325 115Z" fill="#edc974"/></svg><script>document.querySelector('h1').textContent='脚本已执行'</script></body></html>`;
 const prompt = "请生成可直接运行的单文件HTML，使用内联SVG绘制鹈鹕骑自行车的二维循环动画。";
 

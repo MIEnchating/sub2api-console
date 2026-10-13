@@ -3,6 +3,11 @@ import type { AnimationResult, Task } from "../../src/api";
 import { account } from "../../src/features/accounts/__tests__/fixtures";
 import { pageFixtures } from "./fixtures/page-shell";
 
+// Keep historical fixtures on the displayed Beijing calendar day.
+test.beforeEach(async ({ page }) => {
+  await page.clock.setFixedTime(new Date("2026-10-08T08:00:00Z"));
+});
+
 test.beforeEach(async ({ page, colorScheme }) => {
   await page.addInitScript(
     (theme) => localStorage.setItem("sub2api-console-theme", theme ?? "light"),

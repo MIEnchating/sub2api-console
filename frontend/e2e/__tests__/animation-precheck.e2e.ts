@@ -3,6 +3,11 @@ import type { AnimationResult, Task } from "../../src/api";
 import { account } from "../../src/features/accounts/__tests__/fixtures";
 import { pageFixtures } from "./fixtures/page-shell";
 
+// Keep historical fixtures on the displayed Beijing calendar day.
+test.beforeEach(async ({ page }) => {
+  await page.clock.setFixedTime(new Date("2026-09-15T08:00:00Z"));
+});
+
 test("前置检测精简操作栏后支持手动选择生成动画及保存定时内容，窄屏控件不溢出", async ({
   page,
   colorScheme,

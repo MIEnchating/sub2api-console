@@ -4,6 +4,11 @@ import type { AnimationRequest, AnimationResult, AnimationSchedule, Task } from 
 import { account } from "../../src/features/accounts/__tests__/fixtures";
 import { pageFixtures } from "./fixtures/page-shell";
 
+// Keep historical fixtures on the displayed Beijing calendar day.
+test.beforeEach(async ({ page }) => {
+  await page.clock.setFixedTime(new Date("2026-09-15T08:00:00Z"));
+});
+
 const accounts = [1, 2, 3, 4].map((id) => ({
   ...account,
   id: String(id),
@@ -242,8 +247,8 @@ test("成功卡片重测沿用原模型，启动与完成时卡片高度稳定�
     status: "running",
     progress: 0,
     message: "正在生成动画",
-    created_at: "2026-09-22T00:00:00Z",
-    updated_at: "2026-09-22T00:00:00Z",
+    created_at: "2026-09-15T00:00:00Z",
+    updated_at: "2026-09-15T00:00:00Z",
     result: { account_ids: ["1"], animations: [] },
   };
   await page.route("**/api/model-checks/animations", async (route) => {
@@ -291,7 +296,7 @@ test("成功卡片重测沿用原模型，启动与完成时卡片高度稳定�
           svg,
           request_id: "retest-result",
           duration_ms: 2500,
-          completed_at: "2026-09-22T00:01:00Z",
+          completed_at: "2026-09-15T00:01:00Z",
         },
       ],
     },

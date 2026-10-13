@@ -3,6 +3,11 @@ import { expect, test } from "@playwright/test";
 import { account } from "../../src/features/accounts/__tests__/fixtures";
 import { pageFixtures } from "./fixtures/page-shell";
 
+// Keep historical fixtures on the displayed Beijing calendar day.
+test.beforeEach(async ({ page }) => {
+  await page.clock.setFixedTime(new Date("2026-10-09T08:00:00Z"));
+});
+
 // The same complete upstream reply is exercised through the Go artifact parser.
 const source = readFileSync(
   new URL(

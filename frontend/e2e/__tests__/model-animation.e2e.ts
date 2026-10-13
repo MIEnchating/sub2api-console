@@ -4,6 +4,11 @@ import { account } from "../../src/features/accounts/__tests__/fixtures";
 import { pageFixtures } from "./fixtures/page-shell";
 import { dictionaryItems } from "../../src/test/dictionary-fixtures";
 
+// Keep historical fixtures on the displayed Beijing calendar day.
+test.beforeEach(async ({ page }) => {
+  await page.clock.setFixedTime(new Date("2026-09-13T08:00:00Z"));
+});
+
 const animationAccount = {
   ...account,
   name: "动画检测的超长账号名称".repeat(6),
