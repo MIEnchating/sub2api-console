@@ -242,17 +242,17 @@ func confirmAccountDeleteScope(
 	accountID string,
 	scope AccountDeleteScope,
 ) error {
-	var exact int
+	var exact bool
 	if err := queryer.QueryRowContext(ctx, `SELECT EXISTS(
 		SELECT 1 FROM bindings b JOIN binding_identities bi ON bi.binding_id=b.id
 		WHERE b.id=? AND b.local_account_id=? AND bi.upstream_id=? AND bi.upstream_key_id=?
 	)`, scope.BindingID, accountID, scope.UpstreamID, scope.UpstreamKeyID).Scan(&exact); err != nil {
 		return err
 	}
-	if exact != 1 {
+	if !exact {
 		return errors.New("账号绑定的稳定上游身份或 Key ID 已变化，请重新确认")
 	}
-	var shared int
+	var shared bool
 	if err := queryer.QueryRowContext(ctx, `SELECT EXISTS(
 		SELECT 1 FROM binding_identities bi JOIN bindings b ON b.id=bi.binding_id
 		WHERE bi.upstream_id=? AND bi.upstream_key_id=?
@@ -267,7 +267,7 @@ func confirmAccountDeleteScope(
 		scope.UpstreamKeyID, scope.UpstreamID, scope.UpstreamID).Scan(&shared); err != nil {
 		return err
 	}
-	if shared == 1 {
+	if shared {
 		return errors.New("上游 Key 仍被其他账号绑定或开户待续引用，拒绝删除共享 Key")
 	}
 	return nil

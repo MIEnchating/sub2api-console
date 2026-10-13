@@ -219,11 +219,6 @@ func (s *Store) readUpstreams(ctx context.Context, configurationHost *string, in
 		query += ` AND u.host=?`
 		arguments = append(arguments, *configurationHost)
 	}
-	rows, err := s.db.QueryContext(ctx, query+` ORDER BY u.host`, arguments...)
-	if err != nil {
-		return UpstreamSummary{}, err
-	}
-	defer rows.Close()
 	derivedNames, err := s.derivedUpstreamNames(ctx, configurationHost)
 	if err != nil {
 		return UpstreamSummary{}, err
@@ -232,6 +227,11 @@ func (s *Store) readUpstreams(ctx context.Context, configurationHost *string, in
 	if err != nil {
 		return UpstreamSummary{}, err
 	}
+	rows, err := s.db.QueryContext(ctx, query+` ORDER BY u.host`, arguments...)
+	if err != nil {
+		return UpstreamSummary{}, err
+	}
+	defer rows.Close()
 	result := UpstreamSummary{Hosts: []UpstreamHost{}, Source: "Console 业务库"}
 	for rows.Next() {
 		var item UpstreamHost
@@ -510,10 +510,9 @@ func (s *Store) upstreamBoundAccounts(ctx context.Context, host string) (map[str
 	for rows.Next() {
 		var groupID string
 		var accountName, metadataRaw, bindingStatus sql.NullString
-		var accountExists int64
 		var item UpstreamBoundAccount
 		if err := rows.Scan(
-			&item.BindingID, &groupID, &item.AccountID, &accountName, &metadataRaw, &accountExists, &bindingStatus,
+			&item.BindingID, &groupID, &item.AccountID, &accountName, &metadataRaw, &item.AccountExists, &bindingStatus,
 			&item.LocalGroup, &item.UpstreamKeyID, &item.UpstreamKeyName,
 		); err != nil {
 			return nil, err
@@ -522,7 +521,6 @@ func (s *Store) upstreamBoundAccounts(ctx context.Context, host string) (map[str
 		if metadataRaw.Valid {
 			item.BaseURL = accountMetadataText(metadataRaw.String, "base_url")
 		}
-		item.AccountExists = accountExists == 1
 		item.BindingStatus = nullString(bindingStatus)
 		item.LocalGroups = []LocalOnboardingGroup{}
 		result[groupID] = append(result[groupID], item)

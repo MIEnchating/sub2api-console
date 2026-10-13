@@ -196,11 +196,11 @@ func previousResults[T any](task taskstore.Task, key string) []T {
 	return values
 }
 
-func animationResultKey(accountID, mode string) string {
+func animationResultKey(accountID, mode, model string) string {
 	if mode == "" {
 		mode = "animation"
 	}
-	return accountID + ":" + mode
+	return accountID + ":" + mode + ":" + model
 }
 
 // Completed results remain part of task history after an account is excluded.

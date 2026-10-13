@@ -603,7 +603,7 @@ func upstreamKeyProtectedForQueryer(
 	queryer accountDeleteScopeQueryer,
 	host, keyID string,
 ) (bool, error) {
-	var protected int
+	var protected bool
 	err := queryer.QueryRowContext(ctx, `SELECT EXISTS(
 		SELECT 1 FROM upstream_identity_hosts selected
 		JOIN binding_identities bi ON bi.upstream_id=selected.upstream_id
@@ -619,7 +619,7 @@ func upstreamKeyProtectedForQueryer(
 		JOIN onboarding_pending pending ON pending.upstream_host=aliases.host
 		WHERE selected.host=? AND pending.upstream_key_id=?
 	)`, host, keyID, host, keyID, host, keyID).Scan(&protected)
-	return protected == 1, err
+	return protected, err
 }
 
 func onboardingGroupReason(group UpstreamGroup) string {

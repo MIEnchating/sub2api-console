@@ -848,6 +848,8 @@ func New(cfg config.Config, private *configstore.Store, business Business, depen
 	authorized.GET("/account-workbench/import-model", server.accountWorkbenchImportModel)
 	authorized.PUT("/account-workbench/import-model", server.accountWorkbenchImportModel)
 	authorized.GET("/account-workbench/accounts", server.accountWorkbenchAccounts)
+	authorized.GET("/account-workbench/accounts/:id/groups", server.accountWorkbenchGroups)
+	authorized.PUT("/account-workbench/accounts/:id/groups", server.moveWorkbenchAccountGroups)
 	authorized.GET("/account-workbench/proxies", server.accountWorkbenchProxies)
 	authorized.GET("/account-workbench/remembered-accounts", server.accountWorkbenchRememberedAccounts)
 	authorized.DELETE("/account-workbench/remembered-accounts/:id", server.accountWorkbenchDeleteRememberedAccount)

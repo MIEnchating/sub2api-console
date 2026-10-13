@@ -24,14 +24,20 @@ func (s *Service) SaveAnimationSchedules(ctx context.Context, values []Animation
 		}
 		value.PrecheckQuestions, _ = normalizePrecheckQuestions(value.Mode, value.PrecheckQuestions)
 		value.PrecheckQuestions = slices.Clone(value.PrecheckQuestions)
+		value.Models = slices.Clone(value.Models)
 		value.DailyTimes = slices.Clone(value.DailyTimes)
 		slices.Sort(value.DailyTimes)
 		if value.Enabled {
-			request, _, err := s.prepareAnimation(ctx, AnimationRequest{Targets: []AnimationTarget{{AccountID: value.AccountID, Model: value.Model}}, TimeoutSeconds: value.TimeoutSeconds, Mode: value.Mode, PrecheckQuestions: value.PrecheckQuestions})
+			request, _, err := s.prepareAnimation(ctx, AnimationRequest{Targets: []AnimationTarget{{AccountID: value.AccountID, Model: value.Model, Models: value.Models}}, TimeoutSeconds: value.TimeoutSeconds, Mode: value.Mode, PrecheckQuestions: value.PrecheckQuestions})
 			if err != nil {
 				return nil, err
 			}
-			value.Model = request.Targets[0].Model
+			if len(request.Targets) > 0 {
+				value.Model = request.Targets[0].Model
+				if value.Models != nil {
+					value.Models = request.Targets[0].Models
+				}
+			}
 		}
 		for _, item := range splitAnimationSchedule(value) {
 			key := animationScheduleKey(item.AccountID, item.Mode)

@@ -112,7 +112,7 @@ func (s *Service) prepareDetectionTask(ctx context.Context, value DetectionTask,
 	}
 	request := AnimationRequest{Prompt: value.Prompt, TimeoutSeconds: value.TimeoutSeconds, Targets: make([]AnimationTarget, 0, len(ids))}
 	for _, id := range ids {
-		request.Targets = append(request.Targets, AnimationTarget{AccountID: id, Model: value.Model})
+		request.Targets = append(request.Targets, AnimationTarget{AccountID: id, Model: value.Model, Models: value.Models})
 	}
 	return s.prepareAnimation(ctx, request)
 }
@@ -233,14 +233,15 @@ func (s *Service) executeDetectionTask(parent context.Context, task taskstore.Ta
 	if value.Animation == nil || *value.Animation {
 		stages = append(stages, "animation")
 	}
-	total := len(accounts) * len(stages)
+	models, _ := normalizeAnimationModels(value.Model, value.Models)
+	total := len(accounts) * len(stages) * len(models)
 	animations := previousResults[AnimationResult](task, "animations")
 	total += historicalAnimationUnits(accounts, animations)
 	checks := previousResults[TerminalContinuityResult](task, "checks")
 	done := map[string]bool{}
 	completed, success := len(animations), 0
 	for _, result := range animations {
-		done[animationResultKey(result.AccountID, result.Mode)] = true
+		done[animationResultKey(result.AccountID, result.Mode, result.Model)] = true
 		if result.Status == "succeeded" {
 			success++
 		}
@@ -271,29 +272,34 @@ func (s *Service) executeDetectionTask(parent context.Context, task taskstore.Ta
 		go func() {
 			defer workers.Done()
 			for account := range jobs {
-				for _, mode := range stages {
-					if ctx.Err() != nil {
-						return
-					}
-					if done[animationResultKey(account.ID, mode)] {
-						continue
-					}
-					result := AnimationResult{Prompt: request.Prompt, AccountID: account.ID, AccountName: account.Name, Model: value.Model, RequestID: task.ID + "-" + account.ID + "-" + mode, Mode: mode, Status: "failed"}
-					if err := s.runAnimationWithRetry(ctx, account, value.TimeoutSeconds, nil, questions, &result); err != nil {
-						if errors.Is(err, business.ErrUpstreamExcluded) {
-							events <- stageEvent{excludedID: account.ID}
-							continue
-						}
-						if taskstore.Interrupted(ctx) {
+				for modelIndex, model := range models {
+					for _, mode := range stages {
+						if ctx.Err() != nil {
 							return
 						}
-						result.Error = safeCredentialError(err)
-					} else {
-						result.Status = "succeeded"
+						if done[animationResultKey(account.ID, mode, model)] {
+							continue
+						}
+						result := AnimationResult{Prompt: request.Prompt, AccountID: account.ID, AccountName: account.Name, Model: model, RequestID: task.ID + "-" + account.ID + "-" + mode, Mode: mode, Status: "failed"}
+						if modelIndex > 0 {
+							result.RequestID += fmt.Sprintf("-model-%d", modelIndex+1)
+						}
+						if err := s.runAnimationWithRetry(ctx, account, value.TimeoutSeconds, nil, questions, &result); err != nil {
+							if errors.Is(err, business.ErrUpstreamExcluded) {
+								events <- stageEvent{excludedID: account.ID}
+								continue
+							}
+							if taskstore.Interrupted(ctx) {
+								return
+							}
+							result.Error = safeCredentialError(err)
+						} else {
+							result.Status = "succeeded"
+						}
+						result.Phase = "completed"
+						result.CompletedAt = time.Now().UTC().Format(time.RFC3339Nano)
+						events <- stageEvent{animation: &result}
 					}
-					result.Phase = "completed"
-					result.CompletedAt = time.Now().UTC().Format(time.RFC3339Nano)
-					events <- stageEvent{animation: &result}
 				}
 			}
 		}()
@@ -355,7 +361,8 @@ func detectionTaskTimeout(value DetectionTask, accountCount int, minimum time.Du
 	if concurrency <= 0 {
 		concurrency = defaultDetectionConcurrency
 	}
-	return max(minimum, time.Duration((accountCount+concurrency-1)/concurrency)*perAccount)
+	models, _ := normalizeAnimationModels(value.Model, value.Models)
+	return max(minimum, time.Duration((accountCount+concurrency-1)/concurrency)*perAccount*time.Duration(len(models)))
 }
 
 func detectionTaskMode(value DetectionTask) string {

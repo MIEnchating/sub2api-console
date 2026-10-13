@@ -14,6 +14,7 @@ import (
 )
 
 type DetectionTask struct {
+	Models            []string `json:"models,omitempty"`
 	Prompt            string   `json:"prompt,omitempty"`
 	ID                string   `json:"id"`
 	Version           int      `json:"version"`
@@ -69,6 +70,7 @@ func cloneDetectionTask(value DetectionTask) DetectionTask {
 	// Missing animation belongs to legacy configurations, which always generated it.
 	enabled := value.Animation == nil || *value.Animation
 	value.Model = strings.TrimSpace(value.Model)
+	value.Models = slices.Clone(value.Models)
 	if value.Concurrency == 0 {
 		value.Concurrency = defaultDetectionConcurrency
 	}
@@ -110,8 +112,8 @@ func validateDetectionTaskFields(value DetectionTask) error {
 		}
 		seen[id] = true
 	}
-	if strings.TrimSpace(value.Model) == "" || len(value.Model) > 256 || strings.ContainsFunc(value.Model, unicode.IsControl) {
-		return errors.New("请输入有效的检测模型 ID（不超过 256 字符）")
+	if _, err := normalizeAnimationModels(value.Model, value.Models); err != nil {
+		return err
 	}
 	if value.TimeoutSeconds < 5 || value.TimeoutSeconds > 120 {
 		return errors.New("请求超时必须在 5 到 120 秒之间")
@@ -198,8 +200,14 @@ func (s *Service) SaveDetectionTask(ctx context.Context, value DetectionTask, ac
 		return nil, err
 	}
 	value = cloneDetectionTask(value)
+	models, _ := normalizeAnimationModels(value.Model, value.Models)
+	value.Model = models[0]
+	if value.Models != nil {
+		value.Models = models
+	}
 	value.Name = strings.TrimSpace(value.Name)
 	value.Model = strings.TrimSpace(value.Model)
+	value.Models = slices.Clone(value.Models)
 	slices.Sort(value.DailyTimes)
 	state.mu.Lock()
 	if value.ID == "" {

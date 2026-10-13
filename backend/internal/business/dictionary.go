@@ -2,8 +2,10 @@ package business
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/MIEnchating/sub2api-console/backend/internal/configstore"
 )
@@ -27,22 +29,30 @@ func (s *Store) DictionaryValues(ctx context.Context, kind string) ([]configstor
 		}
 		return result, rows.Err()
 	case "platform":
-		rows, err := s.db.QueryContext(ctx, `SELECT metadata_json FROM accounts`)
+		// Groups may use platforms (such as composite) that no account uses.
+		// Include the same stable group catalog exposed by the group dictionary.
+		rows, err := s.db.QueryContext(ctx, `SELECT metadata_json,NULL AS group_platform FROM accounts
+			UNION ALL SELECT NULL,platform FROM local_groups
+			WHERE remote_id IS NOT NULL AND TRIM(remote_id)<>''`)
 		if err != nil {
 			return nil, err
 		}
 		defer rows.Close()
 		seen := map[string]bool{}
 		for rows.Next() {
-			var metadata string
-			if err := rows.Scan(&metadata); err != nil {
+			var metadata, groupPlatform sql.NullString
+			if err := rows.Scan(&metadata, &groupPlatform); err != nil {
 				return nil, err
 			}
-			platform := accountMetadataText(metadata, "platform")
-			if platform == nil {
+			value := strings.TrimSpace(groupPlatform.String)
+			if metadata.Valid {
+				if platform := accountMetadataText(metadata.String, "platform"); platform != nil {
+					value = *platform
+				}
+			}
+			if value == "" {
 				continue
 			}
-			value := *platform
 			if seen[value] {
 				continue
 			}
