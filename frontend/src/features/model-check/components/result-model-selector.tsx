@@ -2,9 +2,11 @@ import { ChevronLeft, ChevronRight, Layers2 } from "lucide-react";
 import type { ReactElement } from "react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { cn } from "@/lib/utils";
 
 export function ResultModelSelector(props: {
   models?: string[];
+  compact?: boolean;
   value?: string;
   onChange: (model: string) => void;
 }): ReactElement | null {
@@ -19,7 +21,12 @@ export function ResultModelSelector(props: {
       role="group"
       aria-label="结果模型"
       tabIndex={0}
-      className="flex min-w-0 items-center gap-2 border-y border-border/50 bg-muted/20 px-3 py-1.5 outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+      className={cn(
+        "flex min-w-0 items-center gap-2 bg-muted/20 outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
+        props.compact
+          ? "h-8 w-52 max-w-[65%] shrink-0 rounded-md border pl-2 sm:max-w-none sm:w-64"
+          : "border-y border-border/50 px-3 py-1.5",
+      )}
       onKeyDown={(event) => {
         const destinations: Record<string, number> = {
           ArrowLeft: index - 1,

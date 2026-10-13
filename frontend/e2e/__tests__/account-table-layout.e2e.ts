@@ -385,7 +385,7 @@ test("评分恢复圆环并保留整数，短长期在右侧、样本数在下�
   ).toBe(true);
 });
 
-test("账号状态文字在表格背景上满足正文对比度", async ({ page }) => {
+test("浅色与深色账号状态文字在状态徽标和表格叠加背景上达到 4.5 对比度", async ({ page }) => {
   await page.goto("/accounts");
   await expect(page.locator("tbody tr")).toHaveCount(accounts.length);
   const badges = page.locator('tbody [data-slot="status-badge"]');

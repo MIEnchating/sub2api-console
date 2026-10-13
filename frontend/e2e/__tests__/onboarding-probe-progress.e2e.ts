@@ -114,7 +114,7 @@ test("探活真实阶段在桌面和手机上可见，创建 Key、请求和清�
       "/api/upstreams": { hosts: [] },
       "/api/upstreams/upstream.test/configuration": upstream,
       "/api/onboarding/prepare": { upstream, candidates: [candidate] },
-      "/api/groups": [
+      "/api/catalog/groups": [
         {
           id: "1",
           name: "国产平价",

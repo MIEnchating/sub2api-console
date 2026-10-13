@@ -6,6 +6,20 @@ import { ProbeProgressSummary } from "../probe-task-timeline";
 
 afterEach(cleanup);
 
+it("临时 Key 删除失败但绑定已保存时显示保留复用且不显示失败", async () => {
+  render(
+    <ProbeProgressSummary
+      steps={[{ stage: "retain_key", status: "succeeded", started_at: "2026-09-14T00:00:00Z" }]}
+    />,
+  );
+  const summary = screen.getByRole("button", { name: /已保存 Key 绑定，后续复用/ });
+  await userEvent.click(summary);
+  expect(screen.getByRole("list", { name: "探活过程" })).toHaveTextContent(
+    "已保存 Key 绑定，后续复用",
+  );
+  expect(screen.queryByText("失败")).not.toBeInTheDocument();
+});
+
 it.each(["__proto__", "constructor", "toString"])(
   "探活阶段为 %s 时概要和展开时间线均显示原文",
   async (stage) => {

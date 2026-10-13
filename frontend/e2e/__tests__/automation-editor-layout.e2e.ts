@@ -30,7 +30,7 @@ for (const viewport of [
             sync_ratio: true,
           })),
         },
-        "/api/groups": groups,
+        "/api/catalog/group-memberships": groups,
         "/api/newapi/platforms/layout/channels": {
           items: groups.map((group) => ({
             id: group.id,

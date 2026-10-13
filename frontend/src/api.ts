@@ -666,7 +666,7 @@ export type ProbeResult = {
   temporary_key?: boolean;
 };
 
-export type OnboardingProbeMode = "stream" | "default" | "animation";
+export type OnboardingProbeMode = "stream" | "default" | "animation" | "candy";
 
 export type OnboardingRequest = {
   host: string;

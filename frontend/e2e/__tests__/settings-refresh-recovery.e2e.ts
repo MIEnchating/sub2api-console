@@ -30,8 +30,8 @@ async function mockShell(page: Page): Promise<string[]> {
         traffic_collection: { enabled: false },
       },
       "/api/config/account-settings": settings,
-      "/api/accounts": [],
-      "/api/groups": [],
+      "/api/catalog/accounts": [],
+      "/api/catalog/groups": [],
       "/api/dictionaries": { items: [] },
     };
     if (path.endsWith("/events"))
@@ -103,7 +103,7 @@ test("账号页刷新等待当前设置，保留编辑草稿并避免读取其�
     await expect(refresh).toBeEnabled();
     await expect(concurrency).toHaveValue("47");
     expect(reads).toContain("/api/config/model-sync");
-    expect(reads).toContain("/api/groups");
+    expect(reads).toContain("/api/catalog/groups");
     expect(reads).not.toContain("/api/notifications/status");
     expect(reads).not.toContain("/api/config/log-cleanup");
     await page.screenshot({ path: test.info().outputPath("settings-draft.png") });

@@ -13,8 +13,8 @@ test.beforeEach(async ({ page, colorScheme }) => {
       "/api/auth/session": { authenticated: true, username: "布局测试" },
       "/api/policy": policy,
       "/api/config": { probes_enabled: true },
-      "/api/accounts": [],
-      "/api/groups": [],
+      "/api/catalog/accounts": [],
+      "/api/catalog/groups": [],
       "/api/inspection/automation": {
         enabled: false,
         running: false,
@@ -134,7 +134,7 @@ test("共享并发指定账号可保存稳定 ID，刷新后保留选择且窄�
     }
     await route.fulfill({ json: saved });
   });
-  await page.route("**/api/accounts", (route) =>
+  await page.route("**/api/catalog/accounts", (route) =>
     route.fulfill({
       json: [
         { id: "41", name: "共享额度账号", upstream_type: "sub2api", groups: ["codex"] },
@@ -167,7 +167,7 @@ test("共享并发指定上游可保存稳定 ID，刷新后保留选择且窄�
   let saved = structuredClone(policy);
   let accountRequests = 0;
   page.on("request", (request) => {
-    if (new URL(request.url()).pathname === "/api/accounts") accountRequests++;
+    if (new URL(request.url()).pathname === "/api/catalog/accounts") accountRequests++;
   });
   await page.route("**/api/policy", async (route) => {
     if (route.request().method() === "PATCH" || route.request().method() === "PUT") {
@@ -176,24 +176,22 @@ test("共享并发指定上游可保存稳定 ID，刷新后保留选择且窄�
     }
     await route.fulfill({ json: saved });
   });
-  await page.route("**/api/upstreams", (route) =>
+  await page.route("**/api/catalog/upstreams", (route) =>
     route.fulfill({
-      json: {
-        hosts: [
-          {
-            upstream_id: "Upstream-A",
-            name: "共享额度上游",
-            upstream_type: "sub2api",
-            host: "a.example",
-          },
-          {
-            upstream_id: "upstream-b",
-            name: "独立额度上游",
-            upstream_type: "newapi",
-            host: "b.example",
-          },
-        ],
-      },
+      json: [
+        {
+          upstream_id: "Upstream-A",
+          name: "共享额度上游",
+          upstream_type: "sub2api",
+          host: "a.example",
+        },
+        {
+          upstream_id: "upstream-b",
+          name: "独立额度上游",
+          upstream_type: "newapi",
+          host: "b.example",
+        },
+      ],
     }),
   );
   await page.goto("/policy");

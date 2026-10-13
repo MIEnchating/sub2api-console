@@ -164,8 +164,8 @@ func TestProbeAnimationPreservesExistingKeyAndReportsCleanupFailure(t *testing.T
 				if tasks.final.Status != "succeeded" || len(keys.created) != 0 || len(keys.deleted) != 0 {
 					t.Fatalf("existing key changed: task=%+v keys=%+v", tasks.final, keys)
 				}
-			} else if tasks.final.Status != "failed" || !strings.Contains(tasks.final.Message, "临时测试 Key 清理失败") {
-				t.Fatalf("cleanup failure hidden: %+v", tasks.final)
+			} else if tasks.final.Status != "succeeded" || tasks.final.Result["probe_result"] == nil {
+				t.Fatalf("successful animation must survive cleanup failure: %+v", tasks.final)
 			}
 		})
 	}

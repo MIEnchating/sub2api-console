@@ -5,6 +5,7 @@ test("多模型结果左右切换后预览和错误对应当前模型，卡片�
   page,
   colorScheme,
 }, testInfo) => {
+  await page.clock.setFixedTime(new Date("2026-10-13T08:00:00Z"));
   const longModel = "long-model-".repeat(20);
   const accounts = [
     { id: "41", name: "多模型账号", groups: [], platform: "openai" },
@@ -25,6 +26,17 @@ test("多模型结果左右切换后预览和错误对应当前模型，卡片�
         { account_id: account.id, model: "gpt-6-astra", models: ["gpt-6-astra", "gpt-6.1-sol"] },
       ],
       animations: [
+        {
+          account_id: account.id,
+          account_name: account.name,
+          model: "yesterday-model",
+          request_id: `yesterday-${account.id}`,
+          mode: "animation",
+          status: "failed",
+          error: "昨天的失败结果",
+          duration_ms: 100,
+          completed_at: "2026-10-12T15:59:59Z",
+        },
         {
           account_id: account.id,
           account_name: account.name,
@@ -75,6 +87,13 @@ test("多模型结果左右切换后预览和错误对应当前模型，卡片�
   const navigation = page.getByRole("group", { name: "结果模型", exact: true });
   await expect(navigation).toContainText("gpt-6-astra");
   await expect(navigation).toContainText("1 / 3");
+  await expect(page.getByText("昨天的失败结果")).toHaveCount(0);
+  const search = page.getByRole("textbox", { name: "搜索动画检测账号" });
+  const searchBox = (await search.boundingBox())!;
+  const navigationBox = (await navigation.boundingBox())!;
+  expect(Math.abs(searchBox.y - navigationBox.y)).toBeLessThanOrEqual(1);
+  expect(navigationBox.x).toBeGreaterThan(searchBox.x + searchBox.width);
+  expect(navigationBox.height).toBe(32);
   await expect(navigation.getByRole("button", { name: "上一个模型结果" })).toBeDisabled();
   await expect(card.getByRole("img")).toBeVisible();
   const height = (await card.boundingBox())!.height;
@@ -94,12 +113,18 @@ test("多模型结果左右切换后预览和错误对应当前模型，卡片�
   await expect(longCard.getByText("该模型暂无检测结果")).toBeVisible();
   await expect(longCard.getByRole("button", { name: "下一个模型结果" })).toHaveCount(0);
   await navigation.getByRole("button", { name: "下一个模型结果" }).click();
-  await expect(navigation.getByTitle(longModel, { exact: true })).toBeVisible();
+  const modelLabel = navigation.getByText(longModel, { exact: true });
+  await expect(modelLabel).toBeVisible();
+  await navigation.focus();
+  await page.keyboard.press("Tab");
+  await expect(modelLabel).toBeFocused();
+  await expect(page.getByRole("tooltip")).toHaveText(longModel);
+  await page.keyboard.press("Escape");
   await expect(card.getByText("该模型暂无检测结果")).toBeVisible();
   expect(await longCard.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(
     true,
   );
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-  await card.scrollIntoViewIfNeeded();
+  await navigation.scrollIntoViewIfNeeded();
   await page.screenshot({ path: testInfo.outputPath("result-navigation.png") });
 });

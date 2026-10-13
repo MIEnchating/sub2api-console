@@ -1300,14 +1300,15 @@ func TestProbeTaskPersistsCreationRequestAndCleanupWithoutSecrets(t *testing.T) 
 			runner.run(context.Background())
 			final = store.tasks[len(store.tasks)-1]
 			want := "succeeded"
-			if cleanupFails {
-				want = "failed"
-			}
 			if final.Status != want {
 				t.Fatalf("probe=%#v", final)
 			}
 			steps := final.Result["steps"].([]ProbeStep)
-			if len(steps) != 3 || steps[0].Stage != "reuse_key" || steps[1].Stage != "request" || steps[2].Stage != "cleanup_key" || steps[2].Status != want {
+			wantSteps := 3
+			if cleanupFails {
+				wantSteps = 4
+			}
+			if len(steps) != wantSteps || steps[0].Stage != "reuse_key" || steps[1].Stage != "request" || steps[2].Stage != "cleanup_key" || steps[2].Status != want {
 				t.Fatalf("steps=%#v", steps)
 			}
 			for _, snapshot := range store.tasks {

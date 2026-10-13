@@ -2,7 +2,7 @@ import { QueryErrorToast } from "@/components/query-error-toast";
 import { notifyOperationError } from "@/lib/operation-feedback";
 import { useOnboardingProbeTask, probeTaskResultSchema } from "../hooks/use-onboarding-probe-task";
 import { ProbeProgressSummary } from "./probe-task-timeline";
-import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Activity, CheckCircle2, LoaderCircle, Play, RefreshCw, XCircle } from "lucide-react";
 
@@ -29,14 +29,8 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 
-import { ContentLoading } from "@/components/content-loading";
-import { SuggestionInput } from "@/components/suggestion-input";
-
-const AnimationPreview = lazy(() =>
-  import("@/features/model-check/components/animation-preview").then((module) => ({
-    default: module.AnimationPreview,
-  })),
-);
+import { ProbeAnimationResult } from "./probe-animation-result";
+import { cn } from "@/lib/utils";
 
 const noModelSelected = "__not_selected__";
 
@@ -47,6 +41,7 @@ export const onboardingProbeModeOptions: Array<{
   { value: "default", label: "常规请求" },
   { value: "stream", label: "流式请求" },
   { value: "animation", label: "动画测试" },
+  { value: "candy", label: "糖果题测试" },
 ];
 
 export const accountProbeDialogLayout = {
@@ -153,11 +148,8 @@ function AccountProbeSession(props: {
     onSuccess: (response) => {
       setModels(response.models);
       setSelectedModel((current) => {
-        if (
-          selectedMode === "animation" ||
-          (current !== noModelSelected && response.models.includes(current))
-        )
-          return current;
+        if (current !== noModelSelected && response.models.includes(current)) return current;
+        if (modelSelectionEdited.current) return noModelSelected;
         return (
           defaultProbeModelForPlatform(
             response.models,
@@ -175,6 +167,7 @@ function AccountProbeSession(props: {
   const runProbe = useMutation({
     mutationFn: async () => {
       if (selectedModel === noModelSelected) throw new Error("请先获取并选择一个上游模型");
+      modelSelectionEdited.current = true;
       const task = await progress.run("probe", selectedModel.trim(), selectedMode);
       const parsed = probeTaskResultSchema.safeParse(task.result.probe_result);
       if (!parsed.success) throw new Error(task.message);
@@ -279,14 +272,22 @@ function AccountProbeSession(props: {
       <DialogContent
         width={accountProbeDialogLayout.width}
         height={accountProbeDialogLayout.height}
-        className={`${accountProbeDialogLayout.content} gap-0 p-0`}
+        className={cn(
+          accountProbeDialogLayout.content,
+          "gap-0 p-0",
+          selectedMode === "animation" && "w-[min(44rem,calc(100vw-2rem))]",
+        )}
       >
         <DialogHeader className="min-w-0 border-b px-4 py-4 pr-12 sm:px-5">
           <DialogTitle className="min-w-0 break-words">测试账号连接</DialogTitle>
         </DialogHeader>
         <DialogBody className="grid min-w-0 content-start gap-3 px-4 py-3 sm:px-5 [scrollbar-gutter:stable]">
           <ProbeAccountCard target={props.target} />
-          <div className="grid min-w-0 grid-cols-1 gap-3" role="group" aria-label="探活参数">
+          <div
+            className={`grid min-w-0 grid-cols-1 gap-3 ${selectedMode === "animation" ? "sm:grid-cols-[minmax(0,1fr)_12rem]" : ""}`}
+            role="group"
+            aria-label="探活参数"
+          >
             <div className="grid min-w-0 gap-1.5">
               <span className="text-sm font-medium">模型</span>
               <div
@@ -294,58 +295,41 @@ function AccountProbeSession(props: {
                 aria-label="测试模型选择与获取"
                 className="flex min-w-0 items-center gap-1.5"
               >
-                {selectedMode === "animation" ? (
-                  <SuggestionInput
-                    aria-label="选择测试模型"
-                    className="min-w-0 flex-1"
-                    value={selectedModel === noModelSelected ? "" : selectedModel}
-                    options={options}
-                    disabled={selectDisabled}
-                    onValueChange={(value) => {
-                      modelSelectionEdited.current = true;
-                      setSelectedModel(value);
-                      setResult(null);
-                      runProbe.reset();
-                    }}
-                    placeholder="输入模型 ID，或选择上游模型"
-                  />
-                ) : (
-                  <Select
-                    value={selectedModel}
-                    itemToStringLabel={(value) =>
-                      value === noModelSelected ? "选择上游模型" : String(value)
-                    }
-                    disabled={selectDisabled}
-                    onValueChange={(value) => {
-                      if (!value) return;
-                      modelSelectionEdited.current = true;
-                      setSelectedModel(value);
-                      setResult(null);
-                      runProbe.reset();
-                    }}
-                  >
-                    <SelectTrigger className="min-w-0 flex-1" aria-label="选择测试模型">
-                      <SelectValue placeholder="选择上游模型" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {modelsLoading ? (
-                        <SelectItem value={noModelSelected} disabled>
-                          正在获取上游模型
-                        </SelectItem>
-                      ) : null}
-                      {!modelsLoading && options.length === 0 ? (
-                        <SelectItem value={noModelSelected} disabled>
-                          {loadModels.isError ? "—" : "暂无可用模型"}
-                        </SelectItem>
-                      ) : null}
-                      {options.map((model) => (
-                        <SelectItem key={model} value={model}>
-                          {model}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                )}
+                <Select
+                  value={selectedModel}
+                  itemToStringLabel={(value) =>
+                    value === noModelSelected ? "选择上游模型" : String(value)
+                  }
+                  disabled={selectDisabled}
+                  onValueChange={(value) => {
+                    if (!value) return;
+                    modelSelectionEdited.current = true;
+                    setSelectedModel(value);
+                    setResult(null);
+                    runProbe.reset();
+                  }}
+                >
+                  <SelectTrigger className="min-w-0 flex-1" aria-label="选择测试模型">
+                    <SelectValue placeholder="选择上游模型" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {modelsLoading ? (
+                      <SelectItem value={noModelSelected} disabled>
+                        正在获取上游模型
+                      </SelectItem>
+                    ) : null}
+                    {!modelsLoading && options.length === 0 ? (
+                      <SelectItem value={noModelSelected} disabled>
+                        {loadModels.isError ? "—" : "暂无可用模型"}
+                      </SelectItem>
+                    ) : null}
+                    {options.map((model) => (
+                      <SelectItem key={model} value={model}>
+                        {model}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
                 <ProbeModelLoadButton
                   pending={modelsLoading}
                   succeeded={loadModels.isSuccess}
@@ -367,19 +351,14 @@ function AccountProbeSession(props: {
                 }
                 disabled={selectDisabled}
                 onValueChange={(value) => {
-                  if (value !== "stream" && value !== "default" && value !== "animation") return;
-                  if (value === "animation") {
-                    modelSelectionEdited.current = true;
-                    setSelectedModel("gpt-6-astra");
-                  } else if (selectedMode === "animation" && !models.includes(selectedModel)) {
-                    setSelectedModel(
-                      defaultProbeModelForPlatform(
-                        models,
-                        accountSettings.data,
-                        props.target.platform,
-                      ) ?? noModelSelected,
-                    );
-                  }
+                  if (
+                    value !== "stream" &&
+                    value !== "default" &&
+                    value !== "animation" &&
+                    value !== "candy"
+                  )
+                    return;
+                  modelSelectionEdited.current = true;
                   setSelectedMode(value);
                   setResult(null);
                   runProbe.reset();
@@ -399,41 +378,38 @@ function AccountProbeSession(props: {
             </div>
           </div>
           <section aria-label="测试模型响应" className="grid min-w-0 gap-2">
-            <div role="region" aria-label="探活进度" className="min-w-0">
-              <ProbeProgressSummary steps={progress.history} pendingMessage={pendingMessage}>
-                <ProbeResultSlot
-                  pending={runProbe.isPending}
-                  pendingLabel="当前阶段见上方"
-                  error={null}
-                  result={result}
-                  requestModel={selectedModel === noModelSelected ? null : selectedModel}
-                />
-              </ProbeProgressSummary>
-              {runProbe.isError ? (
-                <QueryErrorToast error={runProbe.error} fallback="探活请求失败" />
-              ) : null}
-              {progress.queryError ? (
-                <Button variant="outline" onClick={() => void progress.refetch()}>
-                  重新读取探活状态
-                </Button>
-              ) : null}
-            </div>
-            {result?.animation?.status === "succeeded" &&
-            (result.animation.html || result.animation.svg) ? (
-              <div
-                role="region"
-                aria-label="动画测试预览"
-                className="h-64 min-w-0 overflow-hidden rounded-lg"
-              >
-                <Suspense fallback={<ContentLoading label="正在加载动画预览" />}>
-                  <AnimationPreview result={result.animation} />
-                </Suspense>
+            {selectedMode === "animation" ? (
+              <ProbeAnimationResult
+                result={result}
+                pending={runProbe.isPending}
+                pendingMessage={pendingMessage}
+                steps={progress.history}
+              />
+            ) : (
+              <div role="region" aria-label="探活进度" className="min-w-0">
+                <ProbeProgressSummary steps={progress.history} pendingMessage={pendingMessage}>
+                  <ProbeResultSlot
+                    pending={runProbe.isPending}
+                    pendingLabel="当前阶段见上方"
+                    error={null}
+                    result={result}
+                    requestModel={selectedModel === noModelSelected ? null : selectedModel}
+                  />
+                </ProbeProgressSummary>
               </div>
+            )}
+            {runProbe.isError ? (
+              <QueryErrorToast error={runProbe.error} fallback="探活请求失败" />
+            ) : null}
+            {progress.queryError ? (
+              <Button variant="outline" onClick={() => void progress.refetch()}>
+                重新读取探活状态
+              </Button>
             ) : null}
             <p className="text-muted-foreground text-xs">
               {selectedMode === "animation"
-                ? "使用统一动画提示词，思考等级为 low；结果仅用于展示。"
-                : "使用已配置的探活提示词"}
+                ? "动画仅用于展示，不影响健康评分与调度。"
+                : probeModeDescription(selectedMode)}
             </p>
           </section>
         </DialogBody>
@@ -481,6 +457,7 @@ export function ProbeResultSlot(props: {
   result: ProbeResult | null;
   requestModel?: string | null;
   pendingLabel?: string;
+  compact?: boolean;
 }) {
   const result = props.pending ? null : props.result;
   const passed = result?.status === "passed";
@@ -495,7 +472,7 @@ export function ProbeResultSlot(props: {
   } else if (props.error) status = "未完成";
   return (
     <div
-      className="flex h-full min-h-36 min-w-0 flex-col gap-3 overflow-hidden bg-zinc-950 p-3 font-mono text-xs text-zinc-300"
+      className={`flex h-full min-w-0 flex-col gap-3 overflow-hidden bg-zinc-950 p-3 font-mono text-xs text-zinc-300 ${props.compact ? "min-h-0" : "min-h-36"}`}
       aria-live="polite"
     >
       {props.error ? <QueryErrorToast error={props.error} fallback="探活请求失败" /> : null}
@@ -517,7 +494,7 @@ export function ProbeResultSlot(props: {
       >
         {result ? (
           <>
-            <p className="mb-2 text-zinc-500">响应</p>
+            {props.compact ? null : <p className="mb-2 text-zinc-500">响应</p>}
             <p className={`whitespace-pre-wrap ${passed ? "text-emerald-300" : "text-red-300"}`}>
               {result.response_text || result.message}
             </p>
@@ -635,4 +612,10 @@ function ProbeAccountCard(props: { target: ProbeDialogTarget }) {
       ) : null}
     </div>
   );
+}
+
+function probeModeDescription(mode: OnboardingProbeMode): string {
+  if (mode === "candy")
+    return "使用统一糖果题，流式请求，思考等级为 medium；回答 21 为通过，结果不影响调度。";
+  return "使用已配置的探活提示词";
 }

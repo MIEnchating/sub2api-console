@@ -66,7 +66,7 @@ test("未选渠道也可读取模型，指定每日多时间保存后列表和�
           },
         ],
       },
-      "/api/groups": [{ id: "7", name: "测试分组", account_count: 1 }],
+      "/api/catalog/group-memberships": [{ id: "7", name: "测试分组", account_count: 1 }],
       "/api/tasks/read-models": discovery,
     };
     if (path.endsWith("/events"))

@@ -48,7 +48,8 @@ test.beforeEach(async ({ page }) => {
         { value: "3", name: "国产-平价" },
       ]),
       "/api/upstreams/layout.example.test/configuration": upstream,
-      "/api/groups": [{ id: "3", name: "国产-平价", platform: "openai", account_count: 0 }],
+      "/api/catalog/group-configurations": [{ id: "3", name: "国产-平价", override: {} }],
+      "/api/catalog/groups": [{ id: "3", name: "国产-平价", platform: "openai", account_count: 0 }],
       "/api/onboarding/prepare": {
         upstream,
         candidates: [

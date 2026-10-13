@@ -26,6 +26,9 @@ const task: Task = {
       results: [{ account_id: "1", changed: true }, ...failures],
     },
   },
+  display_account_names: Object.fromEntries(
+    failures.map((item) => [item.account_id, `测试账号 ${item.account_id}`]),
+  ),
   created_at: "2026-09-14T10:28:40Z",
   updated_at: "2026-09-14T10:30:44Z",
 };
@@ -43,7 +46,8 @@ test.beforeEach(async ({ page, colorScheme }) => {
       "/api/auth/session": { authenticated: true, username: "巡检测试" },
       "/api/tasks": [],
       [`/api/tasks/${task.id}`]: task,
-      "/api/accounts": failures.map((item) => ({
+      "/api/catalog/upstreams": [],
+      "/api/catalog/accounts": failures.map((item) => ({
         id: item.account_id,
         name: `测试账号 ${item.account_id}`,
       })),
@@ -111,10 +115,9 @@ test("任务明细读取失败后保留关闭和重试入口，重新读取成�
   const retryResponse = new Promise<void>((resolve) => {
     release = resolve;
   });
-  let failed = false;
+  let retrying = false;
   await page.route(`**/api/tasks/${task.id}`, async (route) => {
-    if (!failed) {
-      failed = true;
+    if (!retrying) {
       await route.fulfill({ status: 503, json: { detail: "巡检任务暂不可用" } });
       return;
     }
@@ -126,7 +129,10 @@ test("任务明细读取失败后保留关闭和重试入口，重新读取成�
   const dialog = page.getByRole("dialog", { name: "巡检心跳详情" });
   await expect(page.getByText("巡检任务暂不可用", { exact: true })).toHaveCount(1);
   await expect(dialog.getByText("巡检任务暂不可用", { exact: true })).toHaveCount(0);
-  await dialog.getByRole("button", { name: "重新读取", exact: true }).click();
+  const retry = dialog.getByRole("button", { name: "重新读取", exact: true });
+  await expect(retry).toBeEnabled();
+  retrying = true;
+  await retry.click();
   await expect(dialog.getByRole("status", { name: "正在读取失败明细" })).toBeVisible();
   await expect(dialog.getByRole("button", { name: "关闭", exact: true })).toBeEnabled();
   await expect(dialog.getByRole("progressbar")).toHaveCount(0);

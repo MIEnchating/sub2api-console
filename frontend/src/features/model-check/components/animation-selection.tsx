@@ -1,4 +1,5 @@
 import { ResultModelSelector } from "./result-model-selector";
+import { useTodayResults } from "../hooks/use-today-results";
 import {
   useCallback,
   useEffect,
@@ -41,6 +42,7 @@ import { AnimationPromptDialog } from "./animation-prompt-dialog";
 
 const pageSizes = [6, 12, 24];
 const emptyAccounts: AccountStatus[] = [];
+const emptyResults = new Map<string, AnimationResult>();
 
 export function AnimationSelection(props: {
   mode?: "animation" | "precheck";
@@ -68,6 +70,11 @@ export function AnimationSelection(props: {
   onManualPriority: (account: AccountStatus) => void;
 }): ReactElement {
   const precheckMode = props.mode === "precheck";
+  const animations = useTodayResults(props.results, props.modelResults);
+  const prechecks = useTodayResults(
+    props.precheckResults ?? emptyResults,
+    props.modelPrecheckResults,
+  );
   const scrollRef = useRef<HTMLDivElement>(null);
   const formScrollRef = useRef<HTMLFormElement>(null);
   const [localFilters, setLocalFilters] = useState(defaultAnimationFilters);
@@ -77,8 +84,8 @@ export function AnimationSelection(props: {
   const accounts = props.accounts.data ?? emptyAccounts;
   const [selectedResultModel, setSelectedResultModel] = useState<string>();
   const resultModels = useMemo(() => {
-    const results = precheckMode ? props.precheckResults : props.results;
-    const modelResults = precheckMode ? props.modelPrecheckResults : props.modelResults;
+    const results = precheckMode ? prechecks.results : animations.results;
+    const modelResults = precheckMode ? prechecks.modelResults : animations.modelResults;
     return [
       ...new Set(
         accounts.flatMap((account) => {
@@ -89,14 +96,7 @@ export function AnimationSelection(props: {
         }),
       ),
     ];
-  }, [
-    accounts,
-    precheckMode,
-    props.results,
-    props.precheckResults,
-    props.modelResults,
-    props.modelPrecheckResults,
-  ]);
+  }, [accounts, precheckMode, animations, prechecks]);
   const resultModel =
     selectedResultModel && resultModels.includes(selectedResultModel)
       ? selectedResultModel
@@ -185,6 +185,16 @@ export function AnimationSelection(props: {
       >
         <div className="min-w-0 px-3 py-3 sm:px-4">
           <AnimationAccountFilters
+            resultNavigation={
+              resultModels.length > 1 ? (
+                <ResultModelSelector
+                  compact
+                  models={resultModels}
+                  value={resultModel}
+                  onChange={setSelectedResultModel}
+                />
+              ) : null
+            }
             accounts={accounts}
             value={filters}
             onChange={(value) => {
@@ -267,13 +277,6 @@ export function AnimationSelection(props: {
           </div>
         </div>
       </div>
-      <div className="shrink-0">
-        <ResultModelSelector
-          models={resultModels}
-          value={resultModel}
-          onChange={setSelectedResultModel}
-        />
-      </div>
       <div
         ref={scrollRef}
         role="region"
@@ -303,12 +306,24 @@ export function AnimationSelection(props: {
               mode={precheckMode ? "precheck" : "animation"}
               account={account}
               selectedModel={resultModel}
-              result={props.results.get(account.id)}
-              modelResults={props.modelResults?.get(account.id)}
-              modelPrecheckResults={props.modelPrecheckResults?.get(account.id)}
-              precheckResult={props.precheckResults?.get(account.id)}
-              precheckStatus={props.precheckStatuses?.get(account.id)}
-              taskStatus={props.statuses.get(account.id)}
+              result={animations.results.get(account.id)}
+              modelResults={animations.modelResults.get(account.id)}
+              modelPrecheckResults={prechecks.modelResults.get(account.id)}
+              precheckResult={prechecks.results.get(account.id)}
+              precheckStatus={
+                prechecks.results.has(account.id) ||
+                !props.precheckResults?.has(account.id) ||
+                props.busyIDs.has(account.id)
+                  ? props.precheckStatuses?.get(account.id)
+                  : undefined
+              }
+              taskStatus={
+                animations.results.has(account.id) ||
+                !props.results.has(account.id) ||
+                props.busyIDs.has(account.id)
+                  ? props.statuses.get(account.id)
+                  : undefined
+              }
               activity={props.activities.get(account.id)}
               retryDisabled={props.busyIDs.has(account.id)}
               onRetry={props.onRetry}

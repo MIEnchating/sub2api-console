@@ -74,7 +74,7 @@ test("检测详情通过、降智、无法判定和等待使用不同状态色�
       "/api/setup/status": { initialized: true, configuration_errors: [] },
       "/api/auth/session": { authenticated: true, username: "test" },
       "/api/accounts": [],
-      "/api/groups": [{ id: "7", name: "测试分组" }],
+      "/api/catalog/groups": [{ id: "7", name: "测试分组" }],
       "/api/model-checks/detection-tasks": [plan],
       "/api/model-checks/animations": [],
       "/api/model-checks/animation-schedules": [],

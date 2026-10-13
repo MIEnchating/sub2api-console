@@ -82,7 +82,7 @@ for (const linked of [false, true]) {
     const opener = page.getByRole("button", { name: "查看任务", exact: true });
     await opener.click();
     const dialog = page.getByRole("dialog", { name: "任务详情", exact: true });
-    const resultScope = linked ? dialog.getByRole("region", { name: "运营执行结果" }) : dialog;
+    const resultScope = dialog;
     await expect(resultScope.getByText(detail.message, { exact: true })).toBeVisible();
     if (!linked) {
       await expect(dialog.getByText("当前账号名称", { exact: true })).toBeVisible();

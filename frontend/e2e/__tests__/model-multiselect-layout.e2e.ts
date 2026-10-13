@@ -48,7 +48,7 @@ test("模型多选保持单行工具栏，搜索勾选与手机布局不溢出",
   await expect(trigger).not.toContainText("+1");
   expect(
     await trigger
-      .locator("span[title]")
+      .getByText("gpt-6-astra、gpt-6.1-sol", { exact: true })
       .evaluate((element) => element.scrollWidth <= element.clientWidth),
   ).toBe(true);
   await page.screenshot({ path: testInfo.outputPath("two-models.png") });

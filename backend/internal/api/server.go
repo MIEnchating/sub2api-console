@@ -2716,8 +2716,8 @@ func (s *Server) onboardingProbe(c *gin.Context) {
 	if !ok {
 		return
 	}
-	if mode == "animation" {
-		writeError(c, http.StatusUnprocessableEntity, "动画测试请通过探活后台任务启动")
+	if mode == "animation" || mode == "candy" {
+		writeError(c, http.StatusUnprocessableEntity, "动画与糖果题测试请通过探活后台任务启动")
 		return
 	}
 	result, err := s.onboarding.Probe(c.Request.Context(), host, groupID, model, mode)
@@ -2793,8 +2793,8 @@ func onboardingProbePayload(c *gin.Context, requireModel bool) (string, string, 
 		if raw, present := payload["mode"]; present {
 			value, ok := raw.(string)
 			mode = strings.ToLower(strings.TrimSpace(value))
-			if !ok || (mode != "stream" && mode != "default" && mode != "animation") {
-				writeError(c, http.StatusUnprocessableEntity, "探活模式必须是 stream、default 或 animation")
+			if !ok || (mode != "stream" && mode != "default" && mode != "animation" && mode != "candy") {
+				writeError(c, http.StatusUnprocessableEntity, "探活模式必须是 stream、default、animation 或 candy")
 				return "", "", "", "", false
 			}
 		}

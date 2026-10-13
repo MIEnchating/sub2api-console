@@ -30,7 +30,7 @@ test.beforeEach(async ({ page, colorScheme }) => {
         running: false,
         traffic_collection: { enabled: false },
       },
-      "/api/groups": groups,
+      "/api/catalog/groups": groups,
       "/api/dictionaries": dictionaryResponse(
         route.request().url(),
         groups.map((group) => ({ value: group.id, name: group.name })),

@@ -126,10 +126,11 @@ for (const batch of [false, true]) {
           queue: [],
           heartbeat_history: [],
         },
-        "/api/upstreams": { hosts: [] },
+        "/api/catalog/upstreams": [],
+        "/api/catalog/group-configurations": [],
         "/api/upstreams/models.example.test/configuration": upstream,
         "/api/onboarding/prepare": { upstream, candidates: [candidate] },
-        "/api/groups": [
+        "/api/catalog/groups": [
           {
             id: "4",
             name: "备用 OpenAI",

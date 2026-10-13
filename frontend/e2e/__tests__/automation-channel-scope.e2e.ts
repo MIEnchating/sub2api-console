@@ -69,7 +69,7 @@ test("缺失已选渠道保留ID，键盘移除后保存明确范围且手机不
           },
         ],
       },
-      "/api/groups": [{ id: "7", name: "测试分组", account_count: 1 }],
+      "/api/catalog/group-memberships": [{ id: "7", name: "测试分组", account_count: 1 }],
       "/api/management/accounts/models/automation/schedules": [schedule],
       "/api/management/accounts/models/automation/task-groups": [],
     };

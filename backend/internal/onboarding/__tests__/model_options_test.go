@@ -25,6 +25,8 @@ type modelOptionsKeys struct {
 	deleted   []string
 	createErr error
 	deleteErr error
+	revealErr error
+	revealed  []string
 }
 
 func (keys *modelOptionsKeys) CreateKey(_ context.Context, _ configstore.AuthRecord, marker, group string) (upstreamsync.CreatedKey, error) {
@@ -40,6 +42,10 @@ func (keys *modelOptionsKeys) CreateKey(_ context.Context, _ configstore.AuthRec
 	return upstreamsync.CreatedKey{KeyID: id, Secret: testKey, GroupID: group}, nil
 }
 func (keys *modelOptionsKeys) RevealKey(_ context.Context, _ configstore.AuthRecord, id, group string) (upstreamsync.CreatedKey, error) {
+	keys.revealed = append(keys.revealed, id)
+	if keys.revealErr != nil {
+		return upstreamsync.CreatedKey{}, keys.revealErr
+	}
 	return upstreamsync.CreatedKey{KeyID: id, Secret: testKey, GroupID: group}, nil
 }
 func (keys *modelOptionsKeys) DeleteKey(ctx context.Context, _ configstore.AuthRecord, id string) error {
@@ -76,6 +82,11 @@ func (runner *modelOptionsRunner) GoTask(_ string, run func(context.Context)) er
 func (*modelOptionsRunner) CancelTask(string) bool { return false }
 
 func modelOptionsFixture(t *testing.T, gateway string, existingKey bool) (*onboarding.Service, *modelOptionsKeys, *modelOptionsTasks, *modelOptionsRunner) {
+	service, keys, tasks, runner, _, _ := modelOptionsFixtureStores(t, gateway, existingKey)
+	return service, keys, tasks, runner
+}
+
+func modelOptionsFixtureStores(t *testing.T, gateway string, existingKey bool) (*onboarding.Service, *modelOptionsKeys, *modelOptionsTasks, *modelOptionsRunner, *business.Store, *configstore.Store) {
 	t.Helper()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "business.sqlite3")
@@ -116,7 +127,7 @@ func modelOptionsFixture(t *testing.T, gateway string, existingKey bool) (*onboa
 	tasks, runner := &modelOptionsTasks{}, &modelOptionsRunner{}
 	service := onboarding.New(repo, private, keys, tasks)
 	service.UseTaskRunner(runner)
-	return service, keys, tasks, runner
+	return service, keys, tasks, runner, repo, private
 }
 
 func runModelOptions(t *testing.T, service *onboarding.Service, tasks *modelOptionsTasks, runner *modelOptionsRunner, ctx context.Context) taskstore.Task {
@@ -191,20 +202,27 @@ func TestModelOptionsFailureAndCancellationCleanCreatedKeyWithoutPublishingModel
 			}
 			completed := runModelOptions(t, service, tasks, runner, ctx)
 			want := "failed"
-			if scenario == "cancelled" {
+			if strings.HasPrefix(scenario, "cancelled") {
 				want = "cancelled"
 			}
-			if completed.Status != want || len(keys.deleted) != 1 || completed.Result["models"] != nil {
+			if scenario == "cleanup failure" {
+				want = "succeeded"
+			}
+			if completed.Status != want || len(keys.deleted) != 1 {
 				t.Fatalf("task=%+v deleted=%v", completed, keys.deleted)
 			}
-			if strings.Contains(scenario, "cleanup failure") && !strings.Contains(completed.Message, "清理") {
-				t.Fatalf("cleanup failure missing: %+v", completed)
+			if want == "succeeded" {
+				if !reflect.DeepEqual(completed.Result["models"], []string{"model-a"}) {
+					t.Fatalf("retained Key must not discard successful models: %+v", completed)
+				}
+			} else if completed.Result["models"] != nil {
+				t.Fatalf("failed or cancelled lookup must not publish models: %+v", completed)
 			}
 		})
 	}
 }
 
-func TestModelOptionsCleanupRetryDoesNotConsumeOpenProbeCredential(t *testing.T) {
+func TestModelOptionsRetainedKeyReuseDoesNotConsumeOpenProbeCredential(t *testing.T) {
 	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte(`{"data":[{"id":"model-a"}]}`))
 	}))
@@ -214,14 +232,14 @@ func TestModelOptionsCleanupRetryDoesNotConsumeOpenProbeCredential(t *testing.T)
 		t.Fatal(err)
 	}
 	keys.deleteErr = errors.New("isolated delete failure")
-	if task := runModelOptions(t, service, tasks, runner, t.Context()); task.Status != "failed" {
+	if task := runModelOptions(t, service, tasks, runner, t.Context()); task.Status != "succeeded" {
 		t.Fatalf("task=%+v", task)
 	}
 	keys.deleteErr = nil
 	if task := runModelOptions(t, service, tasks, runner, t.Context()); task.Status != "succeeded" {
 		t.Fatalf("task=%+v", task)
 	}
-	if !reflect.DeepEqual(keys.deleted, []string{"101", "101", "102"}) {
+	if !reflect.DeepEqual(keys.deleted, []string{"101"}) || !reflect.DeepEqual(keys.created, []string{"100", "101"}) {
 		t.Fatalf("wrong retry cleanup keys: %v", keys.deleted)
 	}
 	if err := service.CancelProbe(t.Context(), "options.test", "6"); err != nil {

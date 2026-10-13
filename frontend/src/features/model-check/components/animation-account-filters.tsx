@@ -1,4 +1,4 @@
-import { useMemo, type ReactElement } from "react";
+import { useMemo, type ReactElement, type ReactNode } from "react";
 import { ArrowDownUp, RotateCcw } from "lucide-react";
 import type { AccountStatus } from "@/api";
 import { FilterMenu } from "@/components/data-table/filter-menu";
@@ -28,6 +28,7 @@ export function AnimationAccountFilters(props: {
   value: AnimationFilters;
   onChange: (value: AnimationFilters) => void;
   searchLabel?: string;
+  resultNavigation?: ReactNode;
 }): ReactElement {
   const groups = useMemo(
     () => [...new Set(props.accounts.flatMap((account) => account.groups))],
@@ -48,13 +49,16 @@ export function AnimationAccountFilters(props: {
       aria-label="动画账号筛选"
       className="flex w-full min-w-0 flex-wrap items-center gap-2"
     >
-      <Input
-        className="w-full min-w-0 sm:w-52"
-        value={props.value.query}
-        onChange={(event) => props.onChange({ ...props.value, query: event.target.value })}
-        aria-label={props.searchLabel ?? "搜索动画检测账号"}
-        placeholder="搜索账号、ID、分组或 Host"
-      />
+      <div className="flex w-full min-w-0 items-center gap-2 sm:w-auto">
+        <Input
+          className="w-0 min-w-0 flex-1 sm:w-52 sm:flex-none"
+          value={props.value.query}
+          onChange={(event) => props.onChange({ ...props.value, query: event.target.value })}
+          aria-label={props.searchLabel ?? "搜索动画检测账号"}
+          placeholder="搜索账号、ID、分组或 Host"
+        />
+        {props.resultNavigation}
+      </div>
       <FilterMenu
         label="分组"
         dictionaryKind="group"

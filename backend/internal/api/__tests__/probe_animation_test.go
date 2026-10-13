@@ -31,6 +31,9 @@ func TestAnimationProbeAPIRequiresAuthenticatedTaskAndValidMode(t *testing.T) {
 		status           int
 	}{
 		{"animation task", "animation", "/api/onboarding/probe/tasks/probe", true, 200},
+		{"candy task", "candy", "/api/onboarding/probe/tasks/probe", true, 200},
+		{"anonymous candy", "candy", "/api/onboarding/probe/tasks/probe", false, 401},
+		{"synchronous candy rejected", "candy", "/api/onboarding/probe", true, 422},
 		{"invalid mode", "invalid", "/api/onboarding/probe/tasks/probe", true, 422},
 		{"anonymous", "animation", "/api/onboarding/probe/tasks/probe", false, 401},
 		{"synchronous animation rejected", "animation", "/api/onboarding/probe", true, 422},
@@ -54,7 +57,7 @@ func TestAnimationProbeAPIRequiresAuthenticatedTaskAndValidMode(t *testing.T) {
 			if response.Code != scenario.status {
 				t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
 			}
-			if scenario.status == 200 && (service.mode != "animation" || !strings.Contains(response.Body.String(), "gpt-6-astra")) {
+			if scenario.status == 200 && (service.mode != scenario.mode || !strings.Contains(response.Body.String(), "gpt-6-astra")) {
 				t.Fatal("animation mode or model lost")
 			}
 			if scenario.status != 200 && service.mode != "" {

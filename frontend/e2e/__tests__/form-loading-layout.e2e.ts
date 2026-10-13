@@ -91,12 +91,12 @@ test("模板读取期间保留账号输入，模板选择禁用且读取完成�
   await input.fill("rt_isolated");
   const selector = page.getByRole("combobox", { name: "配置模板" });
   await expect(selector).toBeDisabled();
-  await expectNoOverflow(page.getByRole("tabpanel"));
+  await expectNoOverflow(page.getByRole("tabpanel", { name: "导入账号", exact: true }));
   await expect.poll(() => held.length).toBeGreaterThan(0);
   for (const route of held) await route.fulfill({ json: fixtures[endpoint] });
   await expect(selector).toBeEnabled();
   await expect(input).toHaveValue("rt_isolated");
-  await expectNoOverflow(page.getByRole("tabpanel"));
+  await expectNoOverflow(page.getByRole("tabpanel", { name: "导入账号", exact: true }));
 });
 
 for (const scenario of [
@@ -125,7 +125,7 @@ for (const scenario of [
     const loading = page.getByLabel(scenario.loading, { exact: true });
     await expect(loading).toHaveAttribute("aria-busy", "true");
     await expect(loading.locator('[data-slot="skeleton"]')).toHaveCount(scenario.skeletons);
-    await expectNoOverflow(page.getByRole("tabpanel"));
+    await expectNoOverflow(page.getByRole("tabpanel", { name: scenario.tab, exact: true }));
     await expect.poll(() => held.length).toBeGreaterThan(0);
     for (const route of held) await route.fulfill({ json: fixtures[scenario.endpoint] });
     await expect(loading).toHaveCount(0);
@@ -143,7 +143,7 @@ for (const scenario of [
       await expectNoOverflow(dialog);
       await dialog.getByRole("button", { name: "取消", exact: true }).click();
     }
-    await expectNoOverflow(page.getByRole("tabpanel"));
+    await expectNoOverflow(page.getByRole("tabpanel", { name: scenario.tab, exact: true }));
   });
 }
 

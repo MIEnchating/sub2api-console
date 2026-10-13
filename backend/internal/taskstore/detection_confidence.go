@@ -3,6 +3,8 @@ package taskstore
 import (
 	"context"
 	"time"
+
+	"github.com/MIEnchating/sub2api-console/backend/internal/dbconn"
 )
 
 // DetectionConfidenceResult projects verdicts without generated code, answers or credentials.
@@ -16,6 +18,9 @@ type DetectionConfidenceResult struct {
 // DetectionConfidenceHistory keeps every completed stage in the statistics window,
 // independent of the latest-result retention used by the animation gallery.
 func (s *Store) DetectionConfidenceHistory(ctx context.Context, since time.Time) ([]DetectionConfidenceResult, error) {
+	if s.db.Driver() != dbconn.SQLite {
+		return s.serverDetectionConfidenceHistory(ctx, since)
+	}
 	rows, err := s.db.QueryContext(ctx, `WITH detection_tasks AS MATERIALIZED (
  SELECT operation, result_json FROM tasks
  WHERE skill='sub2api-model-animation' AND json_valid(result_json)

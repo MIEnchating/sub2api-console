@@ -55,13 +55,13 @@ func (s *Service) EnqueueProbe(ctx context.Context, action, host, groupID, model
 	if action == "probe" && (strings.TrimSpace(model) == "" || len(model) > 255) {
 		return taskstore.Task{}, errors.New("请选择有效的测试模型")
 	}
-	if action == "probe" && mode != "" && mode != "default" && mode != "stream" && mode != "animation" {
+	if action == "probe" && mode != "" && mode != "default" && mode != "stream" && mode != "animation" && mode != "candy" {
 		return taskstore.Task{}, errors.New("不支持的探活模式")
 	}
 	animationPrompt := ""
-	if action == "probe" && mode == "animation" {
+	if action == "probe" && (mode == "animation" || mode == "candy") {
 		if s.animations == nil {
-			return taskstore.Task{}, errors.New("动画测试服务尚未就绪，请稍后重试")
+			return taskstore.Task{}, errors.New("模型测试服务尚未就绪，请稍后重试")
 		}
 		animationPrompt = s.animations.AnimationPromptSettings().Prompt
 	}

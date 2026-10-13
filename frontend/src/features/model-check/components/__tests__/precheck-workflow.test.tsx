@@ -2,12 +2,17 @@ import { seedDictionaries } from "@/test/dictionary-fixtures";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, expect, it, vi } from "vitest";
+import { beforeEach, afterEach, expect, it, vi } from "vitest";
 import type { AnimationResult, Task } from "@/api";
 import { AnimationCheckPanel } from "../animation-check-panel";
 
 const clients: QueryClient[] = [];
+beforeEach(() => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date("2026-09-15T08:00:00Z"));
+});
 afterEach(() => {
+  vi.useRealTimers();
   cleanup();
   clients.splice(0).forEach((client) => client.clear());
   vi.unstubAllGlobals();

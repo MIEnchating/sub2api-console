@@ -6665,13 +6665,11 @@ export function OnboardingPage() {
     );
   const onboardingPending =
     concurrencyPreview.isPending || onboardingSubmitting || taskIsPending(taskId, task);
-  let entryInteractionDisabledReason = entryUnavailableReason;
+  let entryProbeDisabledReason: string | null = null;
   if (onboardingPending) {
-    entryInteractionDisabledReason = "账号添加任务进行中";
-  } else if (entryLocalGroupIDs.length === 0) {
-    entryInteractionDisabledReason = "请先选择本地分组";
-  } else if (!entryProtocolReady) {
-    entryInteractionDisabledReason = "请选择带明确平台的本地分组以确定账号类型";
+    entryProbeDisabledReason = "账号添加任务进行中";
+  } else if (entryCandidate && !entryCandidateAvailable) {
+    entryProbeDisabledReason = candidateCreationUnavailableReason(entryCandidate);
   }
   const usesAdminKey = authMode === "newapi_admin_key";
   const usesNewApiSession = authMode === "newapi_session";
@@ -7256,8 +7254,8 @@ export function OnboardingPage() {
                         target={entryProbeTarget}
                         groupName={entryCandidate.group_name}
                         pending={false}
-                        disabled={!entryCandidateSelectable || onboardingPending}
-                        disabledReason={entryInteractionDisabledReason}
+                        disabled={!entryCandidateAvailable || onboardingPending}
+                        disabledReason={entryProbeDisabledReason}
                         onProbe={() => setProbeTarget(entryProbeTarget)}
                       />
                     </div>
@@ -7342,6 +7340,12 @@ export function OnboardingPage() {
                           const interactionDisabledReason = onboardingPending
                             ? "账号添加任务进行中"
                             : unavailableReason;
+                          let probeDisabledReason: string | null = null;
+                          if (onboardingPending) {
+                            probeDisabledReason = "账号添加任务进行中";
+                          } else if (!canSelect && !alreadyBound) {
+                            probeDisabledReason = candidateCreationUnavailableReason(candidate);
+                          }
                           const pendingChange = candidateHasOnboardingChange(
                             candidate,
                             selectedLocalGroupIDs,
@@ -7410,8 +7414,8 @@ export function OnboardingPage() {
                                   target={candidateProbeTarget}
                                   groupName={candidate.group_name}
                                   pending={false}
-                                  disabled={!canEdit || onboardingPending}
-                                  disabledReason={interactionDisabledReason}
+                                  disabled={(!canSelect && !alreadyBound) || onboardingPending}
+                                  disabledReason={probeDisabledReason}
                                   onProbe={() => setProbeTarget(candidateProbeTarget)}
                                 />
                               </TableCell>

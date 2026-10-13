@@ -19,6 +19,7 @@ const stageLabels: Record<string, string> = {
   models: "获取上游模型列表",
   request: "发送探活请求并等待响应",
   cleanup_key: "清理临时上游 Key",
+  retain_key: "已保存 Key 绑定，后续复用",
   reconcile_key: "核对创建结果并清理临时 Key",
 };
 const statusLabels = {
@@ -32,6 +33,7 @@ export function ProbeProgressSummary(props: {
   steps: ProbeStep[];
   pendingMessage?: string;
   children?: ReactNode;
+  compact?: boolean;
 }) {
   const [expanded, setExpanded] = useState(false);
   const id = useId();
@@ -92,7 +94,7 @@ export function ProbeProgressSummary(props: {
         data-slot="probe-detail-panel"
         className={
           props.children
-            ? "h-48 min-w-0 overflow-hidden rounded-lg border border-zinc-800 bg-zinc-950"
+            ? `${props.compact ? "h-32" : "h-48"} min-w-0 overflow-hidden rounded-lg border border-zinc-800 bg-zinc-950`
             : "min-w-0"
         }
       >

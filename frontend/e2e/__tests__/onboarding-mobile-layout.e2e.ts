@@ -63,7 +63,9 @@ test.beforeEach(async ({ page, colorScheme }) => {
         { value: "3", name: "本地 OpenAI" },
       ]),
       "/api/upstreams/mobile.example.test/configuration": upstream,
-      "/api/groups": [{ id: "3", name: "本地 OpenAI", platform: "openai", account_count: 0 }],
+      "/api/catalog/groups": [
+        { id: "3", name: "本地 OpenAI", platform: "openai", account_count: 0 },
+      ],
       "/api/onboarding/prepare": {
         upstream,
         candidates: Array.from({ length: 21 }, (_, index) => ({

@@ -78,7 +78,7 @@ test("大目录编辑按ID恢复已选项，翻页选择和保存保持完整范
           },
         ],
       },
-      "/api/groups": [{ id: "7", name: "测试分组", account_count: 1 }],
+      "/api/catalog/group-memberships": [{ id: "7", name: "测试分组", account_count: 1 }],
       "/api/management/accounts/models/automation/schedules": [schedule],
       "/api/management/accounts/models/automation/task-groups": [],
     };

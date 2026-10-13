@@ -58,7 +58,7 @@ test.beforeEach(async ({ page, colorScheme }) => {
       "/api/setup/status": { initialized: true, configuration_errors: [] },
       "/api/auth/session": { authenticated: true, username: "流量布局测试" },
       "/api/accounts": [],
-      "/api/groups": [{ id: "traffic-group", name: longGroupName }],
+      "/api/catalog/groups": [{ id: "traffic-group", name: longGroupName }],
       "/api/dictionaries": {
         items:
           new URL(route.request().url()).searchParams.get("kind") === "group"
@@ -262,7 +262,7 @@ test("键盘聚焦缓存占比时可读取完整口径并用 Escape 关闭", asy
 });
 
 test("键盘选择 all 分组查询精确范围，清除后恢复全部账号与分页", async ({ page }) => {
-  await page.route("**/api/groups", (route) =>
+  await page.route("**/api/catalog/groups", (route) =>
     route.fulfill({ json: [{ id: "all-group", name: "all" }] }),
   );
   await page.route("**/api/dictionaries?kind=group", (route) =>

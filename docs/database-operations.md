@@ -98,3 +98,9 @@ PG 的本项目结构迁移在事务内执行，失败回滚。MySQL DDL 可能�
 ## 验证
 
 `backend/scripts/check-db-contract.sh all` 在隔离 PostgreSQL 18/MySQL 8.4 容器上运行宿主 Go 竞态契约，并包含完整 SQLite 导入演练；容器仅作为测试依赖。普通后端完整回归使用 `bash scripts/check-go.sh test`，包含独立 `__tests__` 包。两种入口均不得指向生产库。契约覆盖不等于生产规模的容量或性能保证。
+
+## 本机运行目录（2026-10-13）
+
+唯一开发与运行目录为 `/root/workspace/sub2api-console`。前端复用 `sub2api-console-frontend.service`（3004），后端复用 `sub2api-console-backend.service`（127.0.0.1:8080），后端使用 `go run ./cmd/server`。原 cutover 与 main-merge 工作区的独有改动已合入此目录，临时目录不再承担服务运行。
+
+业务、私有配置与任务库继续使用 PostgreSQL，连接配置保留在 `/etc/sub2api-console/postgres/client.env`，不写入仓库。切换代码目录不会切换数据库，不执行数据库导入、重建或 SQLite 回退。修改后端后须确认 systemd 工作目录、实际 PID 和监听端口，再重启现有后端并检查接口；前端优先使用现有 HMR。

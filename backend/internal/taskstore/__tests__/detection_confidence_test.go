@@ -1,19 +1,22 @@
 package taskstore_test
 
 import (
-	"path/filepath"
+	"github.com/MIEnchating/sub2api-console/backend/internal/dbtest"
 	"testing"
 	"time"
 
 	"github.com/MIEnchating/sub2api-console/backend/internal/taskstore"
 )
 
-func TestDetectionConfidenceHistoryProjectsBothStagesAndLegacyPrecheckMode(t *testing.T) {
-	store, err := taskstore.Open(filepath.Join(t.TempDir(), "tasks.sqlite3"))
-	if err != nil {
-		t.Fatal(err)
+func TestDatabaseContractDetectionConfidenceHistory(t *testing.T) {
+	for _, config := range dbtest.Configs(t) {
+		t.Run(string(config.Driver), func(t *testing.T) {
+			checkDetectionConfidenceHistory(t, contractTaskStore(t, config))
+		})
 	}
-	defer store.Close()
+}
+
+func checkDetectionConfidenceHistory(t *testing.T, store *taskstore.Store) {
 	at := "2026-10-10T12:00:00Z"
 	for _, task := range []taskstore.Task{
 		{ID: "combined", Skill: "sub2api-model-animation", Operation: "managed-model-detection", Status: "partial", Message: "完成", CreatedAt: at, UpdatedAt: at, Result: map[string]any{"animations": []any{

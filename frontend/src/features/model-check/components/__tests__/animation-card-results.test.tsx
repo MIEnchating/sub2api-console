@@ -6,8 +6,13 @@ import { createConsoleQueryClient } from "@/lib/query-client";
 import type { Task } from "@/api";
 import { AnimationCheckPanel } from "../animation-check-panel";
 
-beforeEach(() => vi.stubGlobal("PointerEvent", MouseEvent));
+beforeEach(() => {
+  vi.stubGlobal("PointerEvent", MouseEvent);
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date("2026-09-13T08:00:00Z"));
+});
 afterEach(() => {
+  vi.useRealTimers();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
@@ -83,6 +88,17 @@ const task: Task = {
     ],
   },
 };
+
+it("只有昨天结果时保留账号但不展示旧预览和旧模型", () => {
+  vi.setSystemTime(new Date("2026-09-14T08:00:00Z"));
+  const view = setup(task);
+  expect(screen.getAllByRole("article")).toHaveLength(3);
+  expect(screen.queryByRole("img")).not.toBeInTheDocument();
+  expect(screen.queryByText("余额不足")).not.toBeInTheDocument();
+  expect(screen.queryByRole("group", { name: "结果模型" })).not.toBeInTheDocument();
+  expect(screen.getAllByText("尚未检测")).toHaveLength(3);
+  view.dispose();
+});
 
 it("展示动画账号时卡片和检测面板沿用统一圆角", () => {
   const { dispose } = setup(task);
@@ -182,7 +198,7 @@ it("较旧任务补充其他账号结果，同一账号保留最新结果", () =
   const previous: Task = {
     ...task,
     id: "previous",
-    created_at: "2026-09-12T00:00:00Z",
+    created_at: "2026-09-12T16:00:00Z",
     result: {
       account_ids: ["43", "42"],
       animations: [
@@ -194,7 +210,7 @@ it("较旧任务补充其他账号结果，同一账号保留最新结果", () =
           status: "succeeded",
           svg: '<svg xmlns="http://www.w3.org/2000/svg"/>',
           duration_ms: 20,
-          completed_at: "2026-09-12T00:00:00Z",
+          completed_at: "2026-09-12T16:00:00Z",
         },
 
         {
@@ -205,7 +221,7 @@ it("较旧任务补充其他账号结果，同一账号保留最新结果", () =
           status: "succeeded",
           svg: '<svg xmlns="http://www.w3.org/2000/svg"><rect width="10" height="10"/></svg>',
           duration_ms: 50,
-          completed_at: "2026-09-12T00:00:00Z",
+          completed_at: "2026-09-12T16:00:00Z",
         },
       ],
     },

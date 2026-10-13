@@ -161,6 +161,8 @@ func (s *Service) Probe(ctx context.Context, host, groupID, model string, modes 
 	var requestErr error
 	if len(modes) > 0 && modes[0] == "animation" {
 		result, requestErr = s.runProbeAnimation(guardedCtx, credential, model)
+	} else if len(modes) > 0 && modes[0] == "candy" {
+		result, requestErr = s.runProbeCandy(guardedCtx, credential, model)
 	} else {
 		result, requestErr = runGatewayProbe(guardedCtx, credential.auth.BaseURL, credential.key.Secret, model, credential.candidate.Platform, modes...)
 	}
@@ -364,6 +366,9 @@ func (s *Service) acquireProbeCredentialWithMarker(ctx context.Context, host, gr
 	}
 	credential := probeCredential{auth: *auth, candidate: *candidate}
 	finishCredential(nil)
+	if found, err := s.readRetainedProbeKey(ctx, &credential, groupID); found || err != nil {
+		return credential, err
+	}
 	staleExistingKey := false
 	if candidate.UpstreamKeyID != nil && strings.TrimSpace(*candidate.UpstreamKeyID) != "" {
 		finishRead := probeStep(ctx, "read_key")
@@ -448,7 +453,21 @@ func (s *Service) cleanupProbeCredentialWithContext(parent context.Context, cred
 	}
 	ctx, cancel := context.WithTimeout(parent, probeCleanupTimeout)
 	defer cancel()
-	return deleter.DeleteKey(ctx, credential.auth, credential.key.KeyID)
+	deleteErr := deleter.DeleteKey(ctx, credential.auth, credential.key.KeyID)
+	if deleteErr == nil {
+		return nil
+	}
+	// A failed DELETE does not invalidate a successful generation. Remember the
+	// exact binding so subsequent requests can verify and reuse the same Key.
+	persistCtx, persistCancel := context.WithTimeout(context.WithoutCancel(parent), probeCleanupTimeout)
+	defer persistCancel()
+	if saveErr := s.retainProbeKey(persistCtx, credential); saveErr != nil {
+		return fmt.Errorf("%v；保存 Key 绑定失败：%w", deleteErr, saveErr)
+	}
+	finish(nil)
+	finishRetain := probeStep(parent, "retain_key")
+	finishRetain(nil)
+	return nil
 }
 
 func (s *Service) pendingProbeCleanup(host, groupID string) (probeCredential, bool) {
@@ -474,7 +493,12 @@ func (s *Service) cleanupUnknownProbeCredential(auth configstore.AuthRecord, mar
 				return fmt.Errorf("marker %s 对账结果缺少稳定 Key ID；请在无绑定 Key 清理中核对并清理", marker)
 			}
 			if err := deleter.DeleteKey(ctx, auth, key.KeyID); err != nil {
-				return fmt.Errorf("marker %s 已定位但删除失败：%w；请在无绑定 Key 清理中核对并清理", marker, err)
+				credential := probeCredential{auth: auth, key: key, candidate: business.OnboardingCandidate{GroupID: &groupID}}
+				persistCtx, persistCancel := context.WithTimeout(context.Background(), probeCleanupTimeout)
+				defer persistCancel()
+				if saveErr := s.retainProbeKey(persistCtx, credential); saveErr != nil {
+					return fmt.Errorf("marker %s 已定位但删除失败：%w；保存 Key 绑定失败：%v；请在无绑定 Key 清理中核对并清理", marker, err, saveErr)
+				}
 			}
 			return nil
 		}
