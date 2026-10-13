@@ -3,7 +3,7 @@ import type { Task } from "../../src/api";
 import { pageFixtures } from "./fixtures/page-shell";
 
 for (const longEndpoint of [false, true]) {
-  test(`自定义结果混合展示时卡片保持紧凑、操作可达${longEndpoint ? "，长地址自动换行" : ""}`, async ({
+  test(`自定义结果通过 Tab 切换且卡片头部信息紧凑、操作可达${longEndpoint ? "，长地址自动换行" : ""}`, async ({
     page,
     colorScheme,
   }, testInfo) => {
@@ -77,34 +77,60 @@ for (const longEndpoint of [false, true]) {
     await page.getByRole("tab", { name: "自定义接口", exact: true }).click();
     const records = page.getByRole("region", { name: "自定义接口检测记录" });
     const mobile = page.viewportSize()!.width < 768;
-    await expect(records.getByRole("article")).toHaveCount(mobile ? 1 : 3);
-    const pages = mobile ? 3 : 1;
-    for (let index = 0; index < pages; index++) {
-      for (const card of await records.getByRole("article").all()) {
-        await expect(card.getByText(endpoint, { exact: true })).toBeVisible();
-        expect(await card.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(
-          true,
-        );
-        const name = await card.getAttribute("aria-label");
-        if (!longEndpoint && !name?.endsWith("-animation")) {
-          expect((await card.boundingBox())!.height).toBeLessThan(280);
+    const tabs = records.getByRole("tablist", { name: "自定义检测记录类型" });
+    for (const stage of ["动画检测", "前置检测"]) {
+      await tabs.getByRole("tab", { name: stage, exact: true }).click();
+      await expect(tabs.getByRole("tab", { name: stage, exact: true })).toHaveAttribute(
+        "aria-selected",
+        "true",
+      );
+      const group = records.getByRole("region", { name: `${stage}记录` });
+      await expect(group.getByRole("article")).toHaveCount(stage === "动画检测" && !mobile ? 2 : 1);
+      await expect(
+        records.getByRole("region", {
+          name: stage === "动画检测" ? "前置检测记录" : "动画检测记录",
+        }),
+      ).toHaveCount(0);
+      const pages = mobile && stage === "动画检测" ? 2 : 1;
+      for (let index = 0; index < pages; index++) {
+        for (const card of await group.getByRole("article").all()) {
+          const header = card.getByRole("group", { name: "检测接口信息" });
+          await expect(header.getByText(endpoint, { exact: true })).toBeVisible();
+          await expect(header.getByText("OpenAI", { exact: true })).toBeVisible();
+          await expect(header.getByText(/^(动画检测|前置检测)$/)).toHaveCount(0);
+          const columns = await card.evaluate((element) =>
+            getComputedStyle(element.parentElement!).gridTemplateColumns.split(" "),
+          );
+          expect(columns).toHaveLength(mobile ? 1 : 3);
+          await expect(card.getByText(/请求 ID/)).toHaveCount(0);
+          await expect(card.getByText("手动标记", { exact: true })).toHaveCount(0);
+          expect(await card.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(
+            true,
+          );
+          const name = await card.getAttribute("aria-label");
+          if (!longEndpoint && !name?.endsWith("-animation")) {
+            expect((await card.boundingBox())!.height).toBeLessThan(280);
+          }
+          if (name?.endsWith("-running")) {
+            const cancel = card.getByRole("button", { name: "取消任务" });
+            await expect(cancel).toHaveCSS("height", "32px");
+            const cardBox = (await card.boundingBox())!;
+            expect((await cancel.boundingBox())!.width).toBeLessThan(cardBox.width / 2);
+            await cancel.focus();
+            await expect(cancel).toBeFocused();
+            await expect(card.getByRole("progressbar")).toHaveCount(0);
+          } else {
+            const details = card.getByRole("button", { name: /查看.*检测详情/ });
+            await details.scrollIntoViewIfNeeded();
+            await expect(details).toBeInViewport();
+          }
         }
-        if (name?.endsWith("-running")) {
-          const cancel = card.getByRole("button", { name: "取消任务" });
-          await expect(cancel).toHaveCSS("height", "32px");
-          const cardBox = (await card.boundingBox())!;
-          expect((await cancel.boundingBox())!.width).toBeLessThan(cardBox.width / 2);
-          await cancel.focus();
-          await expect(cancel).toBeFocused();
-          await expect(card.getByRole("progressbar")).toHaveCount(0);
-        } else {
-          const details = card.getByRole("button", { name: /查看.*检测详情/ });
-          await details.scrollIntoViewIfNeeded();
-          await expect(details).toBeInViewport();
-        }
+        if (index < pages - 1) await group.getByRole("button", { name: "下一页记录" }).click();
       }
-      if (index < pages - 1) await records.getByRole("button", { name: "下一页记录" }).click();
+      await page.screenshot({ path: testInfo.outputPath(`custom-results-${stage}.png`) });
     }
+    await expect(records.getByText(/共 \d+ 条/)).toHaveCount(0);
+    await expect(records.getByRole("heading", { name: "检测记录", exact: true })).toHaveCount(0);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(
       true,
     );

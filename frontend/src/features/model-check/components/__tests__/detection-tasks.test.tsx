@@ -1,3 +1,4 @@
+import { selectDetectionModels } from "./model-selection-helper";
 import { seedDictionaries } from "@/test/dictionary-fixtures";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -80,13 +81,12 @@ it("编辑旧组合任务移除终端选项并保留版本和多个自动时间"
   const user = userEvent.setup();
   await user.click(screen.getByRole("button", { name: "编辑" }));
   const dialog = screen.getByRole("dialog", { name: "编辑检测任务" });
-  const model = within(dialog).getByRole("textbox", { name: "检测模型" });
+  const model = within(dialog).getByRole("combobox", { name: "检测模型" });
   const concurrency = within(dialog).getByRole("spinbutton", { name: "同时检测账号数" });
   expect(concurrency).toHaveValue(4);
   fireEvent.change(concurrency, { target: { value: "6" } });
-  expect(model).toHaveValue("test-model");
-  await user.clear(model);
-  await user.type(model, "edited-model");
+  expect(model).toHaveTextContent("test-model");
+  await selectDetectionModels(["edited-model"]);
   expect(within(dialog).getByRole("checkbox", { name: "前置检测" })).toBeChecked();
   expect(within(dialog).getByLabelText("每天检测时间 2（北京时间）")).toHaveValue("20:00");
   expect(within(dialog).queryByRole("checkbox", { name: "终端检测" })).not.toBeInTheDocument();
@@ -117,7 +117,9 @@ it("新任务未选分组不能保存且可以关闭表单", async () => {
   const requests = setup([]);
   const user = userEvent.setup();
   await user.click(screen.getByRole("button", { name: "新增任务" }));
-  expect(await screen.findByRole("textbox", { name: "检测模型" })).toHaveValue("gpt-6-astra");
+  expect(await screen.findByRole("combobox", { name: "检测模型" })).toHaveTextContent(
+    "gpt-6-astra",
+  );
   expect(screen.getByRole("spinbutton", { name: "同时检测账号数" })).toHaveValue(4);
   await user.click(screen.getByRole("button", { name: "保存任务" }));
   expect(await screen.findByText("请选择至少一个分组")).toBeVisible();
@@ -246,4 +248,25 @@ it("旧纯终端任务禁用立即执行并允许编辑选择有效阶段", asyn
   await userEvent.setup().click(screen.getByRole("button", { name: "编辑" }));
   expect(screen.getByRole("checkbox", { name: "动画检测" })).not.toBeChecked();
   expect(screen.queryByRole("checkbox", { name: "终端检测" })).not.toBeInTheDocument();
+});
+
+it("编辑多模型任务回显全部模型，移除和新增后保存更新列表", async () => {
+  const requests = setup([{ ...plan, models: ["test-model", "old-model"] }]);
+  const user = userEvent.setup();
+  await user.click(screen.getByRole("button", { name: "编辑" }));
+  const dialog = within(screen.getByRole("dialog", { name: "编辑检测任务" }));
+  await user.click(dialog.getByRole("combobox", { name: "检测模型" }));
+  expect(screen.getByRole("option", { name: "old-model" })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  await user.click(screen.getByRole("option", { name: "old-model" }));
+  expect(screen.queryByRole("option", { name: "old-model" })).not.toBeInTheDocument();
+  await selectDetectionModels(["new-model"], false);
+  await user.click(dialog.getByRole("button", { name: "保存任务" }));
+  await waitFor(() =>
+    expect(requests.find((item) => item.method === "PUT")?.body).toMatchObject({
+      models: ["test-model", "new-model"],
+    }),
+  );
 });

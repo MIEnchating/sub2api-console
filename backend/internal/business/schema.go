@@ -65,6 +65,10 @@ CREATE TABLE IF NOT EXISTS accounts (
  target_priority INTEGER,target_load_factor TEXT,target_schedulable INTEGER,target_concurrency INTEGER,
  metadata_json TEXT NOT NULL DEFAULT '{}',updated_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS balance_recovery_states (
+ account_id TEXT PRIMARY KEY,state_json TEXT NOT NULL,
+ FOREIGN KEY(account_id) REFERENCES accounts(id) ON DELETE CASCADE
+);
 CREATE TABLE IF NOT EXISTS account_groups (
  account_id TEXT NOT NULL,group_name TEXT NOT NULL,group_id TEXT,group_rate TEXT,PRIMARY KEY(account_id,group_name),
  FOREIGN KEY(account_id) REFERENCES accounts(id) ON DELETE CASCADE
@@ -328,7 +332,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS ux_onboarding_pending_identity ON onboarding_p
 `
 
 // Older compatible schemas can receive additive tables and indexes at startup.
-const businessSchemaVersion = 12
+const businessSchemaVersion = 13
 
 func (s *Store) ensureSchema(ctx context.Context) error {
 	if s.db.Driver() != dbconn.SQLite {

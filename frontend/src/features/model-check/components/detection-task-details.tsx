@@ -1,3 +1,4 @@
+import { ResultModelSelector } from "./result-model-selector";
 import { useState, type ReactElement } from "react";
 import { Tabs } from "@base-ui/react/tabs";
 import { useQuery } from "@tanstack/react-query";
@@ -39,6 +40,17 @@ export function DetectionTaskDetails(props: { id: string; onClose: () => void })
   const terminals = terminalContinuityResults(task ? [task] : []);
   const rows = detectionAccountRows(task, state, terminals);
   const grouped = detectionResultGroups(task, groups.data, rows);
+  const [selectedModel, setSelectedModel] = useState<string>();
+  const models = [
+    ...new Set(
+      [...rows.values()].flatMap((row) => [
+        ...(row.models ?? []),
+        ...(row.animations ?? []).map((result) => result.model),
+        ...(row.prechecks ?? []).map((result) => result.model),
+      ]),
+    ),
+  ];
+  const model = selectedModel && models.includes(selectedModel) ? selectedModel : models[0];
   const [selectedGroupId, setSelectedGroupId] = useState<string>();
   const activeGroupId = grouped.some((group) => group.id === selectedGroupId)
     ? selectedGroupId
@@ -126,6 +138,9 @@ export function DetectionTaskDetails(props: { id: string; onClose: () => void })
               此记录未保存分组快照，当前目录无法还原归属，保留原结果。
             </p>
           )}
+          <div className="shrink-0">
+            <ResultModelSelector models={models} value={model} onChange={setSelectedModel} />
+          </div>
           {grouped.length > 0 && activeGroupId ? (
             <Tabs.Root
               value={activeGroupId}
@@ -170,6 +185,7 @@ export function DetectionTaskDetails(props: { id: string; onClose: () => void })
                           <DetectionResultCard
                             key={row.id}
                             row={row}
+                            selectedModel={model}
                             active={active}
                             task={task}
                             animation={animation}

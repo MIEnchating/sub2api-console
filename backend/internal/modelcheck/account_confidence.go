@@ -55,3 +55,34 @@ func modelCheckOutcome(row map[string]any) string {
 	}
 	return "inconclusive"
 }
+
+func addDetectionConfidence(statistics map[string]accountquality.Statistics, rows []taskstore.DetectionConfidenceResult, now time.Time) {
+	for _, row := range rows {
+		if !stablePositiveID(row.AccountID) {
+			continue
+		}
+		at, err := time.Parse(time.RFC3339Nano, row.CompletedAt)
+		if err != nil || at.After(now) || at.Before(now.Add(-30*24*time.Hour)) {
+			continue
+		}
+		stats, exists := statistics[row.AccountID]
+		if !exists {
+			stats = accountquality.New(now)
+		}
+		outcome := "inconclusive"
+		if row.Status == "succeeded" {
+			switch row.Verdict {
+			case "passed":
+				outcome = "passed"
+			case "not_passed":
+				outcome = "failed"
+			}
+		}
+		stats.Add(now, at, outcome)
+		statistics[row.AccountID] = stats
+	}
+	for id, stats := range statistics {
+		stats.Calculate(true)
+		statistics[id] = stats
+	}
+}

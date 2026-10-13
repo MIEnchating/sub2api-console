@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState, type ReactElement } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { RefreshCw, Search, Users } from "lucide-react";
+import { RefreshCw, Search, Users, Eye, FolderSync, Trash2 } from "lucide-react";
 import { api } from "@/api";
 import {
   Dialog,
@@ -9,7 +9,13 @@ import {
   DialogTitle,
   DialogBody,
 } from "@/components/ui/dialog";
+import { Switch } from "@/components/ui/switch";
+import { TableActionButton } from "@/components/data-table/table-action-button";
+import { AccountActionDialog, type AccountActionTarget } from "./account-action-dialog";
 import { AccountCheckButton } from "./account-check-button";
+import { MoveGroupsDialog } from "./move-groups-dialog";
+import { useGroupMoveTask } from "../hooks/use-group-move-task";
+import { TaskStartupState } from "@/components/task-startup-state";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -54,10 +60,13 @@ export function AccountList(props: { onStarted?: () => void }): ReactElement {
     queryKey: workbenchKeys.accounts,
     queryFn: ({ signal }) => api.workbenchAccounts(signal),
   });
+  const [actionTarget, setActionTarget] = useState<AccountActionTarget | null>(null);
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState("all");
   const [group, setGroup] = useState("all");
   const [detailsID, setDetailsID] = useState<string | null>(null);
+  const [moveAccount, setMoveAccount] = useState<WorkbenchAccount | null>(null);
+  const groupMove = useGroupMoveTask();
   const [showRemembered, setShowRemembered] = useState(false);
   const accounts = query.data ?? emptyAccounts;
   const details = useMemo(
@@ -149,6 +158,13 @@ export function AccountList(props: { onStarted?: () => void }): ReactElement {
           <AccountGroupFilter accounts={accounts} value={group} onChange={changeGroup} />
         </div>
       </WorkbenchToolbar>
+      {groupMove.running && <TaskStartupState message="正在移动分组…" />}
+      {groupMove.running && groupMove.query.isError && (
+        <ContentRetry
+          pending={groupMove.query.isFetching}
+          onRetry={() => void groupMove.query.refetch()}
+        />
+      )}
       {showRemembered && (
         <Dialog open onOpenChange={setShowRemembered}>
           <DialogContent width="wide" height="adaptive">
@@ -199,7 +215,8 @@ export function AccountList(props: { onStarted?: () => void }): ReactElement {
                 <TableHead className="w-[12%]">分组</TableHead>
                 <TableHead className="w-[12%]">代理</TableHead>
                 <TableHead className="w-52">用量（已用）</TableHead>
-                <TableHead className="w-44">操作</TableHead>
+                <TableHead className="w-24">调度</TableHead>
+                <TableHead className="w-40">操作</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -242,15 +259,46 @@ export function AccountList(props: { onStarted?: () => void }): ReactElement {
                     <AccountUsageCell usage={account.usage} />
                   </TableCell>
                   <TableCell>
-                    <div className="flex items-center gap-1">
+                    <Switch
+                      aria-label={`${account.name || account.id} 调度开关`}
+                      checked={account.schedulable}
+                      disabled={groupMove.running}
+                      onCheckedChange={(value) =>
+                        setActionTarget({ kind: "platform", account, schedulable: value })
+                      }
+                    />
+                  </TableCell>
+                  <TableCell>
+                    <div
+                      role="group"
+                      aria-label="账号操作"
+                      className="ml-auto flex w-fit items-center gap-1"
+                    >
                       <AccountCheckButton account={account} />
-                      <Button
-                        variant="ghost"
-                        onClick={() => setDetailsID(account.id)}
-                        aria-label={`查看 ${account.name || account.id} 配置`}
+                      <TableActionButton
+                        label="移动分组"
+                        ariaLabel={`移动 ${account.name || account.id} 分组`}
+                        disabled={groupMove.running}
+                        onClick={() => setMoveAccount(account)}
                       >
-                        查看
-                      </Button>
+                        <FolderSync aria-hidden="true" />
+                      </TableActionButton>
+                      <TableActionButton
+                        label="查看配置"
+                        onClick={() => setDetailsID(account.id)}
+                        ariaLabel={`查看 ${account.name || account.id} 配置`}
+                      >
+                        <Eye aria-hidden="true" />
+                      </TableActionButton>
+                      <TableActionButton
+                        label="删除账号"
+                        tone="danger"
+                        ariaLabel={`删除 ${account.name || account.id}`}
+                        disabled={groupMove.running}
+                        onClick={() => setActionTarget({ kind: "platform", account })}
+                      >
+                        <Trash2 aria-hidden="true" />
+                      </TableActionButton>
                     </div>
                   </TableCell>
                 </TableRow>
@@ -267,7 +315,17 @@ export function AccountList(props: { onStarted?: () => void }): ReactElement {
           />
         </DataTablePanel>
       )}
+      {actionTarget && (
+        <AccountActionDialog target={actionTarget} onClose={() => setActionTarget(null)} />
+      )}
       {details && <AccountDetails account={details} onClose={() => setDetailsID(null)} />}
+      {moveAccount && (
+        <MoveGroupsDialog
+          account={moveAccount}
+          onClose={() => setMoveAccount(null)}
+          onStarted={groupMove.start}
+        />
+      )}
     </section>
   );
 }

@@ -75,7 +75,7 @@ function setup(task?: Task): void {
     </QueryClientProvider>,
   );
   fireEvent.click(screen.getByRole("tab", { name: "前置检测" }));
-  expect(screen.getByRole("combobox", { name: "检测模型" })).toHaveValue("gpt-6-astra");
+  expect(screen.getByRole("combobox", { name: "检测模型" })).toHaveTextContent("gpt-6-astra");
 }
 
 it("批量前置检测使用默认糖果题，完成后可手动勾选账号继续动画检测", async () => {

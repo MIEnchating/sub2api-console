@@ -33,7 +33,9 @@ it.each(["账号检测", "前置检测"])("%s 的模型和超时位于开始检�
   const fields = within(operations).getByRole("group", { name: "动画模型参数" });
   expect(within(operations).getByRole("button", { name: /开始检测|^前置检测（/ })).toBeVisible();
   expect(fields).toHaveClass("w-full", "sm:w-[36rem]", "max-w-full");
-  expect(within(fields).getByRole("combobox", { name: "检测模型" })).toHaveValue("gpt-6-astra");
+  expect(within(fields).getByRole("combobox", { name: "检测模型" })).toHaveTextContent(
+    "gpt-6-astra",
+  );
   expect(within(fields).getByRole("spinbutton", { name: "请求超时（秒）" })).toBeVisible();
 });
 

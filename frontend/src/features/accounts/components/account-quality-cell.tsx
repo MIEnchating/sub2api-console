@@ -39,7 +39,7 @@ function QualityMetric(props: {
         <strong>{props.label}统计</strong>
         <p>
           {props.label === "置信度"
-            ? "模型行为检测一致率的 95% Wilson 下界；样本越少越保守，不代表模型身份的真实概率。不同模型和规则版本合并统计。"
+            ? "常规模型检测、前置检测和动画人工判定的通过率采用 95% Wilson 下界；样本越少越保守，不代表模型身份或智商的真实概率。不同模型和规则版本合并统计。动画未标记、请求失败和无法判定均作为无结论。"
             : "真实请求与主动探活的成功率；跨分组的同一证据只计一次，疑似空回复计为失败。"}
         </p>
         {(["short", "long"] as const).map((key) => {
@@ -69,7 +69,9 @@ export function AccountQualityCell(props: { account: AccountStatus }) {
   return (
     <div className="grid min-w-52 gap-1.5">
       <div className="grid grid-cols-[3rem_1fr_1fr] gap-2 text-[11px] text-muted-foreground">
-        <span>{status.label}</span>
+        <span>
+          {props.account.model_check_status === "not_checked" ? "检测统计" : status.label}
+        </span>
         <span>短期 · 24h</span>
         <span>长期 · 30天</span>
       </div>

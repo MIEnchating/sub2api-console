@@ -34,6 +34,11 @@ func TestRememberedAccountRoutesRequireSessionAndValidateRequests(t *testing.T) 
 		auth                     bool
 		status                   int
 	}{
+		{"action preview without session", "GET", "/api/account-workbench/accounts/41/action-preview", "", false, http.StatusUnauthorized},
+		{"account action without session", "POST", "/api/account-workbench/accounts/41/actions", `{}`, false, http.StatusUnauthorized},
+		{"invalid action account", "GET", "/api/account-workbench/accounts/invalid/action-preview", "", true, http.StatusUnprocessableEntity},
+		{"missing action version", "POST", "/api/account-workbench/accounts/41/actions", `{"action":"delete"}`, true, http.StatusUnprocessableEntity},
+		{"invalid scheduling value", "POST", "/api/account-workbench/accounts/41/actions", `{"action":"scheduling","target_version":"t","account_version":"a","schedulable":"yes"}`, true, http.StatusUnprocessableEntity},
 		{"list without session", "GET", base, "", false, http.StatusUnauthorized},
 		{"delete without session", "DELETE", base + "/missing", `{"revision":1}`, false, http.StatusUnauthorized},
 		{"login without session", "POST", base + "/missing/preview", `{"revision":1}`, false, http.StatusUnauthorized},
@@ -58,7 +63,7 @@ func TestRememberedAccountRoutesRequireSessionAndValidateRequests(t *testing.T) 
 			if tc.auth && res.Header().Get("Cache-Control") != "no-store" {
 				t.Fatal("private response can be cached")
 			}
-			if tc.method == "GET" && tc.auth && strings.TrimSpace(res.Body.String()) != "[]" {
+			if tc.method == "GET" && tc.path == base && tc.auth && strings.TrimSpace(res.Body.String()) != "[]" {
 				t.Fatal("empty saved list contract changed")
 			}
 		})

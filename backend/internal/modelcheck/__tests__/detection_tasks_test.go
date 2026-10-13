@@ -110,7 +110,7 @@ func TestDetectionTaskUsesLatestGroupMembersAndKeepsSelectedStageResults(t *test
 	if len(task.Result["animations"].([]modelcheck.AnimationResult)) != 2 || len(task.Result["checks"].([]modelcheck.TerminalContinuityResult)) != 0 {
 		t.Fatal("stage results missing")
 	}
-	if statuses, err := f.service.AccountStatuses(context.Background()); err != nil || len(statuses) != 0 {
+	if statuses, err := f.service.AccountStatuses(context.Background()); err != nil || len(statuses) != 1 || statuses[0].AccountID != "2" || statuses[0].Status != "not_checked" || statuses[0].Confidence.Short.Samples != 2 {
 		t.Fatal("task changed behavior evidence")
 	}
 	history, err := f.service.TerminalContinuityHistory(context.Background())

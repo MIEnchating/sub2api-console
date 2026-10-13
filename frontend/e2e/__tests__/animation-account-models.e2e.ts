@@ -1,3 +1,4 @@
+import { selectDetectionModels } from "./fixtures/model-selection";
 import { expect, test } from "@playwright/test";
 import { account } from "../../src/features/accounts/__tests__/fixtures";
 import { pageFixtures } from "./fixtures/page-shell";
@@ -41,8 +42,8 @@ test("多账号检测默认 Astra，可手动输入并提交其他模型且不�
   await page.getByRole("checkbox", { name: "检测 动画账号41" }).check();
   await page.getByRole("checkbox", { name: "检测 动画账号42" }).check();
   await expect(page.getByRole("button", { name: "获取模型", exact: true })).toBeEnabled();
-  await expect(page.getByRole("combobox", { name: "检测模型" })).toHaveValue("gpt-6-astra");
-  await page.getByRole("combobox", { name: "检测模型" }).fill("selected-model");
+  await expect(page.getByRole("combobox", { name: "检测模型" })).toHaveText("gpt-6-astra");
+  await selectDetectionModels(page, ["selected-model"]);
   await page.keyboard.press("Escape");
   await page.getByRole("button", { name: "开始检测（2 个账号）" }).click();
   await expect.poll(() => requests.length).toBe(1);

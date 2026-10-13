@@ -1,3 +1,4 @@
+import { DetectionModelSelect } from "./detection-model-select";
 import { useDictionaryOrder } from "@/hooks/use-dictionary-order";
 import type { ReactElement } from "react";
 import type { UseFormReturn } from "react-hook-form";
@@ -50,14 +51,22 @@ export function DetectionTaskFields(props: {
       </section>
       <div className="grid min-w-0 gap-4 sm:grid-cols-[minmax(0,1fr)_12rem]">
         <div className="min-w-0 space-y-1">
-          <label className="block space-y-1 text-sm">
-            检测模型
-            <Input
-              {...form.register("model")}
+          <div className="space-y-1 text-sm">
+            <p>检测模型</p>
+            <DetectionModelSelect
+              model={form.watch("model")}
+              additionalModels={form.watch("additional_models")}
+              onChange={(model, additional) => {
+                form.setValue("model", model, { shouldDirty: true, shouldValidate: true });
+                form.setValue("additional_models", additional, {
+                  shouldDirty: true,
+                  shouldValidate: true,
+                });
+              }}
               disabled={props.pending}
-              aria-invalid={!!errors.model}
+              invalid={!!form.formState.errors.model}
             />
-          </label>
+          </div>
           <FieldError message={errors.model?.message} />
           <p className="text-xs text-muted-foreground">前置检测：medium · 鹈鹕动画：low</p>
         </div>
@@ -76,6 +85,7 @@ export function DetectionTaskFields(props: {
           <FieldError message={errors.timeout_seconds?.message} />
         </div>
       </div>
+
       {form.watch("animation") ? <AnimationPromptDialog disabled={props.pending} /> : null}
       <div className="min-w-0 space-y-1">
         <label className="block space-y-1 text-sm">

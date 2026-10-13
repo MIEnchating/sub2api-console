@@ -464,7 +464,7 @@ func TestEmptyBusinessDatabaseCanOpenButIsNotReady(t *testing.T) {
 	if err := store.db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil {
 		t.Fatal(err)
 	}
-	const expectedSchemaVersion = 12
+	const expectedSchemaVersion = 13
 	if version != expectedSchemaVersion {
 		t.Fatalf("schema version=%d, want %d", version, expectedSchemaVersion)
 	}

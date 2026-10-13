@@ -36,7 +36,7 @@ it.each(["开始检测（1 个账号）", "前置检测（1）"])(
       target: { value: "1" },
     });
     fireEvent.click(screen.getByRole("button", { name: action }));
-    expect(screen.getByRole("combobox", { name: "检测模型" })).toHaveValue("gpt-6-astra");
+    expect(screen.getByRole("combobox", { name: "检测模型" })).toHaveTextContent("gpt-6-astra");
     const timeout = screen.getByRole("spinbutton", { name: "请求超时（秒）" });
     await waitFor(() => expect(timeout).toHaveAccessibleDescription("超时不能小于 5 秒"));
     expect(

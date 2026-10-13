@@ -102,6 +102,7 @@ type siteNameReader interface {
 
 type HostResult struct {
 	Host                 string                            `json:"host"`
+	RemoteWrite          bool                              `json:"remote_write"`
 	Status               string                            `json:"status"`
 	AuthStatus           string                            `json:"auth_status"`
 	BalanceStatus        string                            `json:"balance_status"`
@@ -134,17 +135,18 @@ type BatchResult struct {
 }
 
 type Service struct {
-	repository    Repository
-	private       PrivateStore
-	reader        CatalogReader
-	refresher     Refresher
-	resolver      AuthResolver
-	tasks         TaskStore
-	taskRunner    taskrunner.Runner
-	rateSync      AccountRateSyncScheduler
-	timeout       time.Duration
-	workers       int
-	balanceAlerts func(context.Context, string) error
+	repository      Repository
+	private         PrivateStore
+	reader          CatalogReader
+	refresher       Refresher
+	resolver        AuthResolver
+	tasks           TaskStore
+	taskRunner      taskrunner.Runner
+	rateSync        AccountRateSyncScheduler
+	timeout         time.Duration
+	workers         int
+	balanceAlerts   func(context.Context, string) error
+	balanceRecovery func(context.Context, string, string) (bool, error)
 }
 
 type upstreamEventContextKey struct{}
@@ -167,6 +169,10 @@ func (s *Service) SetAuthResolver(resolver AuthResolver) {
 }
 
 func (s *Service) UseTaskRunner(runner taskrunner.Runner) { s.taskRunner = runner }
+
+func (s *Service) UseBalanceRecovery(reconcile func(context.Context, string, string) (bool, error)) {
+	s.balanceRecovery = reconcile
+}
 
 func (s *Service) UseBalanceAlerts(evaluate func(context.Context, string) error) {
 	s.balanceAlerts = evaluate
@@ -313,6 +319,12 @@ func (s *Service) execute(parent context.Context, task taskstore.Task, hosts []s
 		"failed": result.Failed, "skipped": result.Skipped, "account_total": result.AccountTotal,
 		"account_rate_succeeded": result.AccountRateSucceeded, "account_rate_failed": result.AccountRateFailed,
 		"hosts": result.Hosts, "remote_write": false, "credentials_exposed": false,
+	}
+	for _, host := range result.Hosts {
+		if host.RemoteWrite {
+			task.Result["remote_write"] = true
+			break
+		}
 	}
 	if routingResult != nil {
 		task.Result["routing"] = *routingResult
@@ -473,6 +485,15 @@ func (s *Service) syncHost(ctx context.Context, host string, scope Scope, actor 
 		if alertErr := s.balanceAlerts(ctx, host); alertErr != nil {
 			// Keep the successful read; delivery failures remain available for retry.
 			slog.Error("余额同步后的告警处理失败", "host", host, "error", safeReason(alertErr.Error()))
+		}
+	}
+	if result.balanceObserved && s.balanceRecovery != nil {
+		remoteWrite, err := s.balanceRecovery(ctx, host, actor)
+		result.RemoteWrite = remoteWrite
+		if err != nil {
+			reason := "余额已同步，账号状态恢复失败：" + safeReason(err.Error())
+			result.Status, result.Reason = "failed", &reason
+			_, _ = s.repository.RecordRuntimeEvent(ctx, "balance_recovery_failed", "failed", reason, map[string]any{"host": host})
 		}
 	}
 	return result

@@ -87,7 +87,7 @@ func TestRecoveryTrafficReopenBuildsTimeIndexAndPreservesLegacyEvidence(t *testi
 	}
 	defer store.Close()
 	var version, indexes int
-	if err := db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil || version != 12 {
+	if err := db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil || version != 13 {
 		t.Fatalf("recovery index requires schema 12: version=%d error=%v", version, err)
 	}
 	if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_schema WHERE name='ix_usage_records_recovery_time'`).Scan(&indexes); err != nil || indexes != 1 {

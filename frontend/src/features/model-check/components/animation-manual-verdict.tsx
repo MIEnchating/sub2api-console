@@ -63,6 +63,7 @@ function ManualVerdictEditor(props: {
         history?.map((item) => (item.id === task.id ? task : item)),
       );
       void client.invalidateQueries({ queryKey: ["model-animation", "history"] });
+      void client.invalidateQueries({ queryKey: ["model-check-account-statuses"] });
     },
     onError: (error) => notifyOperationError(error, "手动标记保存失败"),
   });

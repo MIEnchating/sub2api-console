@@ -35,6 +35,7 @@ type TaskStore interface {
 	ListBySkill(context.Context, string, int) ([]taskstore.Task, error)
 	AnimationHistory(context.Context) ([]taskstore.Task, error)
 	ModelCheckHistory(context.Context, time.Time) ([]taskstore.Task, error)
+	DetectionConfidenceHistory(context.Context, time.Time) ([]taskstore.DetectionConfidenceResult, error)
 }
 
 type CredentialStore interface {
@@ -207,6 +208,11 @@ func (s *Service) AccountStatuses(ctx context.Context) ([]AccountCheckStatus, er
 	})
 	statuses := make([]AccountCheckStatus, 0)
 	confidence := accountConfidence(tasks, now)
+	detections, err := s.tasks.DetectionConfidenceHistory(ctx, now.Add(-30*24*time.Hour))
+	if err != nil {
+		return nil, fmt.Errorf("智商检测历史读取失败: %w", err)
+	}
+	addDetectionConfidence(confidence, detections, now)
 	seen := map[string]bool{}
 	for _, task := range tasks {
 		if task.Status == "queued" || task.Status == "running" || task.Status == "waiting_input" {
@@ -234,6 +240,12 @@ func (s *Service) AccountStatuses(ctx context.Context) ([]AccountCheckStatus, er
 			})
 		}
 	}
+	for accountID, statistics := range confidence {
+		if !seen[accountID] {
+			statuses = append(statuses, AccountCheckStatus{AccountID: accountID, Status: "not_checked", Confidence: statistics})
+		}
+	}
+	sort.SliceStable(statuses, func(i, j int) bool { return statuses[i].AccountID < statuses[j].AccountID })
 	return statuses, nil
 }
 

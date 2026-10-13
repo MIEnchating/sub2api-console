@@ -85,7 +85,7 @@ it("跨页勾选和搜索后保留统一模型，并提交完整的已选范围"
   const user = userEvent.setup();
   const view = setup(25);
   await user.click(screen.getByRole("checkbox", { name: /^检测 分页账号 1\b/ }));
-  expect(screen.getByRole("combobox", { name: "检测模型" })).toHaveValue("gpt-6-astra");
+  expect(screen.getByRole("combobox", { name: "检测模型" })).toHaveTextContent("gpt-6-astra");
   await user.keyboard("{Escape}");
   fireEvent.click(screen.getByRole("button", { name: "转到下一页" }));
   await user.click(screen.getByRole("checkbox", { name: /^检测 分页账号 13\b/ }));
@@ -96,7 +96,7 @@ it("跨页勾选和搜索后保留统一模型，并提交完整的已选范围"
   expect(screen.getByRole("button", { name: "转到上一页" })).toBeDisabled();
   await user.clear(search);
   expect(await screen.findByRole("checkbox", { name: /^检测 分页账号 1\b/ })).toBeChecked();
-  expect(screen.getByRole("combobox", { name: "检测模型" })).toHaveValue("gpt-6-astra");
+  expect(screen.getByRole("combobox", { name: "检测模型" })).toHaveTextContent("gpt-6-astra");
   await user.click(screen.getByRole("button", { name: "开始检测（2 个账号）" }));
   await waitFor(() =>
     expect(view.posts[0]?.targets).toEqual([
@@ -119,7 +119,7 @@ it("全选跨页选择全部账号，取消后可重新勾选第二十一个账�
   expect(account).not.toHaveAttribute("aria-disabled", "true");
   fireEvent.click(account);
   expect(account).toBeChecked();
-  expect(screen.getByRole("combobox", { name: "检测模型" })).toHaveValue("gpt-6-astra");
+  expect(screen.getByRole("combobox", { name: "检测模型" })).toHaveTextContent("gpt-6-astra");
   fireEvent.click(screen.getByRole("button", { name: "开始检测（25 个账号）" }));
   await waitFor(() => expect(view.posts[0]?.targets).toHaveLength(25));
   expect(view.posts[0]?.targets).toContainEqual({ account_id: "25", model: "gpt-6-astra" });

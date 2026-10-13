@@ -9,6 +9,8 @@ import type {
   TemplateLibrary,
   TemplateConfig,
   WorkbenchAccount,
+  WorkbenchAccountActionPreview,
+  WorkbenchAccountActionInput,
   WorkbenchTemplate,
   WorkbenchPreview,
   WorkbenchProxy,
@@ -1546,7 +1548,7 @@ export type SystemMetrics = {
   };
 };
 
-export type AnimationTarget = { account_id: string; model: string };
+export type AnimationTarget = { account_id: string; model: string; models?: string[] };
 type TerminalContinuityVerdict = "normal" | "suspected" | "inconclusive" | "error";
 export type TerminalContinuityResult = {
   round_results?: TerminalContinuityRound[];
@@ -1572,6 +1574,7 @@ export type TerminalContinuityRound = {
   completed_at: string;
 };
 export type DetectionTask = {
+  models?: string[];
   id: string;
   version: number;
   name: string;
@@ -1597,6 +1600,7 @@ export type DetectionTask = {
 };
 export type PrecheckQuestionID = "candy";
 export type AnimationCustomEndpoint = {
+  models?: string[];
   base_url: string;
   api_key: string;
   platform: "openai" | "anthropic";
@@ -1660,6 +1664,7 @@ export type AnimationManualVerdict = {
   updated_by: string;
 };
 export type AnimationSchedule = {
+  models?: string[];
   prompt?: string;
   schedule_type?: "interval" | "daily";
   daily_time?: string;
@@ -1693,7 +1698,7 @@ export type ModelCheckAstraProfile = {
 export type ModelCheckAccountStatus = {
   confidence?: AccountQualityStatistics;
   account_id: string;
-  status: "consistent" | "inconsistent" | "inconclusive";
+  status: "consistent" | "inconsistent" | "inconclusive" | "not_checked";
   checked_at: string;
   task_id: string;
 };
@@ -2157,6 +2162,29 @@ export const api = {
     }),
   workbenchAccounts: (signal?: AbortSignal) =>
     request<WorkbenchAccount[]>("/api/account-workbench/accounts", { signal }),
+  workbenchAccountActionPreview: (id: string, signal?: AbortSignal) =>
+    request<WorkbenchAccountActionPreview>(
+      `/api/account-workbench/accounts/${encodeURIComponent(id)}/action-preview`,
+      { signal },
+    ),
+  startWorkbenchAccountAction: (id: string, input: WorkbenchAccountActionInput) =>
+    request<Task>(`/api/account-workbench/accounts/${encodeURIComponent(id)}/actions`, {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+  workbenchAccountGroups: (id: string, signal?: AbortSignal) =>
+    request<AccountGroupsPreview & { account_version: string }>(
+      `/api/account-workbench/accounts/${encodeURIComponent(id)}/groups`,
+      { signal },
+    ),
+  moveWorkbenchAccountGroups: (
+    id: string,
+    input: AccountGroupsInput & { account_version: string },
+  ) =>
+    request<Task>(`/api/account-workbench/accounts/${encodeURIComponent(id)}/groups`, {
+      method: "PUT",
+      body: JSON.stringify(input),
+    }),
   workbenchRememberedAccounts: (signal?: AbortSignal) =>
     request<RememberedAccount[]>("/api/account-workbench/remembered-accounts", { signal }),
   previewWorkbenchRememberedLogin: (id: string, revision: number, signal?: AbortSignal) =>

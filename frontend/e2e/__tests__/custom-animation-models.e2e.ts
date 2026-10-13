@@ -1,3 +1,4 @@
+import { selectDetectionModels } from "./fixtures/model-selection";
 import { expect, test } from "@playwright/test";
 import { pageFixtures } from "./fixtures/page-shell";
 
@@ -32,12 +33,12 @@ test("自定义接口默认 Astra，手动模型在更换凭据后保留且不�
     await route.abort();
   });
   const model = page.getByRole("combobox", { name: "检测模型" });
-  await expect(model).toHaveValue("gpt-6-astra");
-  await model.fill("manual-model");
+  await expect(model).toHaveText("gpt-6-astra");
+  await selectDetectionModels(page, ["manual-model"]);
   await page.keyboard.press("Escape");
   await page.getByLabel("API Key").fill("replacement-list-key");
   await page.getByRole("textbox", { name: "Base URL" }).fill("https://another.example.invalid/v1");
-  await expect(model).toHaveValue("manual-model");
+  await expect(model).toHaveText("manual-model");
   await expect(page.getByRole("button", { name: "获取模型" })).toBeEnabled();
   expect(calls).toBe(0);
 });
@@ -68,13 +69,14 @@ test("未填写模型时可获取列表并用键盘选择，获取按钮保持�
   const panel = page.getByRole("tabpanel", { name: "自定义接口", exact: true });
   const button = panel.getByRole("button", { name: "获取模型" });
   await expect(button).toHaveCSS("height", "32px");
-  await panel.getByRole("combobox", { name: "检测模型" }).clear();
+  await selectDetectionModels(page, []);
   await button.click();
   await expect(page.getByRole("option", { name: "alpha-model" })).toBeVisible();
+  await expect(page.getByRole("combobox", { name: "搜索或输入模型 ID" })).toBeFocused();
   await page.keyboard.press("ArrowDown");
   await page.keyboard.press("Enter");
-  await expect(panel.getByRole("combobox", { name: "检测模型" })).toHaveValue("alpha-model");
-  await panel.getByRole("combobox", { name: "检测模型" }).fill("beta");
+  await expect(panel.getByRole("combobox", { name: "检测模型" })).toHaveText("alpha-model");
+  await page.getByRole("combobox", { name: "搜索或输入模型 ID" }).fill("beta");
   await expect(page.getByRole("option", { name: "beta-model" })).toBeVisible();
   await expect(page.getByRole("option", { name: "alpha-model" })).toHaveCount(0);
 });
@@ -86,10 +88,10 @@ test("读取失败时保留手填模型并允许重试", async ({ page }) => {
     else await route.fulfill({ json: { models: ["manual-model"] } });
   });
   const model = page.getByRole("combobox", { name: "检测模型" });
-  await model.fill("manual-model");
+  await selectDetectionModels(page, ["manual-model"]);
   await page.getByRole("button", { name: "获取模型", exact: true }).click();
   await expect(page.getByText("Key 无效，请检查后重试", { exact: true })).toBeVisible();
-  await expect(model).toHaveValue("manual-model");
+  await expect(model).toHaveText("manual-model");
   failed = false;
   await page.getByRole("button", { name: "获取模型", exact: true }).click();
   await expect(page.getByRole("option", { name: "manual-model" })).toBeVisible();
@@ -106,7 +108,7 @@ test("修改 Key 会取消正在读取的旧列表，新请求只展示新凭据
       await route.fulfill({ json: { models: ["stale-model"] } }).catch(() => {});
     } else await route.fulfill({ json: { models: ["current-model"] } });
   });
-  await page.getByRole("combobox", { name: "检测模型" }).clear();
+  await selectDetectionModels(page, []);
   const aborted = page.waitForEvent("requestfailed", {
     predicate: (request) => request.url().endsWith("/animations/models"),
   });
@@ -129,10 +131,13 @@ test("上游返回空列表时仍允许手动输入模型", async ({ page }) => 
   });
   const button = page.getByRole("button", { name: "获取模型", exact: true });
   await button.click();
-  await expect(page.getByText("暂无匹配模型", { exact: true })).toBeVisible();
+  await expect(page.getByRole("option", { name: "gpt-6-astra", exact: true })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
   const model = page.getByRole("combobox", { name: "检测模型" });
-  await model.fill("manual-model");
-  await expect(model).toHaveValue("manual-model");
+  await selectDetectionModels(page, ["manual-model"]);
+  await expect(model).toHaveText("manual-model");
 });
 
 test("Key 为空时展示字段错误并阻止模型列表请求", async ({ page }) => {

@@ -350,6 +350,7 @@ func run() error {
 	opsTrafficService := opstraffic.New(privateStore, businessStore)
 	routingService := routing.NewService(businessStore)
 	routingWriteService := routingwrite.New(privateStore, businessStore)
+	upstreamSyncTasks.UseBalanceRecovery(routingWriteService.ReconcileBalanceRecovery)
 	managementTasks.UseRateReconciliation(func(ctx context.Context, ids []string, actor string) error {
 		return reconcileConfirmedRates(ctx, ids, actor, businessStore, pricingTasks, routingService, routingWriteService)
 	})

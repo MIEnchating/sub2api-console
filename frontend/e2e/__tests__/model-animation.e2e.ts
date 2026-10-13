@@ -85,7 +85,7 @@ test("独立动画检测页在窄屏可滚动选择、直接开始并展示隔�
   await expect(start).toBeInViewport({ ratio: 1 });
   await expect(start).toHaveCSS("height", "32px");
   await dialog.getByRole("checkbox", { name: /检测 动画检测/ }).check();
-  await expect(dialog.getByRole("combobox", { name: "检测模型" })).toHaveValue("gpt-6-astra");
+  await expect(dialog.getByRole("combobox", { name: "检测模型" })).toHaveText("gpt-6-astra");
   await page.keyboard.press("Escape");
   const settings = dialog.getByRole("group", { name: "动画检测设置", exact: true });
   const region = dialog.getByRole("region", { name: "动画账号卡片", exact: true });
@@ -253,7 +253,7 @@ test("大量账号时仅渲染当前页，跨页编辑和搜索后保留检测�
   await cards.first().focus();
   await page.keyboard.press("Space");
   await expect(cards.first()).toBeChecked();
-  await expect(dialog.getByRole("combobox", { name: "检测模型" })).toHaveValue("gpt-6-astra");
+  await expect(dialog.getByRole("combobox", { name: "检测模型" })).toHaveText("gpt-6-astra");
   await page.keyboard.press("Escape");
   const settings = dialog.getByRole("group", { name: "动画检测设置", exact: true });
   expect(await settings.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(
@@ -320,7 +320,7 @@ test("大量账号时仅渲染当前页，跨页编辑和搜索后保留检测�
   await search.fill("");
   await expect(cards).toHaveCount(12);
   await expect(cards.first()).toBeChecked();
-  await expect(dialog.getByRole("combobox", { name: "检测模型" })).toHaveValue("gpt-6-astra");
+  await expect(dialog.getByRole("combobox", { name: "检测模型" })).toHaveText("gpt-6-astra");
   const start = dialog.getByRole("button", { name: "开始检测（2 个账号）" });
   await start.scrollIntoViewIfNeeded();
   await expect(start).toBeInViewport({ ratio: 1 });
@@ -333,7 +333,7 @@ test("大量账号时仅渲染当前页，跨页编辑和搜索后保留检测�
   ]);
   await page.getByRole("tab", { name: "自定义接口", exact: true }).click();
   await page.getByRole("tab", { name: "账号检测", exact: true }).click();
-  await expect(dialog.getByRole("combobox", { name: "检测模型" })).toHaveValue("gpt-6-astra");
+  await expect(dialog.getByRole("combobox", { name: "检测模型" })).toHaveText("gpt-6-astra");
   await expect(dialog.getByRole("button", { name: "开始检测（2 个账号）" })).toBeEnabled();
   for (const [label, option] of [
     ["分组", "主组"],

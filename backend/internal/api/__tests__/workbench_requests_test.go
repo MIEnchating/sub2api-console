@@ -61,9 +61,18 @@ func TestWorkbenchRoutesBindPreviewToSessionAndRemoveLegacyTools(t *testing.T) {
 		t.Fatalf("unauthenticated records status=%d", response.Code)
 	}
 	for _, method := range []string{http.MethodGet, http.MethodPut} {
+		if response := request(method, "/api/account-workbench/accounts/41/groups", `{}`, ""); response.Code != http.StatusUnauthorized {
+			t.Fatalf("unauthenticated group move status=%d", response.Code)
+		}
+		if response := request(method, "/api/account-workbench/accounts/invalid/groups", `{}`, first); response.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("invalid group account ID status=%d", response.Code)
+		}
 		if response := request(method, "/api/account-workbench/import-model", `{}`, ""); response.Code != http.StatusUnauthorized {
 			t.Fatalf("unauthenticated model settings status=%d", response.Code)
 		}
+	}
+	if response := request(http.MethodPut, "/api/account-workbench/accounts/41/groups", `{"group_ids":["8"]}`, first); response.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("group move without confirmed version status=%d", response.Code)
 	}
 	modelSetting := request(http.MethodPut, "/api/account-workbench/import-model", `{"model":"saved-model","revision":0}`, first)
 	if modelSetting.Code != http.StatusOK {

@@ -1,3 +1,4 @@
+import { selectDetectionModels } from "./model-selection-helper";
 import { seedDictionaries } from "@/test/dictionary-fixtures";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -65,7 +66,7 @@ function fill(): void {
     target: { value: "https://custom.example.invalid/v1" },
   });
   fireEvent.change(screen.getByLabelText("API Key"), { target: { value: secret } });
-  expect(screen.getByRole("combobox", { name: "检测模型" })).toHaveValue("gpt-6-astra");
+  expect(screen.getByRole("combobox", { name: "检测模型" })).toHaveTextContent("gpt-6-astra");
 }
 
 it("没有账号时可确认自定义接口并创建任务，提交成功后清除 Key 和 mutation 中的凭据", async () => {
@@ -84,9 +85,7 @@ it("没有账号时可确认自定义接口并创建任务，提交成功后清�
   const view = await setup();
   expect(screen.getByText("暂无自定义接口检测记录")).toBeVisible();
   fill();
-  fireEvent.change(screen.getByRole("combobox", { name: "检测模型" }), {
-    target: { value: "custom-model" },
-  });
+  await selectDetectionModels(["custom-model"]);
   expect(screen.getByLabelText("API Key")).toHaveAttribute("type", "password");
   await userEvent.click(screen.getByRole("button", { name: "开始检测" }));
   const dialog = await screen.findByRole("dialog", { name: "确认自定义接口检测" });
@@ -303,6 +302,35 @@ it("自定义历史读取失败时提供重试入口，恢复后展示空列表"
   await userEvent.click(retry);
   expect(await panel.findByText("暂无自定义接口检测记录")).toBeVisible();
   expect(panel.queryByRole("button", { name: "重新读取" })).not.toBeInTheDocument();
+  view.unmount();
+  view.client.clear();
+});
+
+it("自定义接口添加多个模型后确认完整范围，提交同一任务且清除密钥", async () => {
+  const calls: unknown[] = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === "POST") {
+        calls.push(JSON.parse(String(init.body)));
+        return Response.json(queued);
+      }
+      return Response.json(String(input).includes("/api/tasks/") ? queued : [queued]);
+    }),
+  );
+  const view = await setup();
+  fill();
+  const user = userEvent.setup();
+  await selectDetectionModels(["second-model"], false);
+  await user.click(screen.getByRole("button", { name: "开始检测" }));
+  const dialog = await screen.findByRole("dialog", { name: "确认自定义接口检测" });
+  expect(dialog).toHaveTextContent("gpt-6-astra、second-model");
+  await user.click(within(dialog).getByRole("button", { name: "确认并开始检测" }));
+  await waitFor(() => expect(calls).toHaveLength(1));
+  expect(calls[0]).toMatchObject({
+    custom: { model: "gpt-6-astra", models: ["gpt-6-astra", "second-model"] },
+  });
+  await waitFor(() => expect(screen.getByLabelText("API Key")).toHaveValue(""));
   view.unmount();
   view.client.clear();
 });

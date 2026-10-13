@@ -24,6 +24,8 @@ export const AnimationAccountResult = memo(function AnimationAccountResult(props
   result: AnimationResult;
   layout?: "card" | "fill" | "record";
   activity?: AnimationActivity;
+  showManualVerdict?: boolean;
+  showRequestID?: boolean;
   retryDisabled: boolean;
   onRetry: (target: AnimationTarget) => void;
 }): ReactElement {
@@ -98,14 +100,16 @@ export const AnimationAccountResult = memo(function AnimationAccountResult(props
           {resultStatusLabels[result.status]}
         </span>
       </div>
-      <Tooltip>
-        <TooltipTrigger
-          render={<p className="min-w-0 truncate font-mono text-[11px] text-muted-foreground" />}
-        >
-          请求 ID：{result.request_id}
-        </TooltipTrigger>
-        <TooltipContent>请求 ID：{result.request_id}</TooltipContent>
-      </Tooltip>
+      {props.showRequestID !== false ? (
+        <Tooltip>
+          <TooltipTrigger
+            render={<p className="min-w-0 truncate font-mono text-[11px] text-muted-foreground" />}
+          >
+            请求 ID：{result.request_id}
+          </TooltipTrigger>
+          <TooltipContent>请求 ID：{result.request_id}</TooltipContent>
+        </Tooltip>
+      ) : null}
       <div className="flex min-w-0 shrink-0 items-center justify-between gap-2 text-xs text-muted-foreground tabular-nums">
         <Tooltip>
           <TooltipTrigger
@@ -121,7 +125,9 @@ export const AnimationAccountResult = memo(function AnimationAccountResult(props
         <span className="shrink-0">耗时 {(result.duration_ms / 1000).toFixed(1)} 秒</span>
         <AnimationResultDetails result={result} />
       </div>
-      <AnimationManualVerdictControls result={result} disabled={props.retryDisabled} />
+      {props.showManualVerdict !== false ? (
+        <AnimationManualVerdictControls result={result} disabled={props.retryDisabled} />
+      ) : null}
     </div>
   );
 });

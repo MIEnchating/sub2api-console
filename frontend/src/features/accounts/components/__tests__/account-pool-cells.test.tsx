@@ -261,8 +261,8 @@ describe("account pool cells", () => {
     const markup = renderToStaticMarkup(<AccountIdentityCell account={account} />);
 
     expect(markup.indexOf("primary-account")).toBeLessThan(markup.indexOf("#63005"));
-    expect(markup.indexOf("#63005")).toBeLessThan(markup.indexOf("api.example.test"));
-    expect(markup.indexOf("api.example.test")).toBeLessThan(
+    expect(markup.indexOf("#63005")).toBeLessThan(markup.indexOf("gateway.example.test"));
+    expect(markup.indexOf("gateway.example.test")).toBeLessThan(
       markup.indexOf("分组：codex、fallback"),
     );
     expect(markup).toContain("API Key");

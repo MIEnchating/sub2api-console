@@ -27,6 +27,7 @@ export function useAnimationTasks(active = true) {
   const [readTask] = useState(createAnimationTaskReader);
   const [createdIDs, setCreatedIDs] = useState<string[]>([]);
   const displayedIDs = useRef(new Set<string>());
+  const confidenceVersions = useRef(new Map<string, string>());
   const submittingRef = useRef(new Set<string>());
   const [submitting, setSubmitting] = useState(new Set<string>());
   const precheckSubmittingRef = useRef(new Set<string>());
@@ -91,6 +92,16 @@ export function useAnimationTasks(active = true) {
         active ? taskPollInterval(query, 1000) : false,
     })),
   });
+  useEffect(() => {
+    let changed = false;
+    for (const task of queries.tasks) {
+      if (!task || !taskIsTerminal(task)) continue;
+      if (confidenceVersions.current.get(task.id) === task.updated_at) continue;
+      confidenceVersions.current.set(task.id, task.updated_at);
+      changed = true;
+    }
+    if (changed) void client.invalidateQueries({ queryKey: ["model-check-account-statuses"] });
+  }, [client, queries.tasks]);
   useEffect(() => {
     for (const id of ids) displayedIDs.current.add(id);
     if (!history.isSuccess || !history.isFetchedAfterMount || history.isFetching) return;

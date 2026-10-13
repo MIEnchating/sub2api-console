@@ -122,7 +122,7 @@ func TestAnimationPrecheckAsksOnlyCandyQuestionAndSeparatesVerdicts(t *testing.T
 				t.Fatalf("unexpected result = %s", raw)
 			}
 			statuses, err := f.service.AccountStatuses(context.Background())
-			if err != nil || len(statuses) != 0 {
+			if err != nil || len(statuses) != 1 || statuses[0].Status != "not_checked" || statuses[0].TaskID != "" {
 				t.Fatal("precheck must not change account behavioral status")
 			}
 		})

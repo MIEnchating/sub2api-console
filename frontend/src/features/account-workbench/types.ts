@@ -169,3 +169,20 @@ export type MaintenancePreview = {
 export type WorkbenchLoginPrompt = { id: string; kind: "password" | "email_code" | "totp_code" };
 
 export type ImportModelSettings = { model: string; revision: number };
+
+export type WorkbenchAccountActionPreview = {
+  account_id: string;
+  account_version: string;
+  target_version: string;
+  platform_present: boolean;
+  schedulable: boolean;
+  remembered: RememberedAccount | null;
+};
+export type WorkbenchAccountActionInput = {
+  action: "delete" | "scheduling";
+  account_version: string;
+  target_version: string;
+  schedulable?: boolean;
+  delete_remembered: boolean;
+  remembered_revision: number;
+};

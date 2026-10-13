@@ -560,6 +560,8 @@ function UpstreamEditor(props: Props & { host: string }) {
       }
       void queryClient.invalidateQueries({ queryKey: ["upstreams"] });
       void queryClient.invalidateQueries({ queryKey: ["upstream-groups"] });
+      void queryClient.invalidateQueries({ queryKey: ["accounts"] });
+      void queryClient.invalidateQueries({ queryKey: ["account-detail"] });
       if (lifetime.current.signal.aborted) return;
       form.reset({
         ...emptyValues,

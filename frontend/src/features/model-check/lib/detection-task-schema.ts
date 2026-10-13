@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { animationScheduleSchema } from "./animation-schema";
+import { animationScheduleSchema, additionalModels } from "./animation-schema";
 import { detectionTaskStages } from "./detection-task-stages";
 
 export const detectionTaskSchema = z
@@ -17,6 +17,7 @@ export const detectionTaskSchema = z
       .min(1, "请选择至少一个分组")
       .max(100, "最多选择 100 个分组"),
     model: z.string(),
+    additional_models: additionalModels,
     prompt: z.string().max(10000, "提示词不能超过 10000 个字符").optional(),
     animation: z.boolean(),
     precheck: z.boolean(),

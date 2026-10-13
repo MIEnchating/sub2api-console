@@ -1,6 +1,6 @@
 import { useState, type ReactElement } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { RefreshCw, ShieldCheck, Trash2 } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
+import { RefreshCw, ShieldCheck, Trash2, LogIn } from "lucide-react";
 import { api } from "@/api";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -14,15 +14,8 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import {
-  Dialog,
-  DialogBody,
-  DialogContent,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import { notifyOperationError } from "@/lib/operation-feedback";
+import { TableActionButton } from "@/components/data-table/table-action-button";
+import { AccountActionDialog } from "./account-action-dialog";
 import { DataTablePagination } from "@/components/data-table/pagination";
 import { useClientPagination } from "@/hooks/use-client-pagination";
 import { RememberedLogin } from "./remembered-login";
@@ -33,7 +26,6 @@ import { WorkbenchEmptyState, WorkbenchToolbar } from "./workbench-section";
 const emptyAccounts: RememberedAccount[] = [];
 
 export function RememberedAccountList(props: { onStarted?: () => void }): ReactElement {
-  const client = useQueryClient();
   const query = useQuery({
     queryKey: rememberedAccountKey,
     queryFn: ({ signal }) => api.workbenchRememberedAccounts(signal),
@@ -41,15 +33,6 @@ export function RememberedAccountList(props: { onStarted?: () => void }): ReactE
   const [login, setLogin] = useState<RememberedAccount | null>(null);
   const pagination = useClientPagination(query.data ?? emptyAccounts);
   const [pendingDelete, setPendingDelete] = useState<RememberedAccount | null>(null);
-  const remove = useMutation({
-    mutationFn: (account: RememberedAccount) =>
-      api.deleteWorkbenchRememberedAccount(account.id, account.revision),
-    onSuccess: () => {
-      setPendingDelete(null);
-      void client.invalidateQueries({ queryKey: rememberedAccountKey });
-    },
-    onError: (error) => notifyOperationError(error, "已记住账号删除失败"),
-  });
   if (query.isPending) {
     return (
       <section id="remembered-accounts" aria-label="已记住账号" className="grid gap-3">
@@ -95,7 +78,7 @@ export function RememberedAccountList(props: { onStarted?: () => void }): ReactE
                 <TableHead>站点账号 ID</TableHead>
                 <TableHead>登录资料</TableHead>
                 <TableHead>最近导入</TableHead>
-                <TableHead className="w-52">操作</TableHead>
+                <TableHead className="w-24">操作</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -119,25 +102,27 @@ export function RememberedAccountList(props: { onStarted?: () => void }): ReactE
                     {new Date(account.last_imported_at).toLocaleString("zh-CN")}
                   </TableCell>
                   <TableCell>
-                    <div className="flex gap-1">
-                      <Button
-                        variant="outline"
-                        disabled={!account.login_available || remove.isPending}
-                        aria-label={`重新登录 ${account.email || account.name || account.id}`}
+                    <div
+                      role="group"
+                      aria-label="已记住账号操作"
+                      className="ml-auto flex w-fit gap-1"
+                    >
+                      <TableActionButton
+                        label="重新登录"
+                        disabled={!account.login_available}
+                        ariaLabel={`重新登录 ${account.email || account.name || account.id}`}
                         onClick={() => setLogin(account)}
                       >
-                        重新登录
-                      </Button>
-                      <Button
-                        variant="destructive"
-
-                        aria-label={`删除 ${account.name || account.email || account.id}`}
-                        disabled={remove.isPending}
+                        <LogIn aria-hidden="true" />
+                      </TableActionButton>
+                      <TableActionButton
+                        label="删除账号"
+                        tone="danger"
+                        ariaLabel={`删除 ${account.name || account.email || account.id}`}
                         onClick={() => setPendingDelete(account)}
                       >
                         <Trash2 aria-hidden="true" />
-                        删除
-                      </Button>
+                      </TableActionButton>
                     </div>
                   </TableCell>
                 </TableRow>
@@ -164,31 +149,10 @@ export function RememberedAccountList(props: { onStarted?: () => void }): ReactE
         />
       )}
       {pendingDelete && (
-        <Dialog open onOpenChange={(open) => !open && !remove.isPending && setPendingDelete(null)}>
-          <DialogContent>
-            <DialogHeader>
-              <DialogTitle>删除已记住账号</DialogTitle>
-            </DialogHeader>
-            <DialogBody>
-              <p className="text-sm">
-                删除 {pendingDelete.email || pendingDelete.name}（#{pendingDelete.account_id}
-                ）的已保存登录资料，后续需重新导入才能使用；线上账号保留。
-              </p>
-            </DialogBody>
-            <DialogFooter>
-              <Button
-                variant="outline"
-                disabled={remove.isPending}
-                onClick={() => setPendingDelete(null)}
-              >
-                返回
-              </Button>
-              <Button disabled={remove.isPending} onClick={() => remove.mutate(pendingDelete)}>
-                确认删除
-              </Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
+        <AccountActionDialog
+          target={{ kind: "remembered", account: pendingDelete }}
+          onClose={() => setPendingDelete(null)}
+        />
       )}
     </section>
   );

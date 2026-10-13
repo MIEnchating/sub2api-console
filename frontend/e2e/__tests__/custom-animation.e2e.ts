@@ -85,7 +85,7 @@ test("无账号时自定义接口可确认生成、查看动画并清除 Key，�
   await page.getByRole("option", { name: "Anthropic" }).click();
   await panel.getByRole("textbox", { name: "Base URL" }).fill(baseURL);
   await panel.getByLabel("API Key").fill("isolated-custom-key");
-  await expect(panel.getByRole("combobox", { name: "检测模型" })).toHaveValue("gpt-6-astra");
+  await expect(panel.getByRole("combobox", { name: "检测模型" })).toHaveText("gpt-6-astra");
   const start = panel.getByRole("button", { name: "开始检测", exact: true });
   await expect(start).toHaveCSS("height", "32px");
   await start.click();

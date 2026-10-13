@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { api, type ModelCheckAccountStatus, type Task } from "@/api";
 import { account } from "@/features/accounts/__tests__/fixtures";
@@ -106,6 +107,32 @@ it("链接账号已删除时清除选择并禁止提交", async () => {
   await waitFor(() => expect(screen.queryByText("同名账号（#99）")).not.toBeInTheDocument());
   expect(screen.getByRole("button", { name: /开始检测/ })).toBeDisabled();
   expect(screen.queryByRole("checkbox", { name: /gpt-5.6-sol/ })).not.toBeInTheDocument();
+});
+
+it("只有智商检测统计时显示置信度且不提供常规模型检测的上次结果入口", async () => {
+  const view = setup();
+  await act(async () => {
+    view.client.setQueryData(
+      ["model-check-account-statuses"],
+      [
+        {
+          account_id: "41",
+          status: "not_checked",
+          checked_at: "",
+          task_id: "",
+          confidence: {
+            evaluated_at: "2026-10-13T00:00:00Z",
+            short: { score: 20.7, samples: 1, passed: 1, failed: 0, inconclusive: 0 },
+            long: { score: 20.7, samples: 1, passed: 1, failed: 0, inconclusive: 0 },
+          },
+        },
+      ],
+    );
+  });
+  expect(screen.queryByRole("button", { name: "查看上次检测结果" })).not.toBeInTheDocument();
+  const table = screen.getByTestId("model-check-account-desktop-table");
+  await userEvent.hover(within(table).getByRole("button", { name: "查看账号 41 检测统计" }));
+  expect(await screen.findByLabelText("置信度短期：20.7%")).toBeVisible();
 });
 
 it("上次结果尚未读回时展示加载状态，读取失败保留关闭和重试入口", async () => {

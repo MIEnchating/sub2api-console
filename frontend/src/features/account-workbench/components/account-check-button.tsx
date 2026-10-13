@@ -1,7 +1,8 @@
 import { useState, type ReactElement } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { api } from "@/api";
-import { Button } from "@/components/ui/button";
+import { TableActionButton } from "@/components/data-table/table-action-button";
+import { ScanSearch, LoaderCircle } from "lucide-react";
 import {
   Dialog,
   DialogBody,
@@ -46,17 +47,21 @@ export function AccountCheckButton(props: { account: WorkbenchAccount }): ReactE
     .find((row) => row.success && row.data.account_id === props.account.id);
   return (
     <>
-      <Button
-        variant="outline"
+      <TableActionButton
+        label={running ? "检测中…" : "智商检测"}
         disabled={running}
-        aria-label={`智商检测 ${props.account.name || props.account.id}`}
+        ariaLabel={`智商检测 ${props.account.name || props.account.id}`}
         onClick={() => {
           setOpen(true);
           start.mutate();
         }}
       >
-        {running ? "检测中…" : "智商检测"}
-      </Button>
+        {running ? (
+          <LoaderCircle aria-hidden="true" className="animate-spin" />
+        ) : (
+          <ScanSearch aria-hidden="true" />
+        )}
+      </TableActionButton>
       {open && (
         <Dialog open onOpenChange={setOpen}>
           <DialogContent width="wide">

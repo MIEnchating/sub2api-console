@@ -62,6 +62,10 @@ func (store *recordingTasks) AnimationHistory(ctx context.Context) ([]taskstore.
 	return store.ListBySkill(ctx, "sub2api-model-animation", 10000)
 }
 
+func (store *recordingTasks) DetectionConfidenceHistory(context.Context, time.Time) ([]taskstore.DetectionConfidenceResult, error) {
+	return nil, nil
+}
+
 func TestAccountStatusesUseLatestModelCheckResultPerAccount(t *testing.T) {
 	store := &recordingTasks{tasks: []taskstore.Task{
 		{

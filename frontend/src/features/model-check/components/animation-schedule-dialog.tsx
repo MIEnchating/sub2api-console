@@ -1,3 +1,4 @@
+import { DetectionModelSelect } from "./detection-model-select";
 import { animationTestModel } from "../constants";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
@@ -35,6 +36,7 @@ export function AnimationScheduleDialog(props: {
   accountID: string;
   accountName: string;
   model: string;
+  additionalModels?: string[];
   mode?: "animation" | "precheck";
   schedule?: AnimationSchedule;
   targets?: ScheduleTarget[];
@@ -59,7 +61,13 @@ export function AnimationScheduleDialog(props: {
       timeout_seconds: 120,
       version: 0,
       ...props.schedule,
-      model: props.schedule?.model ?? (props.model.trim() || animationTestModel),
+      model:
+        props.schedule?.models?.[0] ??
+        props.schedule?.model ??
+        (props.model.trim() || animationTestModel),
+      additional_models: props.schedule
+        ? (props.schedule.models?.slice(1) ?? [])
+        : props.additionalModels,
       daily_time: undefined,
       daily_times: props.schedule?.daily_times ?? [props.schedule?.daily_time ?? ""],
       mode,
@@ -80,10 +88,12 @@ export function AnimationScheduleDialog(props: {
     },
   });
   const submit = form.handleSubmit((value) => {
+    const { additional_models, ...settings } = value;
     const payload = targets
       .filter((target) => value.enabled || target.schedule)
       .map((target): AnimationSchedule => ({
-        ...value,
+        ...settings,
+        models: additional_models?.length ? [value.model, ...additional_models] : undefined,
         account_id: target.accountID,
         version: target.schedule?.version ?? 0,
         mode: mode === "precheck" ? "precheck" : undefined,
@@ -108,7 +118,7 @@ export function AnimationScheduleDialog(props: {
       ? precheckQuestionSummary(form.getValues("precheck_questions"))
       : "动画检测";
   const confirmationAction = enabled
-    ? `使用模型 ${form.getValues("model")}，${timing}执行${action}并产生 API 用量`
+    ? `使用模型 ${[form.getValues("model"), ...(form.getValues("additional_models") ?? [])].join("、")}，${timing}执行${action}并产生 API 用量`
     : "关闭所选账号的此类自动检测，未配置的账号自动跳过";
   return (
     <>
@@ -159,15 +169,24 @@ export function AnimationScheduleDialog(props: {
                   <FieldError message={form.formState.errors.precheck_questions?.message} />
                 </div>
               )}
-              <label className="block space-y-1 text-sm">
-                检测模型
-                <Input
-                  {...form.register("model")}
+              <div className="space-y-1 text-sm">
+                <p>检测模型</p>
+                <DetectionModelSelect
+                  model={form.watch("model")}
+                  additionalModels={form.watch("additional_models")}
+                  onChange={(model, additional) => {
+                    form.setValue("model", model, { shouldDirty: true, shouldValidate: true });
+                    form.setValue("additional_models", additional, {
+                      shouldDirty: true,
+                      shouldValidate: true,
+                    });
+                  }}
                   disabled={save.isPending}
-                  aria-invalid={!!form.formState.errors.model}
+                  invalid={!!form.formState.errors.model}
                 />
-              </label>
+              </div>
               <FieldError message={form.formState.errors.model?.message} />
+
               {mode !== "precheck" ? <AnimationPromptDialog disabled={save.isPending} /> : null}
               <AnimationScheduleTiming form={form} pending={save.isPending} />
               <label className="block space-y-1 text-sm">

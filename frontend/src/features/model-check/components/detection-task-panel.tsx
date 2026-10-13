@@ -92,7 +92,7 @@ export function DetectionTaskPanel(): ReactElement {
                 </div>
                 <div className="min-w-0 space-y-1">
                   <dt className="text-xs text-muted-foreground">检测模型</dt>
-                  <dd className="wrap-anywhere">{plan.model}</dd>
+                  <dd className="wrap-anywhere">{(plan.models ?? [plan.model]).join("、")}</dd>
                 </div>
               </dl>
               <div className="flex flex-wrap gap-2" role="group" aria-label="检测内容">

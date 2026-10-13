@@ -1,3 +1,4 @@
+import { selectDetectionModels } from "./fixtures/model-selection";
 import { dictionaryResponse } from "./fixtures/dictionaries";
 import { expect, test } from "@playwright/test";
 import type { DetectionTask } from "../../src/api";
@@ -61,7 +62,7 @@ test("分组任务仅选择动画和前置检测、保存多时间并查看运�
       "/api/setup/status": { initialized: true, configuration_errors: [] },
       "/api/auth/session": { authenticated: true, username: "test" },
       "/api/accounts": [],
-      "/api/groups": [
+      "/api/catalog/groups": [
         { id: "7", name: "主分组" },
         { id: "8", name: "备用分组" },
       ],
@@ -83,8 +84,8 @@ test("分组任务仅选择动画和前置检测、保存多时间并查看运�
   await page.getByRole("option", { name: "主分组（ID 7）" }).click();
   await page.getByRole("option", { name: "备用分组（ID 8）" }).click();
   await page.keyboard.press("Escape");
-  await expect(editor.getByRole("textbox", { name: "检测模型" })).toHaveValue("gpt-6-astra");
-  await editor.getByRole("textbox", { name: "检测模型" }).fill("managed-model");
+  await expect(editor.getByRole("combobox", { name: "检测模型" })).toHaveText("gpt-6-astra");
+  await selectDetectionModels(page, ["managed-model"]);
   await editor.getByRole("checkbox", { name: "动画检测", exact: true }).uncheck();
   await editor.getByRole("button", { name: "保存任务" }).click();
   await expect(editor.getByText("请至少选择一项检测内容")).toBeVisible();
@@ -107,7 +108,7 @@ test("分组任务仅选择动画和前置检测、保存多时间并查看运�
     }),
   );
   expect(bounds).toHaveLength(2);
-  if (test.info().project.name === "desktop-light") {
+  if (page.viewportSize()!.width >= 1024) {
     expect(bounds[0].y).toBe(bounds[1].y);
     expect((await editor.boundingBox())!.width).toBeGreaterThan(900);
   } else {

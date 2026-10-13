@@ -56,6 +56,10 @@ export function ExchangeGroupSetEditor(props: {
     [...sections.entries()],
     (section) => section[0],
   );
+  const availableGroupCount = orderedSections.reduce(
+    (count, [, groups]) => count + groups.filter((group) => group.available).length,
+    0,
+  );
   const complete = props.groupSet.length >= 2 && !platformMismatch;
   let statusLabel = `已选 ${props.groupSet.length} / 至少 2 个`;
   if (platformMismatch) statusLabel = "平台混用";
@@ -131,7 +135,7 @@ export function ExchangeGroupSetEditor(props: {
             <Badge variant="secondary">{platformLabel(selectedPlatform)}</Badge>
           ) : null}
           <span className="text-muted-foreground text-xs tabular-nums">
-            {visibleGroups.filter((group) => group.available).length} 个可用
+            {availableGroupCount} 个可用
           </span>
         </div>
       </div>

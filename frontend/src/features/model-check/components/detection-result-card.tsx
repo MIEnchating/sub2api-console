@@ -1,6 +1,6 @@
 import { AnimationResultMetrics } from "./animation-result-metrics";
 import { PrecheckResultMetrics } from "./precheck-result-metrics";
-import type { ReactElement } from "react";
+import { type ReactElement } from "react";
 import type { Task } from "@/api";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { AccountRow } from "../lib/detection-task-results";
@@ -20,13 +20,23 @@ import { TerminalRoundResults } from "./terminal-round-results";
 import { detectionMissingResult } from "../lib/detection-task-outcome";
 export function DetectionResultCard(props: {
   row: AccountRow;
+  selectedModel?: string;
   active: boolean;
   animation?: boolean;
   precheck: boolean;
   terminal: boolean;
   task?: Task;
 }): ReactElement {
-  const row = props.row;
+  const model = props.selectedModel;
+  const row = {
+    ...props.row,
+    animation:
+      props.row.animations?.find((item) => item.model === model) ??
+      (props.row.animation?.model === model || !model ? props.row.animation : undefined),
+    precheck:
+      props.row.prechecks?.find((item) => item.model === model) ??
+      (props.row.precheck?.model === model || !model ? props.row.precheck : undefined),
+  };
   const missing = detectionMissingResult(props.task, props.active);
   const hasMissingResult =
     (props.precheck && !row.precheck) ||

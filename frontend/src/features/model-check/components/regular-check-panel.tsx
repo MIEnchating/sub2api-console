@@ -309,7 +309,8 @@ export function RegularCheckPanel(props: {
   const selectionError =
     form.formState.errors.account_ids?.message ?? form.formState.errors.models?.message;
   const hasPreviousResult =
-    selectedAccountIDs.length === 1 && Boolean(checkStatusByAccountID.get(selectedAccountIDs[0]));
+    selectedAccountIDs.length === 1 &&
+    Boolean(checkStatusByAccountID.get(selectedAccountIDs[0])?.task_id);
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-3">

@@ -1,3 +1,4 @@
+import { ResultModelSelector } from "./result-model-selector";
 import {
   useCallback,
   useEffect,
@@ -51,6 +52,8 @@ export function AnimationSelection(props: {
   activities: Map<string, AnimationActivity>;
   busyIDs: Set<string>;
   results: Map<string, AnimationResult>;
+  modelResults?: Map<string, AnimationResult[]>;
+  modelPrecheckResults?: Map<string, AnimationResult[]>;
   precheckResults?: Map<string, AnimationResult>;
   precheckStatuses?: Map<string, Task["status"]>;
   onPrecheck: (value: AnimationForm) => void;
@@ -72,6 +75,32 @@ export function AnimationSelection(props: {
   const setFilters = props.onFiltersChange ?? setLocalFilters;
   const selected = useWatch({ control: props.form.control, name: "account_ids", exact: true });
   const accounts = props.accounts.data ?? emptyAccounts;
+  const [selectedResultModel, setSelectedResultModel] = useState<string>();
+  const resultModels = useMemo(() => {
+    const results = precheckMode ? props.precheckResults : props.results;
+    const modelResults = precheckMode ? props.modelPrecheckResults : props.modelResults;
+    return [
+      ...new Set(
+        accounts.flatMap((account) => {
+          const choices = modelResults?.get(account.id);
+          if (choices?.length) return choices.map((result) => result.model);
+          const result = results?.get(account.id);
+          return result ? [result.model] : [];
+        }),
+      ),
+    ];
+  }, [
+    accounts,
+    precheckMode,
+    props.results,
+    props.precheckResults,
+    props.modelResults,
+    props.modelPrecheckResults,
+  ]);
+  const resultModel =
+    selectedResultModel && resultModels.includes(selectedResultModel)
+      ? selectedResultModel
+      : resultModels[0];
   const accountIDs = useMemo(() => new Set(accounts.map((account) => account.id)), [accounts]);
   const availableSelected = useMemo(
     () => selected.filter((id) => accountIDs.has(id) && !props.busyIDs.has(id)),
@@ -238,6 +267,13 @@ export function AnimationSelection(props: {
           </div>
         </div>
       </div>
+      <div className="shrink-0">
+        <ResultModelSelector
+          models={resultModels}
+          value={resultModel}
+          onChange={setSelectedResultModel}
+        />
+      </div>
       <div
         ref={scrollRef}
         role="region"
@@ -266,7 +302,10 @@ export function AnimationSelection(props: {
               key={account.id}
               mode={precheckMode ? "precheck" : "animation"}
               account={account}
+              selectedModel={resultModel}
               result={props.results.get(account.id)}
+              modelResults={props.modelResults?.get(account.id)}
+              modelPrecheckResults={props.modelPrecheckResults?.get(account.id)}
               precheckResult={props.precheckResults?.get(account.id)}
               precheckStatus={props.precheckStatuses?.get(account.id)}
               taskStatus={props.statuses.get(account.id)}

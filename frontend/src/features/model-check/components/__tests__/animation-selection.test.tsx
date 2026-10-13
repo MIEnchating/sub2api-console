@@ -1,3 +1,4 @@
+import { selectDetectionModels } from "./model-selection-helper";
 import { seedDictionaries } from "@/test/dictionary-fixtures";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -74,9 +75,8 @@ it("选择多个账号和统一模型后直接按稳定 ID 创建批量任务且
   expect(screen.getByRole("button", { name: /开始检测/ })).toBeDisabled();
   await user.click(screen.getByRole("checkbox", { name: /检测 甲账号/ }));
   await user.click(screen.getByRole("checkbox", { name: /检测 乙账号/ }));
-  expect(screen.getByRole("combobox", { name: "检测模型" })).toHaveValue("gpt-6-astra");
-  await user.clear(screen.getByRole("combobox", { name: "检测模型" }));
-  await user.type(screen.getByRole("combobox", { name: "检测模型" }), "custom-model");
+  expect(screen.getByRole("combobox", { name: "检测模型" })).toHaveTextContent("gpt-6-astra");
+  await selectDetectionModels(["custom-model"]);
   await user.keyboard("{Escape}");
   await user.click(screen.getByRole("button", { name: "开始检测（2 个账号）" }));
   expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
@@ -118,7 +118,7 @@ it("默认模型无需读取上游模型列表，选择账号后可直接检测"
   vi.stubGlobal("fetch", fetcher);
   const view = setup();
   fireEvent.click(screen.getByRole("checkbox", { name: /检测 甲账号/ }));
-  expect(screen.getByRole("combobox", { name: "检测模型" })).toHaveValue("gpt-6-astra");
+  expect(screen.getByRole("combobox", { name: "检测模型" })).toHaveTextContent("gpt-6-astra");
   expect(screen.getByRole("button", { name: "获取模型" })).toBeEnabled();
   expect(fetcher.mock.calls.some(([url]) => String(url).endsWith("/models"))).toBe(false);
   expect(screen.getByRole("button", { name: "开始检测（1 个账号）" })).toBeEnabled();
@@ -199,6 +199,37 @@ it("默认模型无校验错误，超时字段错误不会覆盖主体", async (
   expect(
     document.querySelector('[data-slot="animation-settings-feedback"]'),
   ).not.toBeInTheDocument();
-  expect(screen.getByRole("combobox", { name: "检测模型" })).toHaveValue("gpt-6-astra");
+  expect(screen.getByRole("combobox", { name: "检测模型" })).toHaveTextContent("gpt-6-astra");
+  view.client.clear();
+});
+
+it.each(["账号检测", "前置检测"])("%s 添加多个模型后按稳定账号提交完整模型列表", async (tab) => {
+  const posts: unknown[] = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === "POST") posts.push(JSON.parse(String(init.body)));
+      if (init?.method !== "POST" && !String(input).includes("/api/tasks/"))
+        return Response.json([]);
+      return Response.json({ id: "multi-task", status: "succeeded", result: {} });
+    }),
+  );
+  const view = setup();
+  const user = userEvent.setup();
+  await user.click(screen.getByRole("tab", { name: tab }));
+  await user.click(screen.getByRole("checkbox", { name: /检测 甲账号/ }));
+  await selectDetectionModels(["second-model"], false);
+  await user.click(
+    screen.getByRole("button", {
+      name: tab === "前置检测" ? "前置检测（1）" : "开始检测（1 个账号）",
+    }),
+  );
+  await waitFor(() =>
+    expect(posts[0]).toMatchObject({
+      targets: [
+        { account_id: "41", model: "gpt-6-astra", models: ["gpt-6-astra", "second-model"] },
+      ],
+    }),
+  );
   view.client.clear();
 });
