@@ -1,10 +1,9 @@
 name: CI
 
 on:
-  push:
-    branches: [main]
   pull_request:
     branches: [main]
+    types: [opened, synchronize, closed]
 
 permissions:
   contents: read
@@ -16,6 +15,7 @@ concurrency:
 jobs:
   checks:
     name: Mandatory checks
+    if: github.event.action != 'closed' || github.event.pull_request.merged == true
     uses: ./.github/workflows/quality.yml
 
   docker:
@@ -26,5 +26,7 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.sha }}
       - name: Build application image
         run: docker build --build-arg VERSION=ci-${GITHUB_SHA::12} -t sub2api-console:ci -f backend/Dockerfile .
