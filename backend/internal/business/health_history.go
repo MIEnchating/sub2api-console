@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+
+	"github.com/MIEnchating/sub2api-console/backend/internal/dbconn"
 )
 
 type healthSampleSelection struct {
@@ -132,6 +134,15 @@ func (s *Store) selectHealthSampleWindowsForAccounts(
 		ordered = append(ordered, accountID)
 	}
 	sort.Strings(ordered)
+	if s.db.Driver() == dbconn.Postgres {
+		var result []healthSampleSelection
+		err := s.WithReadSnapshot(ctx, func(snapshot context.Context) error {
+			var err error
+			result, err = s.selectPostgresHealthWindows(snapshot, ordered, clauses, arguments, limit, normalizeSource)
+			return err
+		})
+		return result, err
+	}
 	result := make([]healthSampleSelection, 0, len(ordered)*limit)
 	for _, accountID := range ordered {
 		accountClauses := append(append([]string{}, clauses...), "account_id=?")
