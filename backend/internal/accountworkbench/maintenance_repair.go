@@ -3,6 +3,7 @@ package accountworkbench
 import (
 	"context"
 	"errors"
+	"github.com/MIEnchating/sub2api-console/backend/internal/business"
 	"maps"
 	"net/http"
 	"strconv"
@@ -34,12 +35,19 @@ func (s *Service) maintainAccount(ctx context.Context, value *privateMaintenance
 		saved.Action = "none"
 		return saved
 	}
-	ctx, release, err := targetguard.Acquire(targetguard.Expect(ctx, value.Target), s.private, mutationguard.Account(id))
+	ctx, release, err := s.acquireGroupMutation(targetguard.Expect(ctx, value.Target), mutationguard.Account(id))
 	if err != nil {
 		result.Reason = "account_busy"
 		return result
 	}
 	defer release()
+	if err = s.requireAccountManaged(ctx, id); err != nil {
+		result.Status, result.Reason = "skipped", "upstream_excluded"
+		if !errors.Is(err, business.ErrUpstreamExcluded) {
+			result.Status, result.Reason = "manual", "verification_failed"
+		}
+		return result
+	}
 	if err = s.maintenanceAllowed(ctx, value); err != nil {
 		return result
 	}
@@ -69,10 +77,19 @@ func (s *Service) maintainAccount(ctx context.Context, value *privateMaintenance
 	}
 	if attempt == nil {
 		condition := maintenanceCondition(account, time.Now().UTC(), value.Public.IntervalMinutes)
+		if condition.Kind == "healthy" && value.Public.CheckEnabled {
+			return s.checkHealthyMaintenanceAccount(ctx, value, account, result)
+		}
 		if condition.Kind != "auth" {
 			return maintenanceDecision(value, result, condition)
 		}
+		binding, proxyErr := s.accountProxy(ctx, value.Target, account)
+		if proxyErr != nil {
+			result.Reason = "verification_failed"
+			return result
+		}
 		attempt = &maintenanceAttempt{Phase: "refreshing", AccountVersion: accountVersion(account), ConfigurationVersion: maintenanceConfiguration(account), CredentialVersion: digest(object(account["credentials"])), Workspace: workspace, User: user, ExpiresAt: time.Now().UTC().Add(2 * time.Hour)}
+		attempt.ProxyBinding = binding
 		value.Attempts[id] = attempt
 		result.Action = "refresh"
 		if err = s.persistMaintenance(value); err != nil {
@@ -99,6 +116,14 @@ func (s *Service) maintainAccount(ctx context.Context, value *privateMaintenance
 	if !attempt.ExpiresAt.After(time.Now().UTC()) {
 		attempt.Credentials = nil
 		result.Reason = "authorization_expired"
+		return result
+	}
+	if attempt.ProxyBinding == nil && text(account["proxy_id"]) != "" {
+		result.Reason = "verification_failed"
+		return result
+	}
+	if err = s.verifyPlatformProxy(ctx, value.Target, attempt.ProxyBinding); err != nil {
+		result.Reason = "verification_failed"
 		return result
 	}
 	actualWorkspace, actualUser := credentialIdentity(object(account["credentials"]))
@@ -148,14 +173,15 @@ func (s *Service) maintainAccount(ctx context.Context, value *privateMaintenance
 			result.Action = "reauthorize"
 		}
 		if value.Public.CheckAfterRepair {
+			proxyURL := proxyBindingURL(attempt.ProxyBinding)
 			credentials := object(account["credentials"])
-			report, checkErr := s.checker.CheckOAuthWithProxy(ctx, id, text(account["name"]), credentials, "gpt-5.6-sol", 30, "")
+			report, checkErr := s.checkMaintenanceCandy(ctx, account, credentials, proxyURL)
 			result.Check = publicCheck(report, credentials)
 			if checkErr != nil {
 				result.Reason = "verification_failed"
 				return result
 			}
-			if text(report["verdict"]) != "SOL_CONSISTENT" {
+			if !passedImportCheck(report) {
 				if attempt.Phase == "refreshed" && ClassifyMaintenanceSignal(report).Kind == "auth" {
 					result.Action = "reauthorize"
 					if err = s.reauthorizeMaintenance(ctx, value, account, attempt); err != nil {
@@ -168,10 +194,10 @@ func (s *Service) maintainAccount(ctx context.Context, value *privateMaintenance
 						return result
 					}
 					credentials = object(account["credentials"])
-					report, checkErr = s.checker.CheckOAuthWithProxy(ctx, id, text(account["name"]), credentials, "gpt-5.6-sol", 30, "")
+					report, checkErr = s.checkMaintenanceCandy(ctx, account, credentials, proxyURL)
 					result.Check = publicCheck(report, credentials)
 				}
-				if checkErr != nil || text(report["verdict"]) != "SOL_CONSISTENT" {
+				if checkErr != nil || !passedImportCheck(report) {
 					result.Reason = "verification_failed"
 					return result
 				}
@@ -205,6 +231,10 @@ func (s *Service) maintainAccount(ctx context.Context, value *privateMaintenance
 		return result
 	}
 	attempt.Phase = "recovering"
+	if err = s.verifyPlatformProxy(ctx, value.Target, attempt.ProxyBinding); err != nil {
+		result.Reason = "verification_failed"
+		return result
+	}
 	if err = s.persistMaintenance(value); err != nil {
 		result.Reason = "private_save_failed"
 		return result

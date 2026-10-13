@@ -1,17 +1,34 @@
 import { z } from "zod";
 
-const modelID = z
+export const modelID = z
   .string()
   .trim()
   .min(1, "请输入模型 ID")
   .max(256, "模型 ID 不能超过 256 个字符")
   .refine((value) => !/\p{Cc}/u.test(value), "模型 ID 不能包含控制字符");
-export const animationSchema = z.object({
-  account_ids: z.array(z.string().regex(/^[1-9]\d*$/)).min(1, "请选择至少一个账号"),
-  unified_model: modelID,
-  prompt: z.string().max(10000, "提示词不能超过 10000 个字符").optional(),
-  timeout_seconds: z.number().int().min(5, "超时不能小于 5 秒").max(120, "超时不能超过 120 秒"),
-});
+export const additionalModels = z.array(modelID).max(15, "最多选择 16 个检测模型").optional();
+export function selectedModels(model: string, additional?: string[]): string[] {
+  return [model, ...(additional ?? [])];
+}
+export function uniqueModels(model: string, additional?: string[]): boolean {
+  const models = selectedModels(
+    model.trim(),
+    additional?.map((item) => item.trim()),
+  );
+  return new Set(models).size === models.length;
+}
+export const animationSchema = z
+  .object({
+    account_ids: z.array(z.string().regex(/^[1-9]\d*$/)).min(1, "请选择至少一个账号"),
+    unified_model: modelID,
+    additional_models: additionalModels,
+    prompt: z.string().max(10000, "提示词不能超过 10000 个字符").optional(),
+    timeout_seconds: z.number().int().min(5, "超时不能小于 5 秒").max(120, "超时不能超过 120 秒"),
+  })
+  .refine((value) => uniqueModels(value.unified_model, value.additional_models), {
+    path: ["additional_models"],
+    message: "检测模型不能重复",
+  });
 export type AnimationForm = z.infer<typeof animationSchema>;
 
 export const customAnimationSchema = z
@@ -45,12 +62,24 @@ export const customAnimationSchema = z
       .regex(/^[\x21-\x7e]+$/, "API Key 不能包含空白或非 ASCII 字符"),
     platform: z.enum(["openai", "anthropic"]),
     model: modelID,
+    additional_models: additionalModels,
     prompt: z.string().max(10000, "提示词不能超过 10000 个字符").optional(),
-    timeout_seconds: animationSchema.shape.timeout_seconds,
+    timeout_seconds: z.number().int().min(5, "超时不能小于 5 秒").max(120, "超时不能超过 120 秒"),
   })
-  .refine((value) => !value.api_key || !value.model.includes(value.api_key), {
-    path: ["model"],
-    message: "模型 ID 不能包含 API Key，请检查填写内容",
+  .refine(
+    (value) =>
+      !value.api_key ||
+      !selectedModels(value.model, value.additional_models).some((model) =>
+        model.includes(value.api_key),
+      ),
+    {
+      path: ["model"],
+      message: "模型 ID 不能包含 API Key，请检查填写内容",
+    },
+  )
+  .refine((value) => uniqueModels(value.model, value.additional_models), {
+    path: ["additional_models"],
+    message: "检测模型不能重复",
   });
 export type CustomAnimationForm = z.infer<typeof customAnimationSchema>;
 
@@ -66,11 +95,18 @@ export const animationScheduleSchema = z
     account_id: z.string().regex(/^[1-9]\d*$/),
     enabled: z.boolean(),
     model: z.string(),
+    additional_models: additionalModels,
     interval_minutes: z.number().int(),
     timeout_seconds: z.number().int().min(5, "超时不能小于 5 秒").max(120, "超时不能超过 120 秒"),
     version: z.number().int().min(0),
   })
   .superRefine((value, context) => {
+    if (!uniqueModels(value.model, value.additional_models))
+      context.addIssue({
+        code: "custom",
+        path: ["additional_models"],
+        message: "检测模型不能重复",
+      });
     if (
       value.schedule_type !== "daily" &&
       (value.interval_minutes < 1 || value.interval_minutes > 1440)

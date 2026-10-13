@@ -53,7 +53,7 @@ it("键盘聚焦置信度可查看窗口、样本量与计算口径", async () =
     </TooltipProvider>,
   );
   await user.tab();
-  expect(await screen.findByRole("tooltip")).toHaveTextContent("95% Wilson 下界");
+  expect(await screen.findByRole("tooltip")).toHaveTextContent("前置检测和动画人工判定");
   expect(screen.getByRole("tooltip")).toHaveTextContent(
     "短期 24 小时：2 个样本，1 个通过，0 个失败，1 个无结论",
   );

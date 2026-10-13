@@ -99,7 +99,7 @@ test("前置检测精简操作栏后支持手动选择生成动画及保存定�
   await page.goto("/animation-check");
   await page.getByRole("tab", { name: "前置检测", exact: true }).click();
   const panel = page.getByRole("tabpanel", { name: "前置检测", exact: true });
-  await expect(panel.getByRole("combobox", { name: "检测模型" })).toHaveValue("gpt-6-astra");
+  await expect(panel.getByRole("combobox", { name: "检测模型" })).toHaveText("gpt-6-astra");
   await page.keyboard.press("Escape");
   await expect(panel.getByRole("button", { name: "选择前置检测题目" })).toHaveCount(0);
   await expect(panel.getByRole("button", { name: /选择通过|选择降智|选择不通过/ })).toHaveCount(0);
@@ -180,7 +180,7 @@ test("前置检测精简操作栏后支持手动选择生成动画及保存定�
   await expect(panel.getByRole("group", { name: "动画预览区域" })).toHaveCount(0);
   await page.getByRole("tab", { name: "账号检测", exact: true }).click();
   const animationPanel = page.getByRole("tabpanel", { name: "账号检测", exact: true });
-  await expect(animationPanel.getByRole("combobox", { name: "检测模型" })).toHaveValue(
+  await expect(animationPanel.getByRole("combobox", { name: "检测模型" })).toHaveText(
     "gpt-6-astra",
   );
   await expect(animationPanel.getByRole("region", { name: "前置检测结果" })).toHaveCount(0);

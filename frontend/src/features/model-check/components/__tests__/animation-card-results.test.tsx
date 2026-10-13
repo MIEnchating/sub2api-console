@@ -1,6 +1,6 @@
 import { seedDictionaries } from "@/test/dictionary-fixtures";
 import { QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, within, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, within, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createConsoleQueryClient } from "@/lib/query-client";
 import type { Task } from "@/api";
@@ -57,13 +57,13 @@ const task: Task = {
     account_ids: ["41", "42"],
     targets: [
       { account_id: "41", model: "model-a" },
-      { account_id: "42", model: "model-b" },
+      { account_id: "42", model: "model-a" },
     ],
     animations: [
       {
         account_id: "42",
         account_name: "乙账号",
-        model: "model-b",
+        model: "model-a",
         request_id: "r2",
         status: "failed",
         error: "余额不足",
@@ -189,7 +189,7 @@ it("较旧任务补充其他账号结果，同一账号保留最新结果", () =
         {
           account_id: "42",
           account_name: "乙账号",
-          model: "outdated-model",
+          model: "model-a",
           request_id: "outdated-result",
           status: "succeeded",
           svg: '<svg xmlns="http://www.w3.org/2000/svg"/>',
@@ -200,7 +200,7 @@ it("较旧任务补充其他账号结果，同一账号保留最新结果", () =
         {
           account_id: "43",
           account_name: "丙账号",
-          model: "previous-model",
+          model: "model-a",
           request_id: "previous-result",
           status: "succeeded",
           svg: '<svg xmlns="http://www.w3.org/2000/svg"><rect width="10" height="10"/></svg>',
@@ -211,8 +211,6 @@ it("较旧任务补充其他账号结果，同一账号保留最新结果", () =
     },
   };
   const { dispose } = setup(task, previous);
-  expect(screen.queryByText("outdated-model")).not.toBeInTheDocument();
-  expect(screen.getByText("previous-model")).toBeVisible();
   expect(screen.getByRole("img", { name: /甲账号生成/ })).toBeVisible();
   expect(
     within(screen.getByRole("article", { name: "账号 丙账号" })).getByRole("img"),
@@ -339,4 +337,156 @@ it("新任务尚未返回时隐藏上次动画与成功统计，提示正在重�
   expect(pending.getByText("本轮结果将在检测完成后显示")).toBeVisible();
   expect(pending.queryByText("本项检测已结束，等待任务结束")).not.toBeInTheDocument();
   dispose();
+});
+
+it("同账号多个模型可切换结果，重测沿用当前选择模型", async () => {
+  const multiTask: Task = {
+    ...task,
+    result: {
+      account_ids: ["41"],
+      targets: [{ account_id: "41", model: "model-a", models: ["model-a", "model-b"] }],
+      animations: [
+        {
+          account_id: "41",
+          account_name: "甲账号",
+          model: "model-a",
+          request_id: "r-a",
+          status: "failed",
+          error: "模型 A 不可用",
+          duration_ms: 10,
+          completed_at: "2026-09-13T00:00:00Z",
+        },
+        {
+          account_id: "41",
+          account_name: "甲账号",
+          model: "model-b",
+          request_id: "r-b",
+          status: "failed",
+          error: "模型 B 不可用",
+          duration_ms: 10,
+          completed_at: "2026-09-13T00:00:01Z",
+        },
+      ],
+    },
+  };
+  const bodies: unknown[] = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === "POST") bodies.push(JSON.parse(String(init.body)));
+      return Response.json(
+        init?.method === "POST" || String(_input).includes("/api/tasks/") ? multiTask : [multiTask],
+      );
+    }),
+  );
+  const view = setup(multiTask);
+  const card = within(await screen.findByRole("article", { name: "账号 甲账号" }));
+  const selector = screen.getByRole("group", { name: "结果模型" });
+  expect(card.queryByRole("group", { name: "结果模型" })).not.toBeInTheDocument();
+  expect(selector).toHaveTextContent("model-a");
+  expect(card.getByText("模型 A 不可用")).toBeVisible();
+  expect(card.queryByText("模型 B 不可用")).not.toBeInTheDocument();
+  fireEvent.click(card.getByRole("button", { name: /重测/ }));
+  await waitFor(() =>
+    expect(bodies).toContainEqual({
+      targets: [{ account_id: "41", model: "model-a" }],
+      timeout_seconds: 120,
+    }),
+  );
+  view.dispose();
+});
+
+it("顶部统一切换模型时所有账号同步展示，缺少所选模型不回退其他结果", () => {
+  const animations = [
+    { account_id: "41", account_name: "甲账号", model: "model-a", error: "甲 A" },
+    { account_id: "41", account_name: "甲账号", model: "model-b", error: "甲 B" },
+    { account_id: "42", account_name: "乙账号", model: "model-a", error: "乙 A" },
+    { account_id: "42", account_name: "乙账号", model: "model-b", error: "乙 B" },
+    { account_id: "43", account_name: "丙账号", model: "model-a", error: "丙 A" },
+  ].map((row, index) => ({
+    ...row,
+    status: "failed",
+    request_id: `request-${index}`,
+    duration_ms: 10,
+    completed_at: task.updated_at,
+  }));
+  const view = setup({ ...task, result: { account_ids: ["41", "42", "43"], animations } });
+  const selector = screen.getByRole("group", { name: "结果模型" });
+  expect(selector.closest("article")).toBeNull();
+  expect(screen.getByText("甲 A")).toBeVisible();
+  expect(screen.getByText("乙 A")).toBeVisible();
+  fireEvent.click(within(selector).getByRole("button", { name: "下一个模型结果" }));
+  expect(screen.getByText("甲 B")).toBeVisible();
+  expect(screen.getByText("乙 B")).toBeVisible();
+  const missing = within(screen.getByRole("article", { name: "账号 丙账号" }));
+  expect(missing.getByText("该模型暂无检测结果")).toBeVisible();
+  expect(missing.queryByText("丙 A")).not.toBeInTheDocument();
+  expect(missing.queryByRole("button", { name: /重测/ })).not.toBeInTheDocument();
+  view.dispose();
+});
+
+it("统一模型选择在账号翻页后保留", async () => {
+  const animations = ["41", "53"].flatMap((id) =>
+    ["model-a", "model-b"].map((model) => ({
+      account_id: id,
+      account_name: `账号 ${id}`,
+      model,
+      status: "failed",
+      error: `${id} ${model} 失败`,
+      request_id: `${id}-${model}`,
+      duration_ms: 10,
+      completed_at: task.updated_at,
+    })),
+  );
+  const view = setup({ ...task, result: { account_ids: ["41", "53"], animations } });
+  act(() =>
+    view.client.setQueryData(
+      ["accounts"],
+      Array.from({ length: 13 }, (_, index) => ({
+        id: String(41 + index),
+        name: `账号 ${41 + index}`,
+        groups: [],
+        platform: "openai",
+      })),
+    ),
+  );
+  const selector = screen.getByRole("group", { name: "结果模型" });
+  fireEvent.click(within(selector).getByRole("button", { name: "下一个模型结果" }));
+  const nextPage = screen.getByRole("button", { name: "转到下一页" });
+  await waitFor(() => expect(nextPage).toBeEnabled());
+  fireEvent.click(nextPage);
+  expect(selector).toHaveTextContent("model-b");
+  expect(screen.getByText("53 model-b 失败")).toBeVisible();
+  expect(screen.queryByText("53 model-a 失败")).not.toBeInTheDocument();
+  view.dispose();
+});
+
+it("前置检测顶部切换后所有账号展示同一模型的统计", () => {
+  const animations = ["41", "42"].flatMap((id) =>
+    ["model-a", "model-b"].map((model) => ({
+      account_id: id,
+      account_name: id === "41" ? "甲账号" : "乙账号",
+      model,
+      mode: "precheck",
+      status: "failed",
+      error: "前置检测失败",
+      request_id: `${id}-${model}`,
+      duration_ms: 10,
+      completed_at: task.updated_at,
+    })),
+  );
+  const view = setup({
+    ...task,
+    operation: "account-model-precheck",
+    result: { account_ids: ["41", "42"], animations },
+  });
+  fireEvent.click(screen.getByRole("tab", { name: "前置检测" }));
+  const selector = screen.getByRole("group", { name: "结果模型" });
+  fireEvent.click(within(selector).getByRole("button", { name: "下一个模型结果" }));
+  for (const name of ["甲账号", "乙账号"]) {
+    const card = within(screen.getByRole("article", { name: `账号 ${name}` }));
+    expect(card.getByText("model-b")).toBeVisible();
+    expect(card.queryByText("model-a")).not.toBeInTheDocument();
+  }
+  view.dispose();
 });

@@ -17,6 +17,7 @@ const reads = [
   ["价格变更", api.pricingChanges],
   ["价格备份", api.pricingBackups],
   ["上游目录", api.upstreams],
+  ["上游用量", api.upstreamUsage],
   ["自动化计划", api.accountModelAutomationSchedules],
   ["自动化任务组", api.accountModelAutomationTaskGroups],
   ["巡检状态", api.autoInspection],

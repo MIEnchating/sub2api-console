@@ -88,9 +88,11 @@ function setup(accountID?: string, animation = true): () => void {
 it("独立动画页保留账号链接、超时设置和查看全部账号入口", async () => {
   const user = userEvent.setup();
   const dispose = setup("41");
-  expect(screen.getByRole("heading", { name: "动画检测" })).toBeVisible();
+  expect(screen.getByRole("heading", { name: "智商检测" })).toBeVisible();
   const panel = await screen.findByRole("tabpanel", { name: "账号检测" });
-  expect(within(panel).getByRole("combobox", { name: "检测模型" })).toHaveValue("gpt-6-astra");
+  expect(within(panel).getByRole("combobox", { name: "检测模型" })).toHaveTextContent(
+    "gpt-6-astra",
+  );
   expect(screen.queryByRole("tab", { name: "常规检测" })).not.toBeInTheDocument();
   expect(screen.getByRole("tab", { name: "前置检测" })).toBeVisible();
   expect(screen.queryByRole("tab", { name: "终端续接检测" })).not.toBeInTheDocument();
@@ -117,7 +119,7 @@ it("前置检测使用独立 Tab 并与账号检测共享超时和账号选择",
   const user = userEvent.setup();
   const dispose = setup("41");
   const animationPanel = await screen.findByRole("tabpanel", { name: "账号检测" });
-  expect(within(animationPanel).getByRole("combobox", { name: "检测模型" })).toHaveValue(
+  expect(within(animationPanel).getByRole("combobox", { name: "检测模型" })).toHaveTextContent(
     "gpt-6-astra",
   );
   fireEvent.change(within(animationPanel).getByRole("spinbutton", { name: "请求超时（秒）" }), {
@@ -133,7 +135,7 @@ it("前置检测使用独立 Tab 并与账号检测共享超时和账号选择",
   await user.click(screen.getByRole("tab", { name: "前置检测" }));
 
   const precheckPanel = screen.getByRole("tabpanel", { name: "前置检测" });
-  expect(within(precheckPanel).getByRole("combobox", { name: "检测模型" })).toHaveValue(
+  expect(within(precheckPanel).getByRole("combobox", { name: "检测模型" })).toHaveTextContent(
     "gpt-6-astra",
   );
   expect(within(precheckPanel).getByRole("checkbox", { name: /检测 人工账号/ })).toBeChecked();
@@ -147,7 +149,7 @@ it("前置检测使用独立 Tab 并与账号检测共享超时和账号选择",
   await user.click(within(precheckPanel).getByRole("button", { name: "清空选择" }));
   await user.click(screen.getByRole("tab", { name: "账号检测" }));
   expect(screen.getByRole("checkbox", { name: /检测 人工账号/ })).not.toBeChecked();
-  expect(screen.getByRole("combobox", { name: "检测模型" })).toHaveValue("gpt-6-astra");
+  expect(screen.getByRole("combobox", { name: "检测模型" })).toHaveTextContent("gpt-6-astra");
   dispose();
 });
 

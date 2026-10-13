@@ -178,7 +178,7 @@ export const navItems: Array<{
     icon: Fingerprint,
     to: "/model-check",
   },
-  { id: "animation-check", label: "动画检测", icon: ScanSearch, to: "/animation-check" },
+  { id: "animation-check", label: "智商检测", icon: ScanSearch, to: "/animation-check" },
   {
     id: "traffic",
     label: "流量排行",

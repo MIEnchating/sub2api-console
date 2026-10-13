@@ -9,7 +9,7 @@ import { MaintenancePanel } from "../components/maintenance-panel";
 import { RunList } from "../components/run-list";
 import { TemplateList } from "../components/template-list";
 import { TemplateEditor } from "../components/template-editor";
-import { maintenanceKey, runKeys, templateKeys, workbenchKeys } from "../constants";
+import { importModelKey, maintenanceKey, runKeys, templateKeys, workbenchKeys } from "../constants";
 import { template } from "./template-fixture";
 
 const clients: QueryClient[] = [];
@@ -23,6 +23,7 @@ function createClient(): QueryClient {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false, staleTime: Infinity } },
   });
+  client.setQueryData(importModelKey, { model: "gpt-6-astra", revision: 0 });
   clients.push(client);
   return client;
 }

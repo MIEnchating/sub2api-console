@@ -182,7 +182,8 @@ export function MaintenanceForm(props: { value: WorkbenchMaintenance }): ReactEl
                 {(
                   [
                     { name: "enabled", label: "启用定时检查" },
-                    { name: "check_after_repair", label: "恢复后执行 Sol 检测" },
+                    { name: "check_enabled", label: "启用智商检测" },
+                    { name: "check_after_repair", label: "恢复后执行智商检测" },
                   ] as const
                 ).map((item) => (
                   <label key={item.name} className="flex items-center gap-2 text-sm">
@@ -284,7 +285,7 @@ export function MaintenanceForm(props: { value: WorkbenchMaintenance }): ReactEl
                 {preview.settings.enabled
                   ? `每 ${preview.settings.interval_minutes} 分钟检查所选分组，符合条件的新账号也会纳入检查。`
                   : "保存维护设置，定时检查保持关闭。"}{" "}
-                维护可能刷新凭据、重新授权并恢复账号调度。
+                维护按已保存设置运行，服务重启或退出登录后继续生效。
               </p>
               <div className="mt-3 max-h-56 overflow-y-auto rounded-md border p-3 text-sm">
                 {preview.accounts.length === 0 ? (

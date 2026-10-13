@@ -41,7 +41,7 @@ func TestDetectionTaskCancellationDuringPrecheckStopsAnimation(t *testing.T) {
 	}
 }
 
-func TestDetectionTaskEmptyGroupCreatesFailedRecordWithoutGeneration(t *testing.T) {
+func TestDetectionTaskEmptyGroupCompletesWithoutGeneration(t *testing.T) {
 	f := setup(t, 1, "openai", func(http.ResponseWriter, *http.Request) { t.Error("empty group generated") })
 	f.catalog.groupMembers = map[string][]string{"7": {}, "8": {}}
 	plans, err := f.service.SaveDetectionTask(context.Background(), managedTask(), "test")
@@ -52,7 +52,7 @@ func TestDetectionTaskEmptyGroupCreatesFailedRecordWithoutGeneration(t *testing.
 		t.Fatal(err)
 	}
 	task := finished(t, f)
-	if task.Status != "failed" || task.Message != "所选分组当前没有账号，请同步目录或调整分组" {
+	if task.Status != "succeeded" || task.Progress != 100 {
 		t.Fatalf("bad empty-group result: %#v", task)
 	}
 	restarted, err := modelcheck.New(f.tasks, credentials{}, f.catalog, credentials{})

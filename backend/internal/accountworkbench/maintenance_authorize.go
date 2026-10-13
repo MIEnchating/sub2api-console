@@ -25,6 +25,12 @@ func (s *Service) reauthorizeMaintenance(ctx context.Context, value *privateMain
 	if err != nil {
 		return err
 	}
+	binding, err := s.accountProxy(ctx, value.Target, account)
+	if err != nil {
+		return err
+	}
+	input.ProxyURL = proxyBindingURL(binding)
+	attempt.ProxyBinding = binding
 	attempt.Phase = "reauthorizing"
 	attempt.SourceRunID = sourceID
 	attempt.SourceDocumentKey = sourceKey
@@ -41,7 +47,7 @@ func (s *Service) reauthorizeMaintenance(ctx context.Context, value *privateMain
 	input.Item.Kind = "login"
 	input.Credentials = map[string]any{}
 	now := time.Now().UTC()
-	login := privateRun{Owner: value.Owner, Target: value.Target, Automatic: true, TemplateRevision: revision, Settings: PreviewInput{Model: "gpt-5.6-sol"}, Items: []storedInput{input}, Exports: make([]map[string]any, 1), AccountVersions: map[string]string{}, Phases: map[string]string{}, Public: Run{ID: newID(), Action: "maintenance", Status: "running", CreatedAt: now, ExpiresAt: attempt.ExpiresAt, Items: []RunItem{{InputItem: input.Item, Status: "authorizing", AccountID: text(account["id"])}}}}
+	login := privateRun{ProxyBinding: binding, Owner: value.Owner, Target: value.Target, Automatic: true, TemplateRevision: revision, Settings: PreviewInput{Model: "gpt-5.6-sol"}, Items: []storedInput{input}, Exports: make([]map[string]any, 1), AccountVersions: map[string]string{}, Phases: map[string]string{}, Public: Run{ID: newID(), Action: "maintenance", Status: "running", CreatedAt: now, ExpiresAt: attempt.ExpiresAt, Items: []RunItem{{InputItem: input.Item, Status: "authorizing", AccountID: text(account["id"])}}}}
 	login.Scope = "managed"
 	login.RememberedSource = &rememberedSource{ID: rememberedAccountID(value.Target, text(account["id"])), Revision: sourceRevision}
 	if err = s.persistRun(&login); err != nil {
@@ -90,6 +96,9 @@ func (s *Service) verifyMaintenanceAuthorization(ctx context.Context, value *pri
 	if err := s.maintenanceAllowed(ctx, value); err != nil {
 		return err
 	}
+	if err := s.verifyPlatformProxy(ctx, value.Target, attempt.ProxyBinding); err != nil {
+		return err
+	}
 	credentials := attempt.Credentials
 	identity, err := s.VerifyCredential(ctx, credentials, attempt.ProxyURL)
 	if err != nil || identity.WorkspaceID != attempt.Workspace || identity.UserID != attempt.User || !equalEmail(identity.Email, publicAccount(account).Email) {
@@ -109,6 +118,9 @@ func (s *Service) uploadMaintenanceAuthorization(ctx context.Context, value *pri
 		return nil, ErrRun
 	}
 	if err := s.maintenanceAllowed(ctx, value); err != nil {
+		return nil, err
+	}
+	if err := s.verifyPlatformProxy(ctx, value.Target, attempt.ProxyBinding); err != nil {
 		return nil, err
 	}
 	id := text(account["id"])
@@ -151,6 +163,9 @@ func (s *Service) uploadMaintenanceAuthorization(ctx context.Context, value *pri
 		if err = verifyApplied(current, body); err != nil {
 			return nil, err
 		}
+	}
+	if err = s.saveGenerationCredential(ctx, value.Target, current, attempt.Credentials); err != nil {
+		return nil, errors.New("授权已上传，但本地生成凭证保存失败，请重试")
 	}
 	attempt.AccountVersion = accountVersion(current)
 	attempt.Phase = "uploaded"

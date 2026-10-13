@@ -65,7 +65,9 @@ it("前置检测全选跨页全部账号并允许重新勾选第 21 个", async 
   expect(checkbox).not.toHaveAttribute("aria-disabled", "true");
   fireEvent.click(checkbox);
   expect(checkbox).toBeChecked();
-  expect(within(panel).getByRole("combobox", { name: "检测模型" })).toHaveValue("gpt-6-astra");
+  expect(within(panel).getByRole("combobox", { name: "检测模型" })).toHaveTextContent(
+    "gpt-6-astra",
+  );
   fireEvent.click(within(panel).getByRole("button", { name: submitName }));
   await waitFor(() => expect(posts[0]?.targets).toHaveLength(25));
   expect(screen.queryByRole("dialog")).not.toBeInTheDocument();

@@ -1,3 +1,4 @@
+import { selectDetectionModels } from "./model-selection-helper";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -47,5 +48,25 @@ it("获取共同模型后使用主题下拉展示交集，点击选项回填模�
   expect(await screen.findByRole("option", { name: "gpt-6-astra" })).toBeVisible();
   expect(screen.queryByRole("option", { name: "gpt-5.5" })).not.toBeInTheDocument();
   await user.click(screen.getByRole("option", { name: "gpt-6-astra" }));
-  expect(input).toHaveValue("gpt-6-astra");
+  expect(input).toHaveTextContent("gpt-6-astra");
+});
+
+it("添加模型支持键盘输入与移除，保留主模型", async () => {
+  const user = userEvent.setup();
+  const client = new QueryClient();
+  clients.push(client);
+  render(
+    <QueryClientProvider client={client}>
+      <Settings />
+    </QueryClientProvider>,
+  );
+  const trigger = screen.getByRole("combobox", { name: "检测模型" });
+  trigger.focus();
+  await user.keyboard("{Enter}");
+  await selectDetectionModels(["custom-model"]);
+  expect(trigger).toHaveTextContent("custom-model");
+  await user.click(trigger);
+  await user.click(screen.getByRole("option", { name: "custom-model" }));
+  await user.keyboard("{Escape}");
+  expect(trigger).toHaveTextContent("选择模型");
 });

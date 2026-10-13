@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/MIEnchating/sub2api-console/backend/internal/business"
 	"github.com/MIEnchating/sub2api-console/backend/internal/targetguard"
 	"github.com/MIEnchating/sub2api-console/backend/internal/taskrunner"
 	"github.com/MIEnchating/sub2api-console/backend/internal/taskstore"
@@ -107,11 +108,11 @@ func (s *Service) RunDueDetectionTasks(ctx context.Context, now time.Time) {
 
 func (s *Service) prepareDetectionTask(ctx context.Context, value DetectionTask, ids []string) (AnimationRequest, []selectedAccount, error) {
 	if len(ids) == 0 {
-		return AnimationRequest{}, nil, errors.New("所选分组当前没有账号，请同步目录或调整分组")
+		return AnimationRequest{}, nil, nil
 	}
 	request := AnimationRequest{Prompt: value.Prompt, TimeoutSeconds: value.TimeoutSeconds, Targets: make([]AnimationTarget, 0, len(ids))}
 	for _, id := range ids {
-		request.Targets = append(request.Targets, AnimationTarget{AccountID: id, Model: value.Model})
+		request.Targets = append(request.Targets, AnimationTarget{AccountID: id, Model: value.Model, Models: value.Models})
 	}
 	return s.prepareAnimation(ctx, request)
 }
@@ -164,9 +165,28 @@ func (s *Service) executeDetectionTask(parent context.Context, task taskstore.Ta
 		fail(err)
 		return
 	}
+	managed := make([]string, 0, len(scope.AccountIDs))
+	for _, id := range scope.AccountIDs {
+		if err := business.CheckAccountUpstreamManaged(ctx, s.accounts, id); err != nil {
+			if errors.Is(err, business.ErrUpstreamExcluded) {
+				delete(scope.GroupIDsByAccount, id)
+				continue
+			}
+			fail(err)
+			return
+		}
+		managed = append(managed, id)
+	}
+	scope.AccountIDs = managed
 	task.Result["account_ids"] = scope.AccountIDs
 	task.Result["group_ids_by_account"] = scope.GroupIDsByAccount
 	task.Result["group_names_by_id"] = scope.GroupNamesByID
+	if len(scope.AccountIDs) == 0 {
+		task.Status, task.Progress, task.Message = "succeeded", 100, "所选分组没有参与管控的账号，本次无需检测"
+		taskstore.MarkCancelled(ctx, &task, "检测任务已取消")
+		taskstore.PersistFinal(s.tasks, task)
+		return
+	}
 	request, accounts, err := s.prepareDetectionTask(ctx, value, scope.AccountIDs)
 	if err != nil {
 		fail(err)
@@ -175,7 +195,7 @@ func (s *Service) executeDetectionTask(parent context.Context, task taskstore.Ta
 	cancelPreparation()
 	ctx, cancel := context.WithTimeout(parent, detectionTaskTimeout(value, len(accounts), s.taskTimeout))
 	defer cancel()
-	if err := bindDetectionRecovery(&task, accounts); err != nil {
+	if err := s.bindDetectionRecovery(ctx, &task, accounts); err != nil {
 		fail(err)
 		return
 	}
@@ -213,13 +233,15 @@ func (s *Service) executeDetectionTask(parent context.Context, task taskstore.Ta
 	if value.Animation == nil || *value.Animation {
 		stages = append(stages, "animation")
 	}
-	total := len(accounts) * len(stages)
+	models, _ := normalizeAnimationModels(value.Model, value.Models)
+	total := len(accounts) * len(stages) * len(models)
 	animations := previousResults[AnimationResult](task, "animations")
+	total += historicalAnimationUnits(accounts, animations)
 	checks := previousResults[TerminalContinuityResult](task, "checks")
 	done := map[string]bool{}
 	completed, success := len(animations), 0
 	for _, result := range animations {
-		done[animationResultKey(result.AccountID, result.Mode)] = true
+		done[animationResultKey(result.AccountID, result.Mode, result.Model)] = true
 		if result.Status == "succeeded" {
 			success++
 		}
@@ -231,7 +253,7 @@ func (s *Service) executeDetectionTask(parent context.Context, task taskstore.Ta
 		result := map[string]any{"detection_task_id": value.ID, "detection_task_name": value.Name, "configuration": value, "automatic": task.Result["automatic"], "account_ids": ids, "targets": request.Targets, "group_ids_by_account": scope.GroupIDsByAccount, "group_names_by_id": scope.GroupNamesByID, "account_names_by_id": accountNames, "total": total, "completed": completed, "animations": slices.Clone(animations), "checks": slices.Clone(checks), "remote_write": false, "started_at": begin.UTC().Format(time.RFC3339Nano)}
 		result["mode"] = detectionTaskMode(value)
 		task.Result = result
-		task.Progress = completed * 100 / total
+		task.Progress = completed * 100 / max(total, 1)
 		task.Message = message
 		task.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
 		taskstore.PersistProgress(s.tasks, task)
@@ -239,7 +261,8 @@ func (s *Service) executeDetectionTask(parent context.Context, task taskstore.Ta
 	questions, _ := normalizePrecheckQuestions(precheckMode, value.PrecheckQuestions)
 	publish(fmt.Sprintf("正在并发检测 %d 个账号，同时检测上限 %d", len(accounts), value.Concurrency))
 	type stageEvent struct {
-		animation *AnimationResult
+		animation  *AnimationResult
+		excludedID string
 	}
 	jobs := make(chan selectedAccount)
 	events := make(chan stageEvent)
@@ -249,25 +272,34 @@ func (s *Service) executeDetectionTask(parent context.Context, task taskstore.Ta
 		go func() {
 			defer workers.Done()
 			for account := range jobs {
-				for _, mode := range stages {
-					if ctx.Err() != nil {
-						return
-					}
-					if done[animationResultKey(account.ID, mode)] {
-						continue
-					}
-					result := AnimationResult{Prompt: request.Prompt, AccountID: account.ID, AccountName: account.Name, Model: value.Model, RequestID: task.ID + "-" + account.ID + "-" + mode, Mode: mode, Status: "failed"}
-					if err := s.runAnimationWithRetry(ctx, account, value.TimeoutSeconds, nil, questions, &result); err != nil {
-						if taskstore.Interrupted(ctx) {
+				for modelIndex, model := range models {
+					for _, mode := range stages {
+						if ctx.Err() != nil {
 							return
 						}
-						result.Error = safeCredentialError(err)
-					} else {
-						result.Status = "succeeded"
+						if done[animationResultKey(account.ID, mode, model)] {
+							continue
+						}
+						result := AnimationResult{Prompt: request.Prompt, AccountID: account.ID, AccountName: account.Name, Model: model, RequestID: task.ID + "-" + account.ID + "-" + mode, Mode: mode, Status: "failed"}
+						if modelIndex > 0 {
+							result.RequestID += fmt.Sprintf("-model-%d", modelIndex+1)
+						}
+						if err := s.runAnimationWithRetry(ctx, account, value.TimeoutSeconds, nil, questions, &result); err != nil {
+							if errors.Is(err, business.ErrUpstreamExcluded) {
+								events <- stageEvent{excludedID: account.ID}
+								continue
+							}
+							if taskstore.Interrupted(ctx) {
+								return
+							}
+							result.Error = safeCredentialError(err)
+						} else {
+							result.Status = "succeeded"
+						}
+						result.Phase = "completed"
+						result.CompletedAt = time.Now().UTC().Format(time.RFC3339Nano)
+						events <- stageEvent{animation: &result}
 					}
-					result.Phase = "completed"
-					result.CompletedAt = time.Now().UTC().Format(time.RFC3339Nano)
-					events <- stageEvent{animation: &result}
 				}
 			}
 		}()
@@ -284,6 +316,11 @@ func (s *Service) executeDetectionTask(parent context.Context, task taskstore.Ta
 	}()
 	go func() { workers.Wait(); close(events) }()
 	for event := range events {
+		if event.excludedID != "" {
+			total--
+			ids = slices.DeleteFunc(ids, func(id string) bool { return id == event.excludedID })
+			request.Targets = slices.DeleteFunc(request.Targets, func(target AnimationTarget) bool { return target.AccountID == event.excludedID })
+		}
 		if event.animation != nil {
 			animations = append(animations, *event.animation)
 			if event.animation.Status == "succeeded" {
@@ -298,7 +335,8 @@ func (s *Service) executeDetectionTask(parent context.Context, task taskstore.Ta
 	}
 	publish(fmt.Sprintf("检测任务完成：成功 %d，失败或未执行 %d", success, total-success))
 	task.Status = "succeeded"
-	if success == 0 {
+	task.Progress = 100
+	if success == 0 && total > 0 {
 		task.Status = "failed"
 	} else if success < total {
 		task.Status = "partial"
@@ -323,7 +361,8 @@ func detectionTaskTimeout(value DetectionTask, accountCount int, minimum time.Du
 	if concurrency <= 0 {
 		concurrency = defaultDetectionConcurrency
 	}
-	return max(minimum, time.Duration((accountCount+concurrency-1)/concurrency)*perAccount)
+	models, _ := normalizeAnimationModels(value.Model, value.Models)
+	return max(minimum, time.Duration((accountCount+concurrency-1)/concurrency)*perAccount*time.Duration(len(models)))
 }
 
 func detectionTaskMode(value DetectionTask) string {

@@ -27,7 +27,10 @@ export function DetectionTaskEditor(props: {
   onClose: () => void;
 }): ReactElement {
   const client = useQueryClient();
-  const groups = useQuery({ queryKey: ["groups"], queryFn: ({ signal }) => api.groups(signal) });
+  const groups = useQuery({
+    queryKey: ["groups", "options"],
+    queryFn: ({ signal }) => api.groupOptions(signal),
+  });
   const [confirmation, setConfirmation] = useState<DetectionTaskForm | null>(null);
   const form = useForm<DetectionTaskForm>({
     resolver: zodResolver(detectionTaskSchema),
@@ -45,20 +48,25 @@ export function DetectionTaskEditor(props: {
       terminal: false,
       terminal_rounds: 0,
       concurrency: props.value?.concurrency || 4,
-      model: props.value?.model ?? animationTestModel,
+      model: props.value?.models?.[0] ?? props.value?.model ?? animationTestModel,
+      additional_models: props.value?.models?.slice(1) ?? [],
       animation: props.value?.animation ?? true,
       daily_times: props.value?.daily_times ?? ["09:00"],
       precheck_questions: props.value?.precheck_questions ?? ["candy"],
     },
   });
   const save = useMutation({
-    mutationFn: (value: DetectionTaskForm) =>
-      api.saveDetectionTask({
-        ...value,
+    mutationFn: (value: DetectionTaskForm) => {
+      const { additional_models, ...payload } = value;
+      return api.saveDetectionTask({
+        ...payload,
+        models: additional_models?.length ? [value.model, ...additional_models] : undefined,
+
         daily_times: value.schedule_type === "daily" ? value.daily_times.slice().sort() : undefined,
         timezone: value.schedule_type === "daily" ? "Asia/Shanghai" : undefined,
         prompt: undefined,
-      }),
+      });
+    },
     onSuccess: (values) => {
       client.setQueryData(["model-detection-tasks"], values);
       props.onClose();
@@ -129,7 +137,7 @@ export function DetectionTaskEditor(props: {
         title="确认自动检测任务"
         description={
           confirmation
-            ? `任务“${confirmation.name}”将对分组 ${confirmation.group_ids.map((id) => groups.data?.find((group) => group.id === id)?.name ?? id).join("、")} 的最新账号，使用 ${confirmation.model} ${detectionTaskDescription(confirmation)}，并产生 API 用量。`
+            ? `任务“${confirmation.name}”将对分组 ${confirmation.group_ids.map((id) => groups.data?.find((group) => group.id === id)?.name ?? id).join("、")} 的最新账号，使用 ${[confirmation.model, ...(confirmation.additional_models ?? [])].join("、")} ${detectionTaskDescription(confirmation)}，并产生 API 用量。`
             : ""
         }
         confirmLabel="确认保存并开启"

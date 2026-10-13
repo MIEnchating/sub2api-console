@@ -507,6 +507,10 @@ func (s *Service) enqueueMaintenance(ctx context.Context, operation, message str
 	if err != nil {
 		return taskstore.Task{}, err
 	}
+	accountIDs, err = s.managedMaintenanceAccounts(ctx, accountIDs)
+	if err != nil {
+		return taskstore.Task{}, err
+	}
 	id, err := managementTaskID()
 	if err != nil {
 		return taskstore.Task{}, err
@@ -575,11 +579,12 @@ func (s *Service) executeMaintenanceContext(parent context.Context, task tasksto
 	var err error
 	requested := len(accountIDs)
 	protected := []map[string]any{}
-	if operation != "account-rate-sync" && operation != "account-base-url-sync" {
+	accountIDs, err = s.managedMaintenanceAccounts(ctx, accountIDs)
+	if err == nil && operation != "account-rate-sync" && operation != "account-base-url-sync" {
 		accountIDs, protected, err = s.excludeManualPriorityAccounts(ctx, accountIDs)
 	}
 	if err == nil {
-		if len(accountIDs) == 0 && len(protected) > 0 {
+		if len(accountIDs) == 0 {
 			result = manualPriorityOnlyMaintenanceResult(operation, requested, protected, actor)
 		} else {
 			result, err = s.runMaintenance(ctx, operation, accountIDs, actor)
@@ -703,12 +708,30 @@ func (s *Service) excludeManualPriorityAccounts(ctx context.Context, accountIDs 
 	return eligible, protected, nil
 }
 
+func (s *Service) managedMaintenanceAccounts(ctx context.Context, accountIDs []string) ([]string, error) {
+	result := make([]string, 0, len(accountIDs))
+	for _, id := range accountIDs {
+		if err := business.CheckAccountUpstreamManaged(ctx, s.repository, id); err != nil {
+			if errors.Is(err, business.ErrUpstreamExcluded) {
+				continue
+			}
+			return nil, err
+		}
+		result = append(result, id)
+	}
+	return result, nil
+}
+
 func manualPriorityOnlyMaintenanceResult(operation string, requested int, protected []map[string]any, actor string) map[string]any {
 	result := map[string]any{
 		"operation": operation, "requested": requested, "skipped": len(protected), "items": protected,
 		"actor": actor, "remote_write": false,
 	}
 	switch operation {
+	case "account-rate-sync":
+		result["updated"], result["unchanged"], result["fallback"], result["missing"], result["failed"] = 0, 0, 0, 0, 0
+	case "account-base-url-sync":
+		result["updated"], result["unchanged"], result["missing"], result["failed"] = 0, 0, 0, 0
 	case "account-base-url-validation":
 		result["resolved"], result["unavailable"], result["failed"] = 0, 0, 0
 		result["read_only"] = true

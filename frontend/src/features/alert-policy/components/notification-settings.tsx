@@ -38,7 +38,7 @@ export function NotificationSettings(props: {
           </h2>
         </CardTitle>
         <CardAction className="flex items-center gap-1.5" data-slot="notification-channel-summary">
-          <Badge variant={props.notification?.configured ? "secondary" : "warning"}>
+          <Badge variant={props.notification?.configured ? "success" : "warning"}>
             {props.notification?.configured
               ? `QQBot · ${notificationTargetTypeLabel(props.notification.channel_type)}`
               : "QQBot 未配置"}

@@ -168,7 +168,7 @@ function ratio(value: string | null): string {
 
 function categoryBadge(category: RevenueRow["category"]) {
   if (category === "计费异常") return <Badge variant="destructive">计费异常</Badge>;
-  if (category === "正常") return <Badge variant="outline">正常</Badge>;
+  if (category === "正常") return <Badge variant="success">正常</Badge>;
   return <Badge variant="warning">无法核对</Badge>;
 }
 

@@ -54,6 +54,12 @@ for (const narrow of [false, true]) {
         },
         "/api/auth/session": { authenticated: true, username: "测试用户" },
         "/api/dictionaries": { items: [] },
+        "/api/upstreams/usage": hosts.map((host) => ({
+          upstream_id: host.upstream_id,
+          request_count: host.request_count,
+          request_window_days: host.request_window_days,
+          account_request_usage: host.account_request_usage,
+        })),
         "/api/upstreams": {
           hosts,
           total_hosts: hosts.length,

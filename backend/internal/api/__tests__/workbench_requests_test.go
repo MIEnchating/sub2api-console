@@ -60,6 +60,31 @@ func TestWorkbenchRoutesBindPreviewToSessionAndRemoveLegacyTools(t *testing.T) {
 	if response := request(http.MethodGet, "/api/account-workbench/runs", "", ""); response.Code != http.StatusUnauthorized {
 		t.Fatalf("unauthenticated records status=%d", response.Code)
 	}
+	for _, method := range []string{http.MethodGet, http.MethodPut} {
+		if response := request(method, "/api/account-workbench/accounts/41/groups", `{}`, ""); response.Code != http.StatusUnauthorized {
+			t.Fatalf("unauthenticated group move status=%d", response.Code)
+		}
+		if response := request(method, "/api/account-workbench/accounts/invalid/groups", `{}`, first); response.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("invalid group account ID status=%d", response.Code)
+		}
+		if response := request(method, "/api/account-workbench/import-model", `{}`, ""); response.Code != http.StatusUnauthorized {
+			t.Fatalf("unauthenticated model settings status=%d", response.Code)
+		}
+	}
+	if response := request(http.MethodPut, "/api/account-workbench/accounts/41/groups", `{"group_ids":["8"]}`, first); response.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("group move without confirmed version status=%d", response.Code)
+	}
+	modelSetting := request(http.MethodPut, "/api/account-workbench/import-model", `{"model":"saved-model","revision":0}`, first)
+	if modelSetting.Code != http.StatusOK {
+		t.Fatalf("save model status=%d body=%s", modelSetting.Code, modelSetting.Body.String())
+	}
+	loadedModel := request(http.MethodGet, "/api/account-workbench/import-model", "", second)
+	if loadedModel.Code != http.StatusOK || loadedModel.Header().Get("Cache-Control") != "no-store" || !strings.Contains(loadedModel.Body.String(), "saved-model") {
+		t.Fatalf("saved model not shared across sessions: %d", loadedModel.Code)
+	}
+	if response := request(http.MethodPut, "/api/account-workbench/import-model", `{"model":"stale-model","revision":0}`, first); response.Code != http.StatusConflict {
+		t.Fatalf("stale model update status=%d", response.Code)
+	}
 	preview := request(http.MethodPost, "/api/account-workbench/preview", `{"content":"rt_private-input","action":"export"}`, first)
 	if preview.Code != http.StatusOK || preview.Header().Get("Cache-Control") != "no-store" || strings.Contains(preview.Body.String(), "rt_private-input") {
 		t.Fatalf("preview response invalid: %d", preview.Code)

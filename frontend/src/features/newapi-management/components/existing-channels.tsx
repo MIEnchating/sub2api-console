@@ -280,7 +280,7 @@ export function ExistingChannels(props: { platformId: string; onCreate?: () => v
           </p>
         }
       >
-        <TableActionButton label="管理渠道分组" tone="primary" onClick={() => setGroupOpen(true)}>
+        <TableActionButton label="管理渠道分组" onClick={() => setGroupOpen(true)}>
           <Folder aria-hidden="true" />
         </TableActionButton>
         <TableActionButton

@@ -58,8 +58,8 @@ it("池模式同步提交后离开设置时取消状态读取，保留后台任�
   clients.push(client);
   client.setQueryDefaults(["account-pool-mode-sync"], { staleTime: 0 });
   client.setQueryData(["account-creation-settings"], settings);
-  client.setQueryData(["accounts"], [{ id: "account-1", name: "已有账号" }]);
-  client.setQueryData(["groups"], []);
+  client.setQueryData(["accounts", "options"], [{ id: "account-1", name: "已有账号" }]);
+  client.setQueryData(["groups", "options"], []);
   client.setQueryData(["dictionaries", "group"], { items: [] });
   const view = render(
     <QueryClientProvider client={client}>

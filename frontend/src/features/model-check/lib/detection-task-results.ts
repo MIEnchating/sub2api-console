@@ -1,4 +1,4 @@
-import type { AnimationResult, GroupStatus, Task } from "@/api";
+import type { AnimationResult, GroupOption, Task } from "@/api";
 import { collectAnimationTasks } from "./animation-task-results";
 import type { TerminalHistoryResult } from "./terminal-continuity";
 export type AccountRow = {
@@ -7,6 +7,9 @@ export type AccountRow = {
   animation?: AnimationResult;
   precheck?: AnimationResult;
   terminal?: TerminalHistoryResult;
+  models?: string[];
+  animations?: AnimationResult[];
+  prechecks?: AnimationResult[];
 };
 type GroupRows = { id: string; name: string; rows: AccountRow[] };
 
@@ -26,19 +29,26 @@ export function detectionAccountRows(
   for (const id of stringArray(task?.result.account_ids))
     add(id, typeof names[id] === "string" ? names[id] : undefined);
   for (const target of Array.isArray(task?.result.targets) ? task.result.targets : [])
-    if (isRecord(target) && typeof target.account_id === "string") add(target.account_id);
+    if (isRecord(target) && typeof target.account_id === "string") {
+      const row = add(target.account_id);
+      row.models = Array.isArray(target.models)
+        ? stringArray(target.models)
+        : stringArray([target.model]);
+    }
   for (const [id, value] of state.results)
     Object.assign(add(id, value.account_name), { animation: value });
   for (const [id, value] of state.precheckResults)
     Object.assign(add(id, value.account_name), { precheck: value });
   for (const value of terminals.values())
     Object.assign(add(value.account_id, value.account_name), { terminal: value });
+  for (const [id, results] of state.modelResults) add(id).animations = results;
+  for (const [id, results] of state.modelPrecheckResults) add(id).prechecks = results;
   return rows;
 }
 
 export function detectionResultGroups(
   task: Task | undefined,
-  groups: GroupStatus[] | undefined,
+  groups: GroupOption[] | undefined,
   rows: Map<string, AccountRow>,
 ): GroupRows[] {
   const config = isRecord(task?.result.configuration) ? task?.result.configuration : undefined;

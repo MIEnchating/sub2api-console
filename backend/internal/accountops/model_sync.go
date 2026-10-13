@@ -41,6 +41,7 @@ type modelSyncProbeRunner interface {
 }
 
 type ModelApplyRequest struct {
+	catalogIDs         []string
 	Accounts           []AccountModelSelection
 	ProbeModels        []string
 	CatalogFingerprint string
@@ -95,6 +96,9 @@ func (s *Service) ModelSyncPreview(ctx context.Context, accountIDs []string) (bu
 	if err != nil {
 		return business.AccountModelSyncPreview{}, err
 	}
+	if len(ids) == 0 {
+		return business.AccountModelSyncPreview{Accounts: []business.AccountModelSyncAccount{}, Models: []business.AccountModelCoverage{}, BlockedModels: []string{}, BlockedPatterns: []string{}}, nil
+	}
 	return repository.AccountModelSyncPreview(ctx, ids)
 }
 
@@ -136,12 +140,42 @@ func (s *Service) EnqueueModelApply(ctx context.Context, request ModelApplyReque
 	if !ok {
 		return taskstore.Task{}, errors.New("账号模型同步存储尚未就绪")
 	}
-	preview, err := repository.AccountModelSyncPreview(ctx, ids)
+	// Validate the original preview before narrowing the task to managed accounts.
+	// Exclusion alone may shrink scope; catalog changes still require a new preview.
+	previewIDs := ids
+	if len(previewIDs) == 0 {
+		previewIDs = requestedIDs
+	}
+	preview, err := repository.AccountModelSyncPreview(ctx, previewIDs)
 	if err != nil {
 		return taskstore.Task{}, err
 	}
+	if request.CatalogFingerprint != preview.Fingerprint && len(ids) != len(requestedIDs) {
+		previewIDs = requestedIDs
+		preview, err = repository.AccountModelSyncPreview(ctx, requestedIDs)
+		if err != nil {
+			return taskstore.Task{}, err
+		}
+	}
 	if strings.TrimSpace(request.CatalogFingerprint) == "" || request.CatalogFingerprint != preview.Fingerprint {
 		return taskstore.Task{}, ErrModelCatalogChanged
+	}
+	managed := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		managed[id] = true
+	}
+	selections := make([]AccountModelSelection, 0, len(ids))
+	for _, selection := range request.Accounts {
+		selection.AccountID = strings.TrimSpace(selection.AccountID)
+		if managed[selection.AccountID] {
+			selections = append(selections, selection)
+		}
+	}
+	request.Accounts = selections
+	request.catalogIDs = append([]string(nil), previewIDs...)
+	preview.Accounts = managedModelSyncAccounts(preview.Accounts, managed)
+	if len(ids) == 0 {
+		request.ProbeModels = nil
 	}
 	request.Accounts, err = validateAccountModelSelections(preview.Accounts, preview.BlockedPatterns, request.Accounts)
 	if err != nil {
@@ -280,6 +314,12 @@ func (s *Service) prepareModelSyncAccounts(ctx context.Context, accountIDs []str
 			return nil, fmt.Errorf("账号 ID %s 重复", accountID)
 		}
 		seen[accountID] = struct{}{}
+		if err := business.CheckAccountUpstreamManaged(ctx, s.repository, accountID); err != nil {
+			if errors.Is(err, business.ErrUpstreamExcluded) {
+				continue
+			}
+			return nil, err
+		}
 		_, account, err := s.localAccount(ctx, accountID)
 		if err != nil {
 			return nil, err
@@ -384,6 +424,9 @@ func (s *Service) discoverAccountModels(ctx context.Context, accountID string) m
 	item := modelSyncItem{AccountID: accountID, Status: "failed"}
 	guarded, release, err := s.acquireAccountMutation(ctx, accountID)
 	if err != nil {
+		if errors.Is(err, business.ErrUpstreamExcluded) {
+			item.Status = "skipped"
+		}
 		item.Error = err.Error()
 		return item
 	}
@@ -463,7 +506,15 @@ func (s *Service) executeModelApply(ctx context.Context, task taskstore.Task, re
 	}
 	repository := s.repository.(modelSyncRepository)
 	accountIDs := modelApplyAccountIDs(request.Accounts)
-	preview, err := repository.AccountModelSyncPreview(ctx, accountIDs)
+	if len(accountIDs) == 0 {
+		s.finishModelApplyTask(ctx, &task, accountIDs, nil, probe.RunSummary{}, "", true)
+		return
+	}
+	previewIDs := request.catalogIDs
+	if len(previewIDs) == 0 {
+		previewIDs = accountIDs
+	}
+	preview, err := repository.AccountModelSyncPreview(ctx, previewIDs)
 	if err != nil || preview.Fingerprint != request.CatalogFingerprint {
 		if err == nil {
 			err = ErrModelCatalogChanged
@@ -471,7 +522,11 @@ func (s *Service) executeModelApply(ctx context.Context, task taskstore.Task, re
 		s.failModelSyncTask(ctx, &task, accountIDs, err)
 		return
 	}
-	selections, err := validateAccountModelSelections(preview.Accounts, preview.BlockedPatterns, request.Accounts)
+	managed := make(map[string]bool, len(accountIDs))
+	for _, id := range accountIDs {
+		managed[id] = true
+	}
+	selections, err := validateAccountModelSelections(managedModelSyncAccounts(preview.Accounts, managed), preview.BlockedPatterns, request.Accounts)
 	if err != nil {
 		s.failModelSyncTask(ctx, &task, accountIDs, err)
 		return
@@ -548,6 +603,16 @@ func modelApplyAccountIDs(selections []AccountModelSelection) []string {
 	return result
 }
 
+func managedModelSyncAccounts(accounts []business.AccountModelSyncAccount, managed map[string]bool) []business.AccountModelSyncAccount {
+	result := make([]business.AccountModelSyncAccount, 0, len(managed))
+	for _, account := range accounts {
+		if managed[account.AccountID] {
+			result = append(result, account)
+		}
+	}
+	return result
+}
+
 func (s *Service) runUnifiedProbeModels(
 	ctx context.Context,
 	accountIDs, models []string,
@@ -597,6 +662,9 @@ func (s *Service) applyAccountModels(ctx context.Context, catalog business.Accou
 	}
 	guarded, release, err := s.acquireAccountMutation(ctx, catalog.AccountID)
 	if err != nil {
+		if errors.Is(err, business.ErrUpstreamExcluded) {
+			item.Status = "skipped"
+		}
 		item.Error = err.Error()
 		return item
 	}
@@ -807,10 +875,12 @@ func modelSyncTaskResult(accountIDs []string, completed int, items []modelSyncIt
 }
 
 func (s *Service) finishModelSyncTask(ctx context.Context, task *taskstore.Task, accountIDs []string, items []modelSyncItem, label string) {
-	succeeded, failed := 0, 0
+	succeeded, failed, skipped := 0, 0, 0
 	for _, item := range items {
 		if item.Status == "succeeded" {
 			succeeded++
+		} else if item.Status == "skipped" {
+			skipped++
 		} else {
 			failed++
 		}
@@ -820,9 +890,10 @@ func (s *Service) finishModelSyncTask(ctx context.Context, task *taskstore.Task,
 		task.Status = "partial"
 	}
 	task.Progress = 100
-	task.Message = fmt.Sprintf("%s完成：成功 %d，失败 %d", label, succeeded, failed)
+	task.Message = fmt.Sprintf("%s完成：成功 %d，失败 %d，跳过 %d", label, succeeded, failed, skipped)
 	task.Result = modelSyncTaskResult(accountIDs, len(items), items)
 	task.Result["succeeded"] = succeeded
+	task.Result["skipped"] = skipped
 	task.Result["failed"] = failed
 	task.Result["remote_write"] = false
 	task.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
@@ -831,19 +902,22 @@ func (s *Service) finishModelSyncTask(ctx context.Context, task *taskstore.Task,
 }
 
 func (s *Service) finishModelApplyTask(ctx context.Context, task *taskstore.Task, accountIDs []string, items []modelSyncItem, summary probe.RunSummary, probeError string, probeDisabled ...bool) {
-	applied, skipped, failed := 0, 0, 0
+	applied, skipped, failed, actionableSkipped := 0, 0, 0, 0
 	for _, item := range items {
 		switch item.Status {
 		case "succeeded":
 			applied++
 		case "skipped":
 			skipped++
+			if item.Error != business.ErrUpstreamExcluded.Error() {
+				actionableSkipped++
+			}
 		default:
 			failed++
 		}
 	}
 	task.Status = "succeeded"
-	if skipped > 0 || failed > 0 || probeError != "" || summary.Failed > 0 || summary.Skipped > 0 {
+	if actionableSkipped > 0 || failed > 0 || probeError != "" || summary.Failed > 0 || summary.Skipped > 0 {
 		task.Status = "partial"
 	}
 	task.Progress = 100

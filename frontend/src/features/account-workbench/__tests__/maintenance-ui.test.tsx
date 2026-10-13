@@ -26,6 +26,25 @@ const settings: WorkbenchMaintenance = {
   message: "",
   results: [],
 };
+it("维护账号执行前被排除时显示已跳过及原因", () => {
+  mount(
+    {
+      ...settings,
+      results: [
+        {
+          account_id: "41",
+          email: "owner@example.test",
+          action: "none",
+          status: "skipped",
+          reason: "upstream_excluded",
+        },
+      ],
+    },
+    vi.fn(),
+  );
+  expect(screen.getByRole("cell", { name: "已跳过" })).toBeVisible();
+  expect(screen.getByRole("cell", { name: "上游已排除管控，本次未执行维护" })).toBeVisible();
+});
 function mount(value: WorkbenchMaintenance | undefined, fetcher: typeof fetch): void {
   vi.stubGlobal("fetch", fetcher);
   vi.stubGlobal("PointerEvent", MouseEvent);
@@ -99,7 +118,9 @@ it("维护运行时禁止改设置和重复检查，同时保留停止入口", a
   expect(screen.getByRole("button", { name: "预览并保存" })).toBeDisabled();
   expect(screen.getByRole("button", { name: "停止维护" })).toBeEnabled();
   await user.click(screen.getByRole("button", { name: "取消" }));
+  await user.click(screen.getByRole("tab", { name: "运行状态" }));
   expect(await screen.findByRole("status")).toHaveTextContent("正在维护账号");
+  await user.click(screen.getByRole("tab", { name: "账号结果" }));
   expect(screen.getByRole("cell", { name: "上游限流，冷却后再检查" })).toBeVisible();
 });
 it("检查间隔小于一分钟时阻止预览并显示字段错误", async () => {
@@ -136,6 +157,7 @@ it("首次读取显示表格骨架，结果就绪后通过按钮打开设置弹�
   complete(Response.json(settings));
   expect(await screen.findByRole("button", { name: "维护设置" })).toBeVisible();
   expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  await userEvent.setup().click(screen.getByRole("tab", { name: "运行状态" }));
   expect(screen.getByRole("table", { name: "维护运行状态" })).toBeVisible();
   expect(screen.getByRole("region", { name: "维护结果" })).toBeVisible();
   expect(screen.queryByLabelText("正在读取维护设置")).not.toBeInTheDocument();
@@ -146,6 +168,7 @@ it("首次读取显示表格骨架，结果就绪后通过按钮打开设置弹�
   expect(await screen.findByRole("dialog", { name: "维护设置" })).toBeVisible();
   await user.keyboard("{Escape}");
   await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  await userEvent.setup().click(screen.getByRole("tab", { name: "运行状态" }));
   expect(screen.getByRole("table", { name: "维护运行状态" })).toBeVisible();
 });
 
@@ -178,5 +201,6 @@ it("读取维护范围期间可以取消，迟到响应不会重新打开确认�
     ),
   );
   expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  await userEvent.setup().click(screen.getByRole("tab", { name: "运行状态" }));
   expect(screen.getByRole("table", { name: "维护运行状态" })).toBeVisible();
 });

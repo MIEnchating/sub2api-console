@@ -83,7 +83,7 @@ func (r *syncRepository) HostBalanceSyncAllowed(context.Context, string) (bool, 
 	return *r.balanceAllowed, nil
 }
 
-func (r *syncRepository) Upstreams(context.Context) (business.UpstreamSummary, error) {
+func (r *syncRepository) UpstreamSyncTargets(context.Context, *string) (business.UpstreamSummary, error) {
 	return business.UpstreamSummary{Hosts: r.hosts}, nil
 }
 func (r *syncRepository) UpstreamMutationAccountIDs(_ context.Context, host string) ([]string, error) {

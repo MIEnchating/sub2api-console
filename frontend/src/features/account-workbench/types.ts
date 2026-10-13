@@ -1,4 +1,12 @@
+export type AccountUsageWindow = { used_percent: number; reset_at?: string };
+export type AccountUsage = {
+  five_hour?: AccountUsageWindow;
+  seven_day?: AccountUsageWindow;
+  updated_at?: string;
+};
+
 export type WorkbenchAccount = {
+  usage?: AccountUsage;
   id: string;
   name: string;
   email: string;
@@ -68,7 +76,16 @@ type WorkbenchInputItem = {
   plan: string;
   identity_source: string;
 };
+export type WorkbenchProxy = {
+  id: string;
+  name: string;
+  protocol: string;
+  available: boolean;
+  reason?: string;
+};
+
 export type WorkbenchPreview = {
+  proxy?: WorkbenchProxy;
   id: string;
   revision: number;
   expires_at: string;
@@ -104,6 +121,7 @@ export type WorkbenchRun = {
 };
 export type WorkbenchArtifact = { id: string; count: number; expires_at: string };
 export type WorkbenchInput = {
+  platform_proxy_id?: string;
   content: string;
   action: "import" | "export";
   template_id: string;
@@ -115,6 +133,7 @@ export type WorkbenchInput = {
 };
 
 export type MaintenanceSettings = {
+  check_enabled?: boolean;
   enabled: boolean;
   interval_minutes: number;
   cooldown_minutes: number;
@@ -148,3 +167,22 @@ export type MaintenancePreview = {
 };
 
 export type WorkbenchLoginPrompt = { id: string; kind: "password" | "email_code" | "totp_code" };
+
+export type ImportModelSettings = { model: string; revision: number };
+
+export type WorkbenchAccountActionPreview = {
+  account_id: string;
+  account_version: string;
+  target_version: string;
+  platform_present: boolean;
+  schedulable: boolean;
+  remembered: RememberedAccount | null;
+};
+export type WorkbenchAccountActionInput = {
+  action: "delete" | "scheduling";
+  account_version: string;
+  target_version: string;
+  schedulable?: boolean;
+  delete_remembered: boolean;
+  remembered_revision: number;
+};

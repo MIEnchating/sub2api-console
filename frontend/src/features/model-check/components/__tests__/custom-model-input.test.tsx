@@ -1,3 +1,4 @@
+import { selectDetectionModels } from "./model-selection-helper";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -30,11 +31,10 @@ it("手动输入模型后按 Escape 关闭建议时保留输入值", async () =>
   try {
     const user = userEvent.setup();
     const model = screen.getByRole("combobox", { name: "检测模型" });
-    expect(model).toHaveValue("gpt-6-astra");
-    await user.clear(model);
-    await user.type(model, "manual-model");
+    expect(model).toHaveTextContent("gpt-6-astra");
+    await selectDetectionModels(["manual-model"]);
     await user.keyboard("{Escape}");
-    expect(model).toHaveValue("manual-model");
+    expect(model).toHaveTextContent("manual-model");
   } finally {
     view.unmount();
     client.clear();

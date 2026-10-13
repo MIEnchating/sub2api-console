@@ -99,7 +99,7 @@ const group: GroupStatus = {
 
 it("预览完成并显示渠道新增模型后，确认写入携带预览任务 ID", async () => {
   const user = userEvent.setup();
-  vi.spyOn(api, "groups").mockResolvedValue([group]);
+  vi.spyOn(api, "groupMembershipOptions").mockResolvedValue([group]);
   vi.spyOn(api, "newAPIWorkspace").mockResolvedValue({
     platforms: [],
     local_groups: [{ id: "7", name: "默认分组", ratio: null }],
@@ -147,7 +147,7 @@ it("预览完成并显示渠道新增模型后，确认写入携带预览任务 
 
 it("预览后改变目标渠道选择会撤销确认入口", async () => {
   const user = userEvent.setup();
-  vi.spyOn(api, "groups").mockResolvedValue([group]);
+  vi.spyOn(api, "groupMembershipOptions").mockResolvedValue([group]);
   vi.spyOn(api, "newAPIWorkspace").mockResolvedValue({
     platforms: [],
     local_groups: [{ id: "7", name: "默认分组", ratio: null }],
@@ -178,7 +178,10 @@ it("预览后改变目标渠道选择会撤销确认入口", async () => {
 });
 
 it("平台绑定分组时只显示已绑定的账号分组", async () => {
-  vi.spyOn(api, "groups").mockResolvedValue([group, { ...group, id: "8", name: "未绑定分组" }]);
+  vi.spyOn(api, "groupMembershipOptions").mockResolvedValue([
+    group,
+    { ...group, id: "8", name: "未绑定分组" },
+  ]);
   vi.spyOn(api, "newAPIWorkspace").mockResolvedValue({
     platforms: [],
     local_groups: [
@@ -206,7 +209,7 @@ it("平台绑定分组时只显示已绑定的账号分组", async () => {
 });
 
 it("添加弹窗按执行范围分组展示选择项并汇总所选数量", async () => {
-  vi.spyOn(api, "groups").mockResolvedValue([group]);
+  vi.spyOn(api, "groupMembershipOptions").mockResolvedValue([group]);
   vi.spyOn(api, "newAPIWorkspace").mockResolvedValue({
     platforms: [],
     local_groups: [{ id: "7", name: "默认分组", ratio: null }],
@@ -236,7 +239,7 @@ it("添加弹窗按执行范围分组展示选择项并汇总所选数量", asyn
 
 it("运行间隔超出允许范围时禁用保存任务", async () => {
   const user = userEvent.setup();
-  vi.spyOn(api, "groups").mockResolvedValue([group]);
+  vi.spyOn(api, "groupMembershipOptions").mockResolvedValue([group]);
   vi.spyOn(api, "newAPIWorkspace").mockResolvedValue({
     platforms: [],
     local_groups: [{ id: "7", name: "默认分组", ratio: null }],
@@ -266,7 +269,7 @@ it("运行间隔超出允许范围时禁用保存任务", async () => {
 
 it("保存运营任务时提交所选分组渠道和独立运行配置", async () => {
   const user = userEvent.setup();
-  vi.spyOn(api, "groups").mockResolvedValue([group]);
+  vi.spyOn(api, "groupMembershipOptions").mockResolvedValue([group]);
   vi.spyOn(api, "newAPIWorkspace").mockResolvedValue({
     platforms: [],
     local_groups: [{ id: "7", name: "默认分组", ratio: null }],

@@ -20,7 +20,7 @@ import { JsonEditor } from "@/components/json-editor";
 import { DataTablePagination } from "@/components/data-table/pagination";
 import { useClientPagination } from "@/hooks/use-client-pagination";
 import type { WorkbenchRun, WorkbenchRunItem } from "../types";
-import { runStatusLabels } from "../constants";
+import { runStatusLabels, runStatusVariants } from "../constants";
 import { checkError, checkLabel, runItemMessage } from "../lib/check-result";
 import { RunLoginInput } from "./run-login-input";
 
@@ -73,7 +73,9 @@ function RunItemsContent(props: RunItemsProps): ReactElement {
                   className="max-w-80 whitespace-normal wrap-anywhere"
                   overflowTooltip={false}
                 >
-                  <Badge variant="secondary">{runStatusLabels[item.status] || "状态待确认"}</Badge>
+                  <Badge variant={runStatusVariants[item.status] ?? "neutral"}>
+                    {runStatusLabels[item.status] || "状态待确认"}
+                  </Badge>
                   <p className="mt-1 text-xs text-muted-foreground">{runItemMessage(item)}</p>
                 </TableCell>
                 <TableCell className="whitespace-normal wrap-anywhere" overflowTooltip={false}>

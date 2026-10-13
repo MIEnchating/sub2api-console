@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { KumaTemplate, KumaTemplateDistributionPreview } from "@/api";
 import { TemplateDistributionDialog } from "../template-distribution-dialog";
 import { KumaTemplatesPage } from "../templates-page";
@@ -28,6 +28,7 @@ const preview: KumaTemplateDistributionPreview = {
   ],
 };
 let client: QueryClient;
+beforeEach(() => vi.stubGlobal("PointerEvent", MouseEvent));
 afterEach(() => {
   cleanup();
   client?.clear();
@@ -125,7 +126,11 @@ it("确认影响范围后仅提交一次并展示逐项结果，完成后刷新�
   expect(results).toHaveTextContent("已跳过");
   const writes = fetch.mock.calls.filter((call) => call[1]?.method === "POST");
   expect(writes).toHaveLength(1);
-  expect(JSON.parse(String(writes[0][1]?.body))).toEqual({ revision: 2, scope: preview.scope });
+  expect(JSON.parse(String(writes[0][1]?.body))).toEqual({
+    revision: 2,
+    scope: preview.scope,
+    monitor_ids: [11],
+  });
   expect(client.getQueryState(["uptime-kuma", "monitors"])?.isInvalidated).toBe(true);
   expect(screen.queryByRole("button", { name: "确认下发" })).not.toBeInTheDocument();
 });
@@ -178,4 +183,56 @@ it("模板列表的参数下发入口打开当前模板影响范围", async () =
   expect(await screen.findByRole("list", { name: "参数下发影响范围" })).toHaveTextContent(
     "健康项甲",
   );
+});
+
+it("默认全选可下发项，取消单项后只提交剩余选择", async () => {
+  const fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (init?.method === "POST") return Response.json({ ...task, status: "queued" });
+    if (String(input).includes("/api/tasks/")) return Response.json(task);
+    return Response.json({
+      ...preview,
+      items: [
+        ...preview.items,
+        { monitor_id: 13, name: "健康项丙", template_revision: 1, reason: "" },
+      ],
+    });
+  });
+  vi.stubGlobal("fetch", fetch);
+  renderDialog();
+  const first = await screen.findByRole("checkbox", { name: "选择 健康项甲（#11）" });
+  expect(first).toBeChecked();
+  expect(screen.getByRole("checkbox", { name: "选择 健康项丙（#13）" })).toBeChecked();
+  const unavailable = screen.getByRole("checkbox", { name: "选择 健康项乙（#12）" });
+  expect(unavailable).not.toBeChecked();
+  expect(unavailable).toHaveAttribute("aria-disabled", "true");
+  first.focus();
+  await userEvent.keyboard(" ");
+  expect(first).not.toBeChecked();
+  expect(screen.getByRole("checkbox", { name: "全选可下发项" })).toBePartiallyChecked();
+  await userEvent.click(screen.getByRole("button", { name: "确认下发" }));
+  await waitFor(() =>
+    expect(fetch.mock.calls.some((call) => call[1]?.method === "POST")).toBe(true),
+  );
+  const write = fetch.mock.calls.find((call) => call[1]?.method === "POST");
+  expect(JSON.parse(String(write?.[1]?.body))).toEqual({
+    revision: 2,
+    scope: preview.scope,
+    monitor_ids: [13],
+  });
+});
+
+it("取消全选后禁止下发，再次全选恢复可下发项", async () => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () => Response.json(preview)),
+  );
+  renderDialog();
+  const all = await screen.findByRole("checkbox", { name: "全选可下发项" });
+  expect(all).toBeChecked();
+  await userEvent.click(all);
+  expect(screen.getByRole("button", { name: "确认下发" })).toBeDisabled();
+  expect(screen.getByText(/已选 0 项/)).toBeVisible();
+  await userEvent.click(all);
+  expect(screen.getByRole("checkbox", { name: "选择 健康项甲（#11）" })).toBeChecked();
+  expect(screen.getByRole("button", { name: "确认下发" })).toBeEnabled();
 });

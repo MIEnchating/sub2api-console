@@ -38,6 +38,7 @@ type Run struct {
 	Items          []RunItem `json:"items"`
 }
 type privateRun struct {
+	ProxyBinding     *platformProxyBinding      `json:"proxy_binding,omitempty"`
 	RememberedSource *rememberedSource          `json:"remembered_source,omitempty"`
 	Scope            string                     `json:"scope"`
 	Public           Run                        `json:"public"`

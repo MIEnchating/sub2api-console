@@ -89,4 +89,6 @@ it("任务未开始即失败时展示失败原因并停止启动等待", () => {
   expect(screen.getByText("已失败")).toBeVisible();
   expect(screen.getByText("读取目标配置失败")).toBeVisible();
   expect(screen.queryByRole("status", { name: "读取目标配置失败" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
+  expect(screen.queryByText(/^进度 /)).not.toBeInTheDocument();
 });

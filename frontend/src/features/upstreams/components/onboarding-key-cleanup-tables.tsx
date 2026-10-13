@@ -16,7 +16,7 @@ import type { CleanupResultItem } from "./onboarding-key-cleanup-dialog";
 
 const cleanupStatusLabels = { deleted: "已删除", skipped: "已跳过", failed: "失败" } as const;
 const cleanupStatusVariants = {
-  deleted: "outline",
+  deleted: "success",
   skipped: "warning",
   failed: "destructive",
 } as const;

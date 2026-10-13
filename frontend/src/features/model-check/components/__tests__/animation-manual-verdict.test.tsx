@@ -98,10 +98,12 @@ it("卡片手动标记降智时按当前结果保存并显示红色，重新挂�
   const fetch = vi.fn(async () => Response.json(saved));
   vi.stubGlobal("fetch", fetch);
   const view = setup(task, true);
+  view.client.setQueryData(["model-check-account-statuses"], []);
   const button = screen.getByRole("button", { name: "降智" });
   expect(button).toHaveAttribute("aria-pressed", "false");
   await user.click(button);
   await waitFor(() => expect(button).toHaveAttribute("aria-pressed", "true"));
+  expect(view.client.getQueryState(["model-check-account-statuses"])?.isInvalidated).toBe(true);
   expect(button).toHaveClass("text-destructive", "bg-destructive/10");
   expect(fetch).toHaveBeenCalledWith(
     "/api/model-checks/animations/animation-1/manual-verdict",

@@ -1,7 +1,7 @@
 import { useDictionaryOrder } from "@/hooks/use-dictionary-order";
 import { Info } from "lucide-react";
 
-import type { GroupStatus, UnifiedLogEventLevel, UnifiedLogKind, UnifiedLogState } from "@/api";
+import type { GroupOption, UnifiedLogEventLevel, UnifiedLogKind, UnifiedLogState } from "@/api";
 import { FilterMenu } from "@/components/data-table/filter-menu";
 import { TableFilterToolbar } from "@/components/data-table/filter-toolbar";
 import { SearchField } from "@/components/data-table/search-field";
@@ -75,7 +75,7 @@ function EventLevelFilter(props: {
 
 function EventGroupFilter(props: {
   value: string;
-  groups: GroupStatus[];
+  groups: GroupOption[];
   onChange: (value: string) => void;
 }) {
   const groups = useDictionaryOrder("group", props.groups, (group) => group.id ?? "");
@@ -96,7 +96,7 @@ export function LogsFilterToolbar(props: {
   state: UnifiedLogState;
   eventLevel: UnifiedLogEventLevel;
   eventGroup: string;
-  groups: GroupStatus[];
+  groups: GroupOption[];
   truncated: boolean;
   onSearchChange: (value: string) => void;
   onKindChange: (value: UnifiedLogKind) => void;

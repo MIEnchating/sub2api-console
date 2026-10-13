@@ -56,6 +56,10 @@ export function ExchangeGroupSetEditor(props: {
     [...sections.entries()],
     (section) => section[0],
   );
+  const availableGroupCount = orderedSections.reduce(
+    (count, [, groups]) => count + groups.filter((group) => group.available).length,
+    0,
+  );
   const complete = props.groupSet.length >= 2 && !platformMismatch;
   let statusLabel = `已选 ${props.groupSet.length} / 至少 2 个`;
   if (platformMismatch) statusLabel = "平台混用";
@@ -111,9 +115,9 @@ export function ExchangeGroupSetEditor(props: {
               <TooltipTrigger
                 render={
                   <Button
-                    variant="ghost"
+                    variant="destructive"
                     size="icon"
-                    className="text-muted-foreground hover:text-destructive"
+
                     aria-label={`删除互换组 ${setNumber}`}
                     onClick={() => props.onRemove(props.setIndex)}
                   />
@@ -126,12 +130,12 @@ export function ExchangeGroupSetEditor(props: {
           </div>
         </div>
         <div className="flex min-w-0 flex-wrap items-center gap-2" data-slot="exchange-set-summary">
-          <Badge variant={complete ? "outline" : "warning"}>{statusLabel}</Badge>
+          <Badge variant={complete ? "success" : "warning"}>{statusLabel}</Badge>
           {selectedPlatform ? (
             <Badge variant="secondary">{platformLabel(selectedPlatform)}</Badge>
           ) : null}
           <span className="text-muted-foreground text-xs tabular-nums">
-            {visibleGroups.filter((group) => group.available).length} 个可用
+            {availableGroupCount} 个可用
           </span>
         </div>
       </div>

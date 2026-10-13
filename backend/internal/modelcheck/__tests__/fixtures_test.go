@@ -31,6 +31,13 @@ type catalog struct {
 	failSave     bool
 	plans        []byte
 	groupMembers map[string][]string
+	excluded     map[string]bool
+}
+
+func (c *catalog) AccountUpstreamExcluded(_ context.Context, id string) (bool, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.excluded[id], nil
 }
 
 func (c *catalog) Accounts(context.Context) ([]business.AccountStatus, error) { return c.rows, nil }

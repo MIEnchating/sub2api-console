@@ -32,7 +32,7 @@ it.each(["active", "disabled"])("直达 %s 的已有绑定分组时允许预览�
 it("直达分组时本地分组尚未返回则显示读取状态且不误报平台不匹配", async () => {
   let resolveGroups!: (groups: import("@/api").GroupStatus[]) => void;
   client = renderOnboarding(boundCandidate("active"));
-  vi.mocked(api.groups).mockImplementation(
+  vi.mocked(api.groupOptions).mockImplementation(
     () =>
       new Promise((resolve) => {
         resolveGroups = resolve;
@@ -62,8 +62,8 @@ it("Claude 上游分组在存在 Anthropic 或 Composite 本地分组时可以�
     can_create_key: true,
   };
   client = renderOnboarding(candidate);
-  const groups = await api.groups();
-  vi.mocked(api.groups).mockResolvedValue(
+  const groups = await api.groupOptions();
+  vi.mocked(api.groupOptions).mockResolvedValue(
     groups.map((group, index) => ({
       ...group,
       name: index === 0 ? "CCMAX-特价" : "国产-平价",
@@ -77,7 +77,7 @@ it("Claude 上游分组在存在 Anthropic 或 Composite 本地分组时可以�
     ],
   });
   await act(async () => {
-    await client!.invalidateQueries({ queryKey: ["groups"] });
+    await client!.invalidateQueries({ queryKey: ["groups", "options"] });
   });
   const selector = await screen.findByRole("combobox", { name: "Claude Max｜蒸馏组 本地分组" });
   fireEvent.click(selector);
@@ -90,20 +90,11 @@ it("本地分组为空后刷新取得兼容分组时重新提供选择", async (
   vi.stubGlobal("PointerEvent", MouseEvent);
   client = renderOnboarding(boundCandidate("active"), true, []);
   const refresh = await screen.findByRole("button", { name: "刷新本地分组" });
-  vi.mocked(api.groups).mockResolvedValue([
+  vi.mocked(api.groupOptions).mockResolvedValue([
     {
       id: "1",
       name: "已同步分组",
       platform: "openai",
-      account_count: 0,
-      scheduling_open: 0,
-      scheduling_closed: 0,
-      scheduling_unknown: 0,
-      strategy: "balanced",
-      strategy_source: "global_default",
-      participation_status: "participating",
-      participation_reason: null,
-      status: "healthy",
     },
   ]);
   vi.spyOn(api, "dictionaries").mockResolvedValue({
@@ -121,12 +112,21 @@ it("本地分组为空后刷新取得兼容分组时重新提供选择", async (
 it("空目录缓存刷新失败时只提示读取失败而不误报平台不兼容", async () => {
   const errorToast = vi.spyOn(toast, "error");
   client = renderOnboarding(boundCandidate("active"), true, []);
-  client.setQueryData(["groups"], []);
-  vi.mocked(api.groups).mockRejectedValue(new Error("本地目录暂时不可用"));
+  client.setQueryData(["groups", "options"], []);
+  vi.mocked(api.groupOptions).mockRejectedValue(new Error("本地目录暂时不可用"));
   await waitFor(() => expect(errorToast).toHaveBeenCalled());
   await screen.findByRole("combobox", { name: "已有绑定分组 本地分组" });
   expect(errorToast.mock.calls.flat()).not.toEqual(
     expect.arrayContaining([expect.stringContaining("当前没有兼容")]),
   );
   expect(screen.getByRole("button", { name: "刷新本地分组" })).toBeEnabled();
+});
+
+it("添加账号读取选项时不请求上游流量或分组健康统计", async () => {
+  client = renderOnboarding(boundCandidate("active"), true);
+  await screen.findByRole("combobox", { name: "已有绑定分组 本地分组" });
+  expect(api.groupOptions).toHaveBeenCalled();
+  expect(api.upstreamOptions).toHaveBeenCalled();
+  expect(api.groups).not.toHaveBeenCalled();
+  expect(api.upstreams).not.toHaveBeenCalled();
 });

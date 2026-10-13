@@ -108,6 +108,7 @@ it.each(["group", "platform"] as const)(
     expect(await screen.findByText("暂无可选分组")).toBeVisible();
     await waitFor(() => expect(screen.queryByRole("status")).not.toBeInTheDocument());
     expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
+    expect(screen.getByText("0 个可用")).toBeVisible();
     expect(screen.getByRole("textbox", { name: "互换组 1 规则名称" })).toHaveValue("常规价格");
   },
 );

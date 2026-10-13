@@ -48,19 +48,11 @@ let client: QueryClient;
 beforeEach(() => {
   vi.stubGlobal("PointerEvent", MouseEvent);
   client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
-  vi.spyOn(api, "groups").mockResolvedValue([
+  vi.spyOn(api, "groupMembershipOptions").mockResolvedValue([
     {
       id: "7",
       name: "生产分组",
       account_count: 1,
-      scheduling_open: 1,
-      scheduling_closed: 0,
-      scheduling_unknown: 0,
-      strategy: "default",
-      strategy_source: "global_default",
-      participation_status: "participating",
-      participation_reason: null,
-      status: "healthy",
     },
   ]);
   vi.spyOn(api, "newAPIWorkspace").mockResolvedValue({
@@ -254,7 +246,10 @@ it("预览创建期间分组成员数量变化时迟到结果不能恢复确认�
   const view = render(editor([channel]));
   await screen.findByRole("checkbox", { name: /生产分组/ });
   await user.click(screen.getByRole("button", { name: "预览" }));
-  client.setQueryData(["groups"], [{ ...(await api.groups())[0]!, account_count: 2 }]);
+  client.setQueryData(
+    ["groups", "memberships"],
+    [{ ...(await api.groupMembershipOptions())[0]!, account_count: 2 }],
+  );
   view.rerender(editor([channel]));
   await act(async () => resolve(preview));
   await screen.findByRole("region", { name: "运营预览结果" });
@@ -282,7 +277,7 @@ it.each([50, 51])("已有 %i 个已选渠道时限制新增，超限必须移除
     },
   };
   const user = userEvent.setup();
-  client.setQueryData(["groups"], await api.groups());
+  client.setQueryData(["groups", "memberships"], await api.groupMembershipOptions());
   client.setQueryData(["newapi-workspace", "platform"], await api.newAPIWorkspace("platform"));
   render(editor(channels, editing));
   await screen.findByRole("checkbox", { name: /生产分组/ });

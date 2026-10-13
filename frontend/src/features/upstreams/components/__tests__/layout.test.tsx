@@ -8,12 +8,13 @@ import { UpstreamsPage } from "../../../../App";
 import { router } from "../../../../router";
 
 describe("上游管理列表布局", () => {
-  it("新增并发列后为状态、余额、并发和操作保留独立列宽", () => {
+  it.each([false, true])("排除状态为 %s 时操作列仅保留三个按钮且不挤占并发列", (excluded) => {
     const queryClient = new QueryClient();
     queryClient.setQueryData(["upstreams"], {
       hosts: [
         {
           upstream_id: "upstream-1",
+          excluded,
           host: "api.example.test",
           hosts: ["api.example.test"],
           base_url: "https://api.example.test",
@@ -65,6 +66,10 @@ describe("上游管理列表布局", () => {
     expect(view.getByRole("columnheader", { name: "操作" })).toHaveClass("w-40");
     expect(view.getAllByRole("columnheader")).toHaveLength(10);
     expect(view.getAllByRole("cell")).toHaveLength(10);
+    const actions = within(view.getAllByRole("cell")[9]!);
+    expect(
+      actions.getAllByRole("button").map((button) => button.getAttribute("aria-label")),
+    ).toEqual(["添加账号", "编辑上游", "更多操作"]);
     expect(view.getByLabelText("已配置并发")).toHaveTextContent("10");
     expect(header).toContain('aria-label="上游并发说明"');
     expect(authStatusStart).toBeGreaterThan(-1);

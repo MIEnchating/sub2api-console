@@ -148,6 +148,9 @@ function AnimationCheckContent(props: {
         .map((id) => ({
           account_id: id,
           model: value.unified_model,
+          models: value.additional_models?.length
+            ? [value.unified_model, ...value.additional_models]
+            : undefined,
         })),
       timeout_seconds: value.timeout_seconds,
     });
@@ -228,6 +231,8 @@ function AnimationCheckContent(props: {
               precheckStatuses={tasks.precheckStatuses}
               onPrecheck={(value) => submit(value, "precheck")}
               results={tasks.results}
+              modelResults={tasks.modelResults}
+              modelPrecheckResults={tasks.modelPrecheckResults}
               statuses={tasks.statuses}
               activities={tasks.activities}
               busyIDs={tasks.busyIDs}
@@ -305,6 +310,7 @@ function AnimationCheckContent(props: {
           mode={scheduleEdit.mode}
           targets={scheduleEdit.batch ? scheduleEdit.targets : undefined}
           model={form.getValues("unified_model")}
+          additionalModels={form.getValues("additional_models")}
           schedule={scheduleEdit.batch ? undefined : scheduleEdit.targets[0].schedule}
           onClose={() => setScheduleEdit(null)}
         />

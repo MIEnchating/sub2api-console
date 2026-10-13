@@ -77,7 +77,7 @@ test("检测未通过时保留站点账号并提供二次确认的手动启用�
   await expect(completed.getByRole("button", { name: "启用", exact: true })).toBeEnabled();
   await failure.getByRole("button", { name: "启用", exact: true }).click();
   const dialog = page.getByRole("dialog");
-  await expect(dialog.getByText(/智商检测未通过/)).toBeVisible();
+  await expect(dialog.getByText(/糖果题检测未通过/)).toBeVisible();
   expect(writes).toEqual([]);
   await dialog.getByRole("button", { name: "启用所选账号" }).click();
   await expect.poll(() => writes).toEqual([{ revision: 1, ids: ["error-one"] }]);

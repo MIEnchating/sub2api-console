@@ -12,6 +12,8 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/MIEnchating/sub2api-console/backend/internal/business"
+
 	"github.com/MIEnchating/sub2api-console/backend/internal/targetguard"
 	"github.com/MIEnchating/sub2api-console/backend/internal/taskrunner"
 	"github.com/MIEnchating/sub2api-console/backend/internal/taskstore"
@@ -22,10 +24,11 @@ const animationPrompt = `请生成可直接运行的单文件HTML，使用内联
 const maximumAnimationPromptLength = 10000
 
 type AnimationTarget struct {
-	AccountID string `json:"account_id"`
-	Model     string `json:"model"`
-	Endpoint  string `json:"endpoint,omitempty"`
-	Platform  string `json:"platform,omitempty"`
+	Models    []string `json:"models,omitempty"`
+	AccountID string   `json:"account_id"`
+	Model     string   `json:"model"`
+	Endpoint  string   `json:"endpoint,omitempty"`
+	Platform  string   `json:"platform,omitempty"`
 }
 
 type AnimationRequest struct {
@@ -107,7 +110,11 @@ func (s *Service) prepareAnimation(ctx context.Context, request AnimationRequest
 		target := &request.Targets[i]
 		// Endpoint metadata is produced only from validated custom configuration.
 		target.Endpoint, target.Platform = "", ""
-		target.Model = strings.TrimSpace(target.Model)
+		models, err := normalizeAnimationModels(target.Model, target.Models)
+		if err != nil {
+			return request, nil, err
+		}
+		target.Model, target.Models = models[0], models
 		if !stablePositiveID(target.AccountID) || seen[target.AccountID] {
 			return request, nil, errors.New("账号必须使用不重复的有效稳定 ID")
 		}
@@ -121,6 +128,17 @@ func (s *Service) prepareAnimation(ctx context.Context, request AnimationRequest
 	if err != nil {
 		return request, nil, err
 	}
+	managed := make(map[string]bool, len(accounts))
+	for _, account := range accounts {
+		managed[account.ID] = true
+	}
+	filteredTargets := make([]AnimationTarget, 0, len(accounts))
+	for _, target := range request.Targets {
+		if managed[target.AccountID] {
+			filteredTargets = append(filteredTargets, target)
+		}
+	}
+	request.Targets = filteredTargets
 	for _, account := range accounts {
 		if account.AccountType == "oauth" {
 			if account.Platform != "openai" {
@@ -187,14 +205,14 @@ func (s *Service) EnqueueAnimation(ctx context.Context, request AnimationRequest
 		ids[i] = target.AccountID
 	}
 	task := taskstore.Task{ID: id, Skill: animationSkill, Operation: "account-model-animation", Status: "queued", Message: "动画生成检测已排队", CreatedAt: now, UpdatedAt: now,
-		Result: map[string]any{"account_ids": ids, "targets": request.Targets, "completed": 0, "total": len(accounts), "animations": []AnimationResult{}, "remote_write": false}}
+		Result: map[string]any{"account_ids": ids, "targets": request.Targets, "completed": 0, "total": animationTargetUnits(request.Targets), "animations": []AnimationResult{}, "remote_write": false}}
 	if request.Mode == precheckMode {
 		task.Operation, task.Message = "account-model-precheck", "前置检测已排队"
 		task.Result["mode"] = precheckMode
 	}
 	if request.Mode == combinedMode {
 		task.Operation, task.Message = "account-model-combined", "前置与动画检测已排队"
-		task.Result["mode"], task.Result["total"] = combinedMode, 2*len(accounts)
+		task.Result["mode"], task.Result["total"] = combinedMode, 2*animationTargetUnits(request.Targets)
 	}
 	if err := s.prepareRecovery(ctx, &task, detectionRecovery{Request: request}, accounts); err != nil {
 		release()
@@ -223,7 +241,7 @@ func (s *Service) AnimationHistory(ctx context.Context) ([]taskstore.Task, error
 }
 
 func (s *Service) executeAnimation(parent context.Context, task taskstore.Task, request AnimationRequest, accounts []selectedAccount) {
-	ctx, cancel := context.WithTimeout(parent, s.taskTimeout)
+	ctx, cancel := context.WithTimeout(parent, animationTaskTimeout(request, s.taskTimeout))
 	defer cancel()
 	runStarted := time.Now()
 	runStartedAt := runStarted.UTC().Format(time.RFC3339Nano)
@@ -247,20 +265,21 @@ func (s *Service) executeAnimation(parent context.Context, task taskstore.Task, 
 		return
 	}
 	modes := []string{request.Mode}
-	unit := "个账号"
+	unit := "项检测"
 	if request.Mode == combinedMode {
 		modes = []string{precheckMode, "animation"}
 		unit = "项检测"
 	}
-	total := len(accounts) * len(modes)
+	total := animationTargetUnits(request.Targets) * len(modes)
 	completed := previousResults[AnimationResult](task, "animations")
+	total += historicalAnimationUnits(accounts, completed)
 	done := map[string]bool{}
 	succeeded := 0
 	for _, result := range completed {
 		if result.Phase != "" && result.Phase != "completed" {
 			continue
 		}
-		done[animationResultKey(result.AccountID, result.Mode)] = true
+		done[animationResultKey(result.AccountID, result.Mode, result.Model)] = true
 		if result.Status == "succeeded" {
 			succeeded++
 		}
@@ -274,46 +293,56 @@ func (s *Service) executeAnimation(parent context.Context, task taskstore.Task, 
 		workers.Add(1)
 		go func() {
 			defer workers.Done()
-			for _, mode := range modes {
-				if done[animationResultKey(account.ID, mode)] {
-					continue
-				}
-				if ctx.Err() != nil {
-					return
-				}
-				result := AnimationResult{AccountID: account.ID, AccountName: account.Name, Model: request.Targets[index].Model, RequestID: fmt.Sprintf("%s-%s", task.ID, account.ID), Status: "failed"}
-				if request.Custom != nil {
-					// Retain validated endpoint metadata, never the execution credential.
-					result.Endpoint = request.Custom.BaseURL
-					result.Platform = request.Custom.Platform
-				}
-				result.Mode = mode
-				if mode != precheckMode {
-					result.Prompt = request.Prompt
-				}
-				if request.Mode == combinedMode {
-					result.RequestID += "-" + mode
-				}
-				result.CompletedAt = time.Now().UTC().Format(time.RFC3339Nano)
-				result.Phase = "queued"
-				results <- cloneAnimationResult(result)
-				err := s.runAnimationWithRetry(ctx, account, request.TimeoutSeconds, request.Custom, request.PrecheckQuestions, &result, func() {
-					results <- cloneAnimationResult(result)
-				})
-				if err != nil && taskstore.Interrupted(ctx) {
-					return
-				}
-				result.CompletedAt = time.Now().UTC().Format(time.RFC3339Nano)
-				if err != nil {
-					if request.Custom != nil {
-						err = errors.New(strings.ReplaceAll(err.Error(), request.Custom.APIKey, "[已隐藏]"))
+			for modelIndex, model := range request.Targets[index].Models {
+				for _, mode := range modes {
+					if done[animationResultKey(account.ID, mode, model)] {
+						continue
 					}
-					result.Error = safeCredentialError(err)
-				} else {
-					result.Status = "succeeded"
+					if ctx.Err() != nil {
+						return
+					}
+					result := AnimationResult{AccountID: account.ID, AccountName: account.Name, Model: model, RequestID: fmt.Sprintf("%s-%s", task.ID, account.ID), Status: "failed"}
+					if modelIndex > 0 {
+						result.RequestID += fmt.Sprintf("-model-%d", modelIndex+1)
+					}
+					if request.Custom != nil {
+						// Retain validated endpoint metadata, never the execution credential.
+						result.Endpoint = request.Custom.BaseURL
+						result.Platform = request.Custom.Platform
+					}
+					result.Mode = mode
+					if mode != precheckMode {
+						result.Prompt = request.Prompt
+					}
+					if request.Mode == combinedMode {
+						result.RequestID += "-" + mode
+					}
+					result.CompletedAt = time.Now().UTC().Format(time.RFC3339Nano)
+					result.Phase = "queued"
+					results <- cloneAnimationResult(result)
+					err := s.runAnimationWithRetry(ctx, account, request.TimeoutSeconds, request.Custom, request.PrecheckQuestions, &result, func() {
+						results <- cloneAnimationResult(result)
+					})
+					if err != nil && taskstore.Interrupted(ctx) {
+						return
+					}
+					if errors.Is(err, business.ErrUpstreamExcluded) {
+						result.Phase = "excluded"
+						results <- cloneAnimationResult(result)
+						continue
+					}
+					result.CompletedAt = time.Now().UTC().Format(time.RFC3339Nano)
+					if err != nil {
+						if request.Custom != nil {
+							err = errors.New(strings.ReplaceAll(err.Error(), request.Custom.APIKey, "[已隐藏]"))
+						}
+						result.Error = safeCredentialError(err)
+					} else {
+						result.Status = "succeeded"
+					}
+					result.Phase = "completed"
+					results <- cloneAnimationResult(result)
 				}
-				result.Phase = "completed"
-				results <- cloneAnimationResult(result)
 			}
 		}()
 	}
@@ -323,11 +352,14 @@ func (s *Service) executeAnimation(parent context.Context, task taskstore.Task, 
 		if result.Phase != "" && result.Phase != "completed" {
 			continue
 		}
-		activeResults[animationResultKey(result.AccountID, result.Mode)] = result
+		activeResults[animationResultKey(result.AccountID, result.Mode, result.Model)] = result
 	}
 	for result := range results {
-		key := animationResultKey(result.AccountID, result.Mode)
-		if result.Phase == "completed" {
+		key := animationResultKey(result.AccountID, result.Mode, result.Model)
+		if result.Phase == "excluded" {
+			total--
+			delete(activeResults, key)
+		} else if result.Phase == "completed" {
 			activeResults[key] = cloneAnimationResult(result)
 			if err := s.persistAnimationEvidence(ctx, task.ID, []AnimationResult{result}); err != nil {
 				slog.Error("保存动画检测证据失败", "task_id", task.ID, "account_id", result.AccountID, "mode", result.Mode, "error", err)
@@ -344,7 +376,7 @@ func (s *Service) executeAnimation(parent context.Context, task taskstore.Task, 
 					succeeded++
 				}
 			}
-			task.Progress = len(completed) * 100 / total
+			task.Progress = len(completed) * 100 / max(total, 1)
 			task.Message = fmt.Sprintf("%s已完成 %d/%d %s", animationModeLabel(request.Mode), len(completed), total, unit)
 		} else {
 			activeResults[key] = result
@@ -363,12 +395,13 @@ func (s *Service) executeAnimation(parent context.Context, task taskstore.Task, 
 		taskstore.PersistProgress(s.tasks, task)
 	}
 	task.Status = "succeeded"
-	if succeeded == 0 {
+	if succeeded == 0 && total > 0 {
 		task.Status = "failed"
 	} else if succeeded < total {
 		task.Status = "partial"
 	}
 	task.Message = fmt.Sprintf("%s完成：成功 %d，失败 %d", animationModeLabel(request.Mode), succeeded, total-succeeded)
+	task.Progress = 100
 	setRunTiming(time.Now())
 	taskstore.MarkCancelled(ctx, &task, animationModeLabel(request.Mode)+"已取消")
 	taskstore.PersistFinal(s.tasks, task)

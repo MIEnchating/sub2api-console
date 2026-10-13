@@ -1,3 +1,4 @@
+import { selectDetectionModels } from "./fixtures/model-selection";
 import { expect, test, type Page } from "@playwright/test";
 import { account } from "../../src/features/accounts/__tests__/fixtures";
 import { pageFixtures } from "./fixtures/page-shell";
@@ -140,8 +141,8 @@ test("动画检测错误显示在字段下方且无重叠，清除错误后恢�
   await expect(page.getByRole("button", { name: /开始检测/ })).toBeEnabled();
   const timeoutInput = page.getByRole("spinbutton", { name: "请求超时（秒）" });
   const modelInput = page.getByRole("combobox", { name: "检测模型" });
-  await expect(modelInput).toHaveValue("gpt-6-astra");
-  await modelInput.fill("");
+  await expect(modelInput).toHaveText("gpt-6-astra");
+  await selectDetectionModels(page, []);
   await page.keyboard.press("Escape");
   await timeoutInput.fill("1");
   await start.click();
@@ -166,7 +167,7 @@ test("动画检测错误显示在字段下方且无重叠，清除错误后恢�
   );
   await expect(page.locator("[data-sonner-toast]")).toHaveCount(0);
   await page.screenshot({ path: test.info().outputPath("validation-error.png"), fullPage: true });
-  await page.getByRole("combobox", { name: "检测模型" }).fill("fixture-model");
+  await selectDetectionModels(page, ["fixture-model"]);
   await page.keyboard.press("Escape");
   await timeoutInput.fill("120");
   await expect(timeoutError).toHaveCount(0);
@@ -176,10 +177,12 @@ test("动画检测错误显示在字段下方且无重叠，清除错误后恢�
   expect(await region.boundingBox()).toEqual(regionBox);
   releaseModels();
   await expect(page.getByRole("button", { name: "获取模型", exact: true })).toBeEnabled();
-  await expect(page.getByRole("combobox", { name: "检测模型" })).toHaveValue("fixture-model");
+  await expect(page.getByRole("combobox", { name: "检测模型" })).toHaveText("fixture-model");
   await modelInput.click();
-  await expect(page.getByText("无匹配建议", { exact: true })).toBeVisible();
-  await expect(page.getByRole("option")).toHaveCount(0);
+  await expect(page.getByRole("option", { name: "fixture-model", exact: true })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
   await page.keyboard.press("Escape");
   expect(await region.boundingBox()).toEqual(regionBox);
   await page.getByRole("button", { name: "全选账号" }).click();

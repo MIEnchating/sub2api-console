@@ -215,7 +215,7 @@ function currentUpstreamBindings(groups: UpstreamConfiguration["groups"]): {
 
 export function currentUpstreamGroupStatus(status: string | null): {
   label: string;
-  badgeVariant: "secondary" | "warning" | "destructive" | "outline";
+  badgeVariant: "success" | "warning" | "destructive" | "outline";
 } {
   const normalized = status?.trim().toLocaleLowerCase() ?? "";
   if (["missing", "deleted", "retired"].includes(normalized)) {
@@ -225,7 +225,7 @@ export function currentUpstreamGroupStatus(status: string | null): {
     return { label: "待确认", badgeVariant: "warning" };
   }
   if (["active", "enabled", "available", "ok", "1"].includes(normalized)) {
-    return { label: "存在 · 启用", badgeVariant: "secondary" };
+    return { label: "存在 · 启用", badgeVariant: "success" };
   }
   if (normalized) return { label: "存在 · 禁用", badgeVariant: "warning" };
   return { label: "状态未知", badgeVariant: "outline" };
@@ -560,6 +560,8 @@ function UpstreamEditor(props: Props & { host: string }) {
       }
       void queryClient.invalidateQueries({ queryKey: ["upstreams"] });
       void queryClient.invalidateQueries({ queryKey: ["upstream-groups"] });
+      void queryClient.invalidateQueries({ queryKey: ["accounts"] });
+      void queryClient.invalidateQueries({ queryKey: ["account-detail"] });
       if (lifetime.current.signal.aborted) return;
       form.reset({
         ...emptyValues,

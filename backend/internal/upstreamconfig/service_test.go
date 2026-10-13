@@ -303,10 +303,10 @@ func (store *updateResultBusiness) CreateUpstreamConfiguration(ctx context.Conte
 	return result, err
 }
 
-func (store *updateResultBusiness) Upstreams(ctx context.Context) (business.UpstreamSummary, error) {
+func (store *updateResultBusiness) UpstreamConfigurationHost(ctx context.Context, host string) (*business.UpstreamHost, error) {
 	store.readContextErr = ctx.Err()
 	_, store.readHasDeadline = ctx.Deadline()
-	return store.Business.Upstreams(ctx)
+	return store.Business.UpstreamConfigurationHost(ctx, host)
 }
 
 func TestConcurrentCreateDoesNotLetFailedRequestDeleteSuccessfulCredentials(t *testing.T) {
@@ -1031,4 +1031,26 @@ func openStores(t *testing.T) (*configstore.Store, *business.Store) {
 	}
 	t.Cleanup(func() { private.Close(); businessStore.Close() })
 	return private, businessStore
+}
+
+func (store *concurrentCreateBusiness) UpstreamConfigurationHost(ctx context.Context, host string) (*business.UpstreamHost, error) {
+	summary, err := store.Upstreams(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, item := range summary.Hosts {
+		if item.Host == host {
+			return &item, nil
+		}
+	}
+	return nil, nil
+}
+func (*concurrentCreateBusiness) UpstreamCatalogIdentityID(context.Context, string) (string, error) {
+	return "", nil
+}
+func (failingCreateBusiness) UpstreamConfigurationHost(context.Context, string) (*business.UpstreamHost, error) {
+	return nil, nil
+}
+func (failingCreateBusiness) UpstreamCatalogIdentityID(context.Context, string) (string, error) {
+	return "", nil
 }

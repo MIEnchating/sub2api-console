@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useMemo, type ReactElement } from "react";
 
 import { api } from "@/api";
+import { cn } from "@/lib/utils";
 import { ContentLoading } from "@/components/content-loading";
 import { ContentRetry } from "@/components/content-retry";
 import { QueryErrorToast } from "@/components/query-error-toast";
@@ -29,11 +30,9 @@ import {
 import {
   activeTaskStatuses,
   isTaskStarting,
-  taskOperationLabel,
   taskStatusLabel,
   taskStatusVariant,
 } from "../constants";
-import { formatTaskDate } from "../lib/format-task-date";
 
 function probeScopeLabel(platform: string, model: string): string {
   let displayPlatform = platform;
@@ -78,6 +77,8 @@ export function TaskDetailsDialog(props: {
   const startupError =
     typeof preview?.result.execution_error === "string" ? preview.result.execution_error : null;
   const starting = task !== undefined && isTaskStarting(task) && !startupError;
+  const showProgress =
+    task !== undefined && activeTaskStatuses.has(task.status) && !starting && !startupError;
   const accountNames = useMemo(
     () => new Map(Object.entries(task?.display_account_names ?? {})),
     [task?.display_account_names],
@@ -116,25 +117,14 @@ export function TaskDetailsDialog(props: {
           )}
           {task ? (
             <>
-              <dl className="grid min-w-0 gap-3 rounded-lg border p-3 text-sm sm:grid-cols-2">
-                <div className="min-w-0 sm:col-span-2">
-                  <dt className="text-muted-foreground text-xs">任务类型</dt>
-                  <dd className="mt-1 leading-5 wrap-anywhere">
-                    {taskOperationLabel(task.operation)}
-                  </dd>
-                </div>
-                <div className="min-w-0">
-                  <dt className="text-muted-foreground text-xs">任务 ID</dt>
-                  <dd className="mt-1 font-mono text-xs leading-5 wrap-anywhere">{task.id}</dd>
-                </div>
-                <div className="min-w-0">
-                  <dt className="text-muted-foreground text-xs">更新时间</dt>
-                  <dd className="mt-1 text-xs leading-5 tabular-nums">
-                    <time dateTime={task.updated_at}>{formatTaskDate(task.updated_at)}</time>
-                  </dd>
-                </div>
-              </dl>
-              <div className="bg-muted/20 grid min-w-0 gap-3 rounded-lg border p-3 text-sm">
+              <div
+                className={cn(
+                  "grid min-w-0 gap-2 rounded-lg border p-3 text-sm",
+                  task.status === "failed" || startupError
+                    ? "border-destructive/20 bg-destructive/5"
+                    : "bg-muted/20",
+                )}
+              >
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <StatusBadge
                     label={startupError ? "执行未启动" : taskStatusLabel(task.status)}
@@ -142,7 +132,7 @@ export function TaskDetailsDialog(props: {
                       startupError ? taskStatusVariant("failed") : taskStatusVariant(task.status)
                     }
                   />
-                  {!starting && (
+                  {showProgress && (
                     <span className="text-muted-foreground text-xs tabular-nums">
                       进度 {task.progress}%
                     </span>
@@ -155,7 +145,7 @@ export function TaskDetailsDialog(props: {
                     <p className="min-w-0 leading-6 wrap-anywhere whitespace-pre-wrap">
                       {startupError ? `正式执行未启动：${startupError}` : task.message}
                     </p>
-                    <Progress value={task.progress} aria-label="任务详情进度" />
+                    {showProgress && <Progress value={task.progress} aria-label="任务详情进度" />}
                   </>
                 )}
               </div>
@@ -175,7 +165,7 @@ export function TaskDetailsDialog(props: {
                         当前正在检查账号模型和上架范围，预览通过后将自动执行；关闭详情不会停止运行。
                       </p>
                     )}
-                  <AccountModelAutomationResults task={task} />
+                  <AccountModelAutomationResults task={task} showSummary={false} />
                 </>
               )}
               {task.operation !== "account-model-automation" &&
@@ -188,7 +178,7 @@ export function TaskDetailsDialog(props: {
             </>
           ) : null}
         </DialogBody>
-        <DialogFooter>
+        <DialogFooter className="py-3">
           <Button type="button" variant="outline" onClick={props.onClose}>
             关闭
           </Button>

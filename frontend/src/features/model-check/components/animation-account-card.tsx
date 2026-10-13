@@ -24,6 +24,9 @@ export const AnimationAccountCard = memo(function AnimationAccountCard(props: {
   mode?: "animation" | "precheck";
   account: AccountStatus;
   result?: AnimationResult;
+  selectedModel?: string;
+  modelResults?: AnimationResult[];
+  modelPrecheckResults?: AnimationResult[];
   precheckResult?: AnimationResult;
   precheckStatus?: Task["status"];
   taskStatus?: Task["status"];
@@ -39,6 +42,15 @@ export const AnimationAccountCard = memo(function AnimationAccountCard(props: {
   onManualPriority?: (account: AccountStatus) => void;
 }): ReactElement {
   const precheckMode = props.mode === "precheck";
+  const choices = precheckMode ? props.modelPrecheckResults : props.modelResults;
+  const fallback = precheckMode ? props.precheckResult : props.result;
+  const current = props.selectedModel
+    ? (choices?.find((item) => item.model === props.selectedModel) ??
+      (fallback?.model === props.selectedModel ? fallback : undefined))
+    : fallback;
+  const missingModel = Boolean(props.selectedModel && !current && (choices?.length || fallback));
+  const result = precheckMode ? props.result : current;
+  const precheckResult = precheckMode ? current : props.precheckResult;
   const unavailable =
     props.account.platform != null && !["openai", "anthropic"].includes(props.account.platform);
   const currentStatus = precheckMode ? props.precheckStatus : props.taskStatus;
@@ -53,8 +65,7 @@ export const AnimationAccountCard = memo(function AnimationAccountCard(props: {
   let scheduleLabel = props.schedule?.enabled
     ? `每 ${props.schedule.interval_minutes} 分钟自动检测`
     : "自动检测关闭";
-  if (running && (precheckMode ? props.precheckResult : props.result))
-    scheduleLabel = "正在重新检测";
+  if (running && (precheckMode ? precheckResult : result)) scheduleLabel = "正在重新检测";
   if (props.schedule?.enabled && props.schedule.mode === "precheck")
     scheduleLabel = `每 ${props.schedule.interval_minutes} 分钟前置检测`;
   if (props.schedule?.enabled && props.schedule.mode === "both")
@@ -158,18 +169,22 @@ export const AnimationAccountCard = memo(function AnimationAccountCard(props: {
       </header>
       {precheckMode ? (
         <div className="flex min-h-14 min-w-0 shrink-0 items-center border-y border-border/40 bg-muted/10 px-3">
-          <PrecheckAccountResult
-            result={props.precheckResult}
-            status={props.precheckStatus}
-            activity={currentActivity}
-          />
+          {missingModel && !running ? (
+            <p className="text-xs text-muted-foreground">该模型暂无检测结果</p>
+          ) : (
+            <PrecheckAccountResult
+              result={precheckResult}
+              status={props.precheckStatus}
+              activity={currentActivity}
+            />
+          )}
         </div>
       ) : (
         <div className="min-w-0 shrink-0">
-          {props.result ? (
+          {result ? (
             <AnimationAccountResult
               layout="card"
-              result={props.result}
+              result={result}
               activity={currentActivity}
               retryDisabled={props.retryDisabled || running || unavailable}
               onRetry={props.onRetry}
@@ -181,11 +196,17 @@ export const AnimationAccountCard = memo(function AnimationAccountCard(props: {
                 aria-label="动画预览区域"
                 className="h-[180px] w-full shrink-0 overflow-hidden border-y border-border/40 bg-muted/20"
               >
-                <AnimationCardState
-                  status={props.taskStatus}
-                  activity={currentActivity}
-                  unavailable={unavailable}
-                />
+                {missingModel && !running ? (
+                  <p className="flex h-full items-center justify-center px-3 text-xs text-muted-foreground">
+                    该模型暂无检测结果
+                  </p>
+                ) : (
+                  <AnimationCardState
+                    status={props.taskStatus}
+                    activity={currentActivity}
+                    unavailable={unavailable}
+                  />
+                )}
               </div>
               <div className="flex h-14 items-center px-3 text-xs text-muted-foreground">
                 动画检测：暂无结果
@@ -199,7 +220,7 @@ export const AnimationAccountCard = memo(function AnimationAccountCard(props: {
           <TooltipTrigger
             render={
               <p
-                role={running && props.result ? "status" : undefined}
+                role={running && result ? "status" : undefined}
                 className={cn(
                   "min-w-0 flex-1 truncate text-xs text-muted-foreground",
                   props.schedule?.last_error && "text-destructive",
@@ -212,10 +233,10 @@ export const AnimationAccountCard = memo(function AnimationAccountCard(props: {
           <TooltipContent>{scheduleLabel}</TooltipContent>
         </Tooltip>
         <div role="group" aria-label="账号操作" className="flex shrink-0 items-center gap-1">
-          {!precheckMode && props.result && !currentActivity ? (
+          {!precheckMode && result && !currentActivity ? (
             <AnimationManualVerdictControls
               compact
-              result={props.result}
+              result={result}
               disabled={props.retryDisabled || running || unavailable}
             />
           ) : null}

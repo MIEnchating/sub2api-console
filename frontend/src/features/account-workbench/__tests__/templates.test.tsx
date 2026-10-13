@@ -175,3 +175,11 @@ it("来源模板可直接编辑配置，保存沿用模板 ID 和版本且不读
   expect(requests[0].body).not.toHaveProperty("source_id");
   expect(screen.getByRole("article", { name: "调整后模板" })).toBeVisible();
 });
+
+it("当前模板与所有顶部操作合并在同一个可换行工具栏", () => {
+  mount(vi.fn());
+  const toolbar = within(screen.getByRole("group", { name: "工作台操作" }));
+  expect(toolbar.getByText(/当前模板：/)).toHaveTextContent(template.name);
+  expect(toolbar.getByRole("button", { name: "自动匹配" })).toBeEnabled();
+  expect(toolbar.getByRole("button", { name: "创建模板" })).toBeEnabled();
+});

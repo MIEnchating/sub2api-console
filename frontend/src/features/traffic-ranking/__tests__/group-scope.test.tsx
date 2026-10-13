@@ -34,7 +34,7 @@ it("选择名称为 all 的分组只查询该分组，清除选择才恢复全�
   });
   client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
   seedDictionaries(client, { group: [{ value: "group-all", name: "all" }] });
-  client.setQueryData(["groups"], [{ id: "group-all", name: "all" }]);
+  client.setQueryData(["groups", "options"], [{ id: "group-all", name: "all" }]);
   render(
     <QueryClientProvider client={client}>
       <TrafficRankingPage />

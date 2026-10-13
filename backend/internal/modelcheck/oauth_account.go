@@ -60,6 +60,12 @@ func (s *Service) resolveOAuthCredential(ctx context.Context, account selectedAc
 	if stringField(remote, "type") != "oauth" || stringField(remote, "platform") != "openai" {
 		return nil, errors.New("账号类型或平台已变化，请刷新账号后重新检测")
 	}
+	if allowPreview {
+		local, err := s.workbenchOAuthCredential(ctx, target, remote, account)
+		if err != nil || local != nil {
+			return local, err
+		}
+	}
 	credentials, _ := remote["credentials"].(map[string]any)
 	status, _ := remote["credentials_status"].(map[string]any)
 	if allowPreview && stringField(credentials, "access_token") == "" && status["has_access_token"] == true {
@@ -87,12 +93,13 @@ func runPreparedCheck(ctx context.Context, directClient, oauthClient *http.Clien
 	var sender interface {
 		bundleSender
 		reasoningSender
-	} = directBundleSender{client: directClient, credential: credential.value}
+	} = directBundleSender{stream: input.Model == astraModel, client: directClient, credential: credential.value}
 	if credential.oauth != nil {
 		if checkerForModel(input.Model, prepared.claudeProfiles, prepared.solProfile) == "claude" {
 			return nil, errors.New("OpenAI OAuth 账号不支持 Claude 模型，请选择 OpenAI 检测模型")
 		}
 		sender = oauthBundleSender{
+			stream: input.Model == astraModel,
 			client: oauthClient, credential: *credential.oauth,
 			models: append(append([]string(nil), prepared.solProfile.Models...), astraModel), slots: make(chan struct{}, 2),
 		}

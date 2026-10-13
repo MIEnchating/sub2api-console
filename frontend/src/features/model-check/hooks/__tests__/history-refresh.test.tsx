@@ -74,6 +74,7 @@ function setup(summary = task) {
 
 it("历史出现较新纳秒版本时刷新已完成详情并显示其他会话的新结论", async () => {
   const view = setup();
+  view.client.setQueryData(["model-check-account-statuses"], []);
   expect(view.result.current.results.get("41")?.manual_verdict).toBeUndefined();
   await act(async () =>
     view.client.refetchQueries({ queryKey: ["model-animation", "history"], exact: true }),
@@ -81,6 +82,7 @@ it("历史出现较新纳秒版本时刷新已完成详情并显示其他会话�
   await waitFor(() =>
     expect(view.result.current.results.get("41")?.manual_verdict?.verdict).toBe("not_passed"),
   );
+  expect(view.client.getQueryState(["model-check-account-statuses"])?.isInvalidated).toBe(true);
   expect(view.fetcher.mock.calls.map(([input]) => String(input))).toEqual([
     "/api/model-checks/animations",
     `/api/tasks/${task.id}`,

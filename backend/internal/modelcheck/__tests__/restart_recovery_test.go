@@ -134,3 +134,50 @@ func TestCustomAnimationNeverPersistsCredentialRecovery(t *testing.T) {
 		t.Fatalf("custom recovery: %#v %v", pending, err)
 	}
 }
+
+func TestMultipleModelsRestartSkipsCompletedModelWithinSameAccount(t *testing.T) {
+	ctx, cancel := context.WithCancelCause(context.Background())
+	defer cancel(nil)
+	var calls atomic.Int32
+	f := setup(t, 1, "openai", func(w http.ResponseWriter, r *http.Request) {
+		if calls.Add(1) == 2 {
+			cancel(taskcontext.ErrInterrupted)
+			return
+		}
+		fmt.Fprintf(w, `{"output_text":%q}`, fixtureSVG)
+	})
+	runner := &deferredRunner{}
+	f.service.UseTaskRunner(runner)
+	input := request("1")
+	input.Targets[0].Models = []string{"first", "second"}
+	task, err := f.service.EnqueueAnimation(context.Background(), input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner.runs[0](ctx)
+	restarted, err := modelcheck.New(f.tasks, credentials{}, f.catalog, credentials{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resumed := &deferredRunner{}
+	restarted.UseTaskRunner(resumed)
+	recoveryTask, err := f.tasks.RecoveryTask(context.Background(), task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := restarted.ResumeTask(context.Background(), recoveryTask); err != nil {
+		t.Fatal(err)
+	}
+	resumed.runs[0](context.Background())
+	// The recorder also receives the interrupted task snapshot.
+	final := finished(t, f)
+	if final.Status == "queued" {
+		final = finished(t, f)
+	}
+	if final.ID != task.ID || final.Status != "succeeded" || calls.Load() != 3 {
+		t.Fatalf("unexpected recovery: %s %s calls=%d", final.ID, final.Status, calls.Load())
+	}
+	if len(final.Result["animations"].([]modelcheck.AnimationResult)) != 2 {
+		t.Fatal("completed model lost")
+	}
+}

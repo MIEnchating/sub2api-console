@@ -99,7 +99,7 @@ it("重试请求尚未返回时在本账号显示启动中，其他账号可继�
   expect(await card("41").findByRole("status", { name: "已开始请求，等待首字" })).toBeVisible();
   expect(card("42").getByRole("status", { name: "正在启动检测" })).toBeVisible();
   fireEvent.click(card("43").getByRole("checkbox"));
-  expect(screen.getByRole("combobox", { name: "检测模型" })).toHaveValue("gpt-6-astra");
+  expect(screen.getByRole("combobox", { name: "检测模型" })).toHaveTextContent("gpt-6-astra");
   fireEvent.click(screen.getByRole("button", { name: "开始检测（1 个账号）" }));
   await waitFor(() => expect(view.posts).toHaveLength(3));
   expect(screen.queryByRole("dialog")).not.toBeInTheDocument();

@@ -1,14 +1,23 @@
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-query";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 
-import type { UpstreamConfiguration, UpstreamConfigurationUpdate } from "@/api";
+import { api, type UpstreamConfiguration, type UpstreamConfigurationUpdate } from "@/api";
+import { account } from "@/features/accounts/__tests__/fixtures";
 import { UpstreamEditDialog } from "../upstream-edit-dialog";
 
 afterEach(() => vi.unstubAllGlobals());
 
-function renderUpstream(): {
+function CachedAccountAddress() {
+  const accounts = useQuery({
+    queryKey: ["accounts"],
+    queryFn: ({ signal }) => api.accounts(signal),
+  });
+  return <output aria-label="账号当前上游地址">{accounts.data?.[0]?.upstream_base_url}</output>;
+}
+
+function renderUpstream(options?: { savedHost: string; showAccounts: boolean }): {
   writes: { url: string; payload: UpstreamConfigurationUpdate }[];
   onSaved: () => void;
   onOpenChange: (open: boolean) => void;
@@ -34,10 +43,14 @@ function renderUpstream(): {
     groups: [],
   };
   const writes: { url: string; payload: UpstreamConfigurationUpdate }[] = [];
+  let savedBaseURL = configuration.base_url;
   vi.stubGlobal("PointerEvent", MouseEvent);
   vi.stubGlobal(
     "fetch",
     vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) === "/api/accounts") {
+        return Response.json([{ ...account, upstream_base_url: savedBaseURL }]);
+      }
       if (String(input).includes("/policy/upstream-concurrency/")) {
         return Response.json({
           revision: "v1",
@@ -53,8 +66,13 @@ function renderUpstream(): {
       if (init?.method !== "PUT") throw new Error(`Unexpected request: ${String(input)}`);
       const payload = JSON.parse(String(init.body)) as UpstreamConfigurationUpdate;
       writes.push({ url: String(input), payload });
+      savedBaseURL = payload.base_url;
       return new Response(
-        JSON.stringify({ ...configuration, ...payload, host: "new.example.test:8443" }),
+        JSON.stringify({
+          ...configuration,
+          ...payload,
+          host: options?.savedHost ?? "new.example.test:8443",
+        }),
         {
           headers: { "Content-Type": "application/json" },
         },
@@ -66,10 +84,12 @@ function renderUpstream(): {
   });
   client.setQueryData(["upstream-configuration", configuration.host], configuration);
   client.setQueryData(["auth-recovery-config"], { vault_entries: [] });
+  client.setQueryData(["accounts"], [{ ...account, upstream_base_url: configuration.base_url }]);
   const onSaved = vi.fn();
   const onOpenChange = vi.fn();
   render(
     <QueryClientProvider client={client}>
+      {options?.showAccounts ? <CachedAccountAddress /> : null}
       <UpstreamEditDialog host={configuration.host} onOpenChange={onOpenChange} onSaved={onSaved} />
     </QueryClientProvider>,
   );
@@ -81,6 +101,26 @@ function renderUpstream(): {
 }
 
 describe("编辑上游地址", () => {
+  it.each(["old.example.test", "new.example.test:8443"])(
+    "保存后绑定 Host 为 %s 时，已缓存的账号重新读取当前上游地址",
+    async (savedHost) => {
+      const user = userEvent.setup();
+      renderUpstream({ savedHost, showAccounts: true });
+      expect(screen.getByLabelText("账号当前上游地址")).toHaveTextContent(
+        "https://admin.example.test/console",
+      );
+      const address = await screen.findByRole("textbox", { name: "上游地址" });
+      await user.clear(address);
+      await user.type(address, "http://new.example.test:8443/admin");
+      await user.click(screen.getByRole("button", { name: "保存并重算" }));
+      await waitFor(() =>
+        expect(screen.getByLabelText("账号当前上游地址")).toHaveTextContent(
+          "http://new.example.test:8443/admin",
+        ),
+      );
+    },
+  );
+
   it("打开已有配置时只显示完整上游地址和独立账号地址", async () => {
     renderUpstream();
 

@@ -54,7 +54,6 @@ it("首次点击获取模型时重新读取实际检测接口，不复用管理�
     ),
   );
   const input = screen.getByRole("combobox", { name: "检测模型" });
-  await user.clear(input);
   await user.click(input);
   expect(await screen.findByRole("option", { name: "current-upstream-model" })).toBeVisible();
   expect(screen.queryByRole("option", { name: /old-/ })).not.toBeInTheDocument();
@@ -82,8 +81,7 @@ it("切换账号时取消旧请求，旧响应不能混入新账号的模型列�
   await user.click(screen.getByRole("button", { name: "切换账号" }));
   await waitFor(() => expect(oldSignal?.aborted).toBe(true));
   const input = screen.getByRole("combobox", { name: "检测模型" });
-  expect(input).toHaveValue("manual-model");
-  await user.clear(input);
+  expect(input).toHaveTextContent("manual-model");
   await user.click(input);
   expect(await screen.findByRole("option", { name: "current-account-model" })).toBeVisible();
   await act(async () => resolveOld(new Response(JSON.stringify({ models: ["stale-model"] }))));

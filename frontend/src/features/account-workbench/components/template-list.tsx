@@ -54,6 +54,13 @@ export function TemplateList(): ReactElement {
           <>
             <Button
               variant="outline"
+              disabled={pending || !query.data?.preferred_id}
+              onClick={() => select.mutate("")}
+            >
+              自动匹配
+            </Button>
+            <Button
+              variant="outline"
               disabled={pending || query.isFetching}
               onClick={() => void query.refetch()}
             >
@@ -76,7 +83,15 @@ export function TemplateList(): ReactElement {
             </Button>
           </>
         }
-      />
+      >
+        {query.data && (
+          <span className="block min-w-0 wrap-anywhere text-sm">
+            当前模板：
+            {query.data.items.find((item) => item.id === query.data.preferred_id)?.name ||
+              "自动匹配"}
+          </span>
+        )}
+      </WorkbenchToolbar>
       {query.isPending && (
         <div aria-label="正在读取模板" aria-busy="true" className="grid gap-3">
           <Skeleton className="h-36" />
@@ -85,22 +100,6 @@ export function TemplateList(): ReactElement {
       )}
       {!query.data && query.isError && (
         <ContentRetry pending={query.isFetching} onRetry={() => void query.refetch()} />
-      )}
-      {query.data && (
-        <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border bg-card p-4 text-sm">
-          <span className="min-w-0 flex-1 wrap-anywhere">
-            当前模板：
-            {query.data.items.find((item) => item.id === query.data.preferred_id)?.name ||
-              "自动匹配"}
-          </span>
-          <Button
-            variant="outline"
-            disabled={pending || !query.data.preferred_id}
-            onClick={() => select.mutate("")}
-          >
-            自动匹配
-          </Button>
-        </div>
       )}
       {query.data?.items.length === 0 && (
         <WorkbenchEmptyState
@@ -171,10 +170,10 @@ export function TemplateList(): ReactElement {
                 </Button>
               )}
               <Button
-                variant="ghost"
+                variant="destructive"
                 disabled={pending}
                 onClick={() => setDeleting({ template: item, revision: query.data!.revision })}
-                className="ml-auto text-muted-foreground hover:text-destructive"
+                className="ml-auto"
                 aria-label={`删除模板 ${item.name}`}
               >
                 <Trash2 aria-hidden="true" />

@@ -1,9 +1,9 @@
+import { DetectionModelSelect } from "./detection-model-select";
 import { useQueries } from "@tanstack/react-query";
 import { useId, useState, type ReactElement } from "react";
 import { Controller, useFormState, useWatch, type UseFormReturn } from "react-hook-form";
 import { api } from "@/api";
 import { FieldError } from "@/components/field-error";
-import { SuggestionInput } from "@/components/suggestion-input";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -75,21 +75,23 @@ export function AnimationModelSettings(props: {
             control={props.form.control}
             name="unified_model"
             render={({ field }) => (
-              <SuggestionInput
-                className="flex-1"
+              <DetectionModelSelect
                 id={modelID}
-                aria-labelledby={modelID + "-label"}
-                ref={field.ref}
-                name={field.name}
-                value={field.value}
-                onValueChange={field.onChange}
+                inputRef={field.ref}
+                model={field.value}
+                additionalModels={props.form.watch("additional_models")}
+                onChange={(model, additional) => {
+                  field.onChange(model);
+                  props.form.setValue("additional_models", additional, {
+                    shouldDirty: true,
+                    shouldValidate: true,
+                  });
+                }}
                 onBlur={field.onBlur}
                 options={options}
                 disabled={props.pending}
-                placeholder="输入模型 ID，或获取共同模型"
-                emptyText={ready ? "所选账号暂无共同模型" : "尚未获取共同模型"}
-                aria-invalid={!!state.errors.unified_model}
-                aria-describedby={state.errors.unified_model ? modelErrorID : undefined}
+                invalid={!!state.errors.unified_model}
+                describedBy={state.errors.unified_model ? modelErrorID : undefined}
               />
             )}
           />

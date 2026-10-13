@@ -64,7 +64,7 @@ describe("流量指标展示", () => {
   );
 
   it("按评分区间展示稳定性状态，缺失样本不记为不稳定", () => {
-    expect(trafficStabilityLabel(95)).toEqual({ label: "稳定", variant: "secondary" });
+    expect(trafficStabilityLabel(95)).toEqual({ label: "稳定", variant: "success" });
     expect(trafficStabilityLabel(75)).toEqual({ label: "观察", variant: "warning" });
     expect(trafficStabilityLabel(40)).toEqual({ label: "不稳定", variant: "destructive" });
     expect(trafficStabilityLabel(null)).toEqual({ label: "无样本", variant: "outline" });

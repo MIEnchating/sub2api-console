@@ -126,6 +126,8 @@ export function renderOnboarding(
     status: "healthy",
   }));
   vi.spyOn(api, "groups").mockResolvedValue(groupOverrides ?? groups);
+  vi.spyOn(api, "groupConfigurations").mockResolvedValue(groupOverrides ?? groups);
+  vi.spyOn(api, "groupOptions").mockResolvedValue(groupOverrides ?? groups);
   vi.spyOn(api, "config").mockResolvedValue({
     database_available: true,
     data_database_available: true,
@@ -142,6 +144,9 @@ export function renderOnboarding(
     console_username: "tester",
     configuration_errors: [],
   });
+  vi.spyOn(api, "upstreamOptions").mockResolvedValue([
+    { ...configuredUpstream, auth_status: "已鉴权", account_count: 0 },
+  ]);
   vi.spyOn(api, "upstreams").mockResolvedValue({
     hosts: [],
     total_hosts: 0,

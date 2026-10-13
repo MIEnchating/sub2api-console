@@ -707,6 +707,13 @@ func (s *Service) prepareAccount(
 		}
 	}
 	if target.CleanupAction != nil && *target.CleanupAction == "delete" {
+		if err := s.checkMissingBindingCleanup(ctx, target); err != nil {
+			var change *writeAuthorizationChanged
+			if errors.As(err, &change) {
+				return s.skipAuthorizationChange(ctx, result, target, operationID, actor, change), nil
+			}
+			return failedResult(result, err), nil
+		}
 		if coordinator.authorize != nil {
 			if err := coordinator.authorize(); err != nil {
 				var change *writeAuthorizationChanged
@@ -1877,7 +1884,7 @@ func failedResult(result AccountResult, err error) AccountResult {
 }
 
 func cleanupReason(target business.AccountRoutingTarget) string {
-	if target.CleanupReason == "长期异常" {
+	if target.CleanupReason == "长期异常" || target.CleanupReason == business.MissingBindingCleanupReason {
 		return target.CleanupReason
 	}
 	return "认证持续失效"

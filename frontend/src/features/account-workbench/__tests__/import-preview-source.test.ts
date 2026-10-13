@@ -22,6 +22,7 @@ const changes: { [Key in keyof ImportValues]: ImportValues[Key] } = {
   promote: false,
   model: "another-model",
   proxy_enabled: true,
+  platform_proxy_id: "3",
   proxy_url: "https://proxy.example.test",
 };
 

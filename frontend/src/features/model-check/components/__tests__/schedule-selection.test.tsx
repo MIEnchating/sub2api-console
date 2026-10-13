@@ -1,3 +1,4 @@
+import { selectDetectionModels } from "./model-selection-helper";
 import { seedDictionaries } from "@/test/dictionary-fixtures";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -47,7 +48,7 @@ it("批量设置遇到版本冲突时保留草稿和原计划并显示失败原�
   await user.click(screen.getByRole("button", { name: "确认保存并开启" }));
   expect(await screen.findByText(/账号 41 的自动检测配置已变化/)).toBeVisible();
   expect(screen.queryByRole("dialog", { name: "确认开启自动检测" })).not.toBeInTheDocument();
-  expect(screen.getByRole("textbox", { name: "检测模型" })).toHaveValue("batch-model");
+  expect(screen.getByRole("combobox", { name: "检测模型" })).toHaveTextContent("batch-model");
   expect(screen.getByRole("button", { name: "保存设置" })).toBeEnabled();
   expect(view.client.getQueryData(["model-animation", "schedules"])).toEqual([base]);
   expect(close).not.toHaveBeenCalled();
@@ -102,8 +103,7 @@ it("在前置检测 Tab 批量设置每日时间时只保存前置计划并保�
   const dialog = screen.getByRole("dialog", { name: /批量自动前置检测设置/ });
   expect(within(dialog).queryByRole("group", { name: "自动检测内容" })).not.toBeInTheDocument();
   await user.click(within(dialog).getByRole("checkbox", { name: "开启自动检测" }));
-  await user.clear(within(dialog).getByRole("textbox", { name: "检测模型" }));
-  await user.type(within(dialog).getByRole("textbox", { name: "检测模型" }), "daily-model");
+  await selectDetectionModels(["daily-model"]);
   const daily = within(dialog).getByRole("radio", { name: "每天定时" });
   daily.focus();
   await user.keyboard(" ");
@@ -156,12 +156,12 @@ it("切换 Tab 后自动设置分别回显对应计划", async () => {
   );
   const user = userEvent.setup();
   await user.click(screen.getByRole("button", { name: "自动检测设置" }));
-  expect(screen.getByRole("textbox", { name: "检测模型" })).toHaveValue("saved-model");
+  expect(screen.getByRole("combobox", { name: "检测模型" })).toHaveTextContent("saved-model");
   expect(screen.queryByRole("button", { name: "选择前置检测题目" })).not.toBeInTheDocument();
   await user.click(screen.getByRole("button", { name: "取消" }));
   await user.click(screen.getByRole("tab", { name: "前置检测" }));
   await user.click(screen.getByRole("button", { name: "自动检测设置" }));
-  expect(screen.getByRole("textbox", { name: "检测模型" })).toHaveValue("precheck-model");
+  expect(screen.getByRole("combobox", { name: "检测模型" })).toHaveTextContent("precheck-model");
   expect(screen.getAllByRole("button", { name: "选择前置检测题目" }).length).toBeGreaterThan(0);
 });
 

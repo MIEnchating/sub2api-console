@@ -31,15 +31,13 @@ func (s *Service) runOAuthAnimationTarget(ctx context.Context, account selectedA
 	if credential.previewClient != nil {
 		return runManagedOAuthAnimation(guarded, credential.previewClient, account, timeout, questions, result)
 	}
-	s.profilesMu.RLock()
-	transport := s.oauthTransport
-	s.profilesMu.RUnlock()
-	if transport == nil {
-		direct := newOAuthDirectTransport(timeout)
-		defer direct.CloseIdleConnections()
-		transport = direct
+	transport, closeTransport, err := s.animationOAuthTransport(guarded, timeout, credential)
+	if err != nil {
+		return err
 	}
+	defer closeTransport()
 	sender := oauthBundleSender{
+		stream: true,
 		client: &http.Client{Transport: transport,
 			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }},
 		credential: *credential, models: []string{result.Model}, slots: make(chan struct{}, 1), requestID: result.RequestID, usage: result.Usage,
@@ -145,14 +143,11 @@ func (s *Service) runOAuthPromptTarget(ctx context.Context, account selectedAcco
 		}
 		return response.Text, safeCredentialText(response.Model), nil
 	}
-	s.profilesMu.RLock()
-	transport := s.oauthTransport
-	s.profilesMu.RUnlock()
-	if transport == nil {
-		direct := newOAuthDirectTransport(timeout)
-		defer direct.CloseIdleConnections()
-		transport = direct
+	transport, closeTransport, err := s.animationOAuthTransport(guarded, timeout, credential)
+	if err != nil {
+		return "", "", err
 	}
+	defer closeTransport()
 	sender := oauthBundleSender{
 		client: &http.Client{Transport: transport, Timeout: time.Duration(timeout) * time.Second,
 			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }},

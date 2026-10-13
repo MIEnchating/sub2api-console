@@ -189,6 +189,9 @@ func (s *Store) evaluateAlertIncidents(ctx context.Context, balanceHost string) 
 			return AlertEvidenceResult{}, err
 		}
 	}
+	if err := closeExcludedUpstreamAlerts(ctx, tx, now); err != nil {
+		return AlertEvidenceResult{}, err
+	}
 	if err := tx.Commit(); err != nil {
 		return AlertEvidenceResult{}, err
 	}

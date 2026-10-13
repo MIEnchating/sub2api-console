@@ -43,7 +43,8 @@ it("上游列表刷新失败时保留已加载行和选择，刷新成功后更�
   let unavailable = true;
   vi.stubGlobal("PointerEvent", MouseEvent);
   vi.stubGlobal("scrollTo", vi.fn());
-  vi.stubGlobal("fetch", async () => {
+  vi.stubGlobal("fetch", async (input: string) => {
+    if (input.endsWith("/api/upstreams/usage")) return Response.json([]);
     if (unavailable) return Response.json({ detail: "上游列表暂时不可用" }, { status: 503 });
     return Response.json({ hosts: [] });
   });

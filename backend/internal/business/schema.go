@@ -16,6 +16,10 @@ CREATE TABLE IF NOT EXISTS app_state (key TEXT PRIMARY KEY,value_json TEXT NOT N
 CREATE TABLE IF NOT EXISTS upstream_identities (
  upstream_id TEXT PRIMARY KEY,created_at TEXT NOT NULL,updated_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS upstream_exclusions (
+ upstream_id TEXT PRIMARY KEY,updated_at TEXT NOT NULL,
+ FOREIGN KEY(upstream_id) REFERENCES upstream_identities(upstream_id) ON DELETE CASCADE
+);
 CREATE TABLE IF NOT EXISTS upstream_identity_hosts (
  host TEXT PRIMARY KEY,upstream_id TEXT NOT NULL,is_primary INTEGER NOT NULL DEFAULT 0,updated_at TEXT NOT NULL,
  FOREIGN KEY(upstream_id) REFERENCES upstream_identities(upstream_id) ON DELETE CASCADE
@@ -59,6 +63,10 @@ CREATE TABLE IF NOT EXISTS accounts (
  routing_state TEXT,routing_tier TEXT,health_status TEXT,failure_streak INTEGER,recovery_pass_streak INTEGER,
  target_priority INTEGER,target_load_factor TEXT,target_schedulable INTEGER,target_concurrency INTEGER,
  metadata_json TEXT NOT NULL DEFAULT '{}',updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS balance_recovery_states (
+ account_id TEXT PRIMARY KEY,state_json TEXT NOT NULL,
+ FOREIGN KEY(account_id) REFERENCES accounts(id) ON DELETE CASCADE
 );
 CREATE TABLE IF NOT EXISTS account_groups (
  account_id TEXT NOT NULL,group_name TEXT NOT NULL,group_id TEXT,group_rate TEXT,PRIMARY KEY(account_id,group_name),
@@ -627,6 +635,7 @@ func initialControlPolicy() map[string]any {
 		"degrade":          map[string]any{"enabled": true, "score_threshold": int64(75), "priority_step": int64(10), "load_factor_ratio": 0.5, "min_load_factor": int64(1)},
 		"recovery":         map[string]any{"enabled": true, "probe_interval_seconds": int64(180), "target_score": int64(75), "success_count": int64(2), "hold_seconds": int64(60)},
 		"scaling":          map[string]any{"enabled": false, "global_max_concurrency": int64(900), "min_per_account": int64(3), "max_per_account": int64(250), "scale_up_ratio": 0.8, "step_up": int64(5), "step_down": int64(5), "cooldown_seconds": int64(60)},
+		"binding_cleanup":  map[string]any{"enabled": false, "max_per_round": int64(1)},
 		"abnormal_cleanup": map[string]any{"enabled": false, "action": "pause", "duration_minutes": int64(1440), "max_per_round": int64(1), "keep_last_in_group": true},
 		"cleanup":          map[string]any{"enabled": false, "action": "pause", "occurrences": int64(3), "window": int64(5), "min_fused_minutes": int64(30), "max_per_round": int64(1), "keep_last_in_group": true, "only_auth_errors": true, "trigger_status_codes": []any{int64(401), int64(403)}},
 		"classify": map[string]any{"fatal_patterns": []any{

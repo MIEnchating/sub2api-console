@@ -57,7 +57,7 @@ function setup(value: Task = task): QueryClient {
   });
   clients.push(client);
   client.setQueryData(
-    ["groups"],
+    ["groups", "options"],
     [
       { id: "7", name: "主分组" },
       { id: "8", name: "备用分组" },
@@ -347,3 +347,62 @@ it.each([
     expect(screen.getByRole("tab", { name: "检测账号 1" })).toBeVisible();
   },
 );
+
+it("分组任务同账号多模型切换时展示对应结果并保留分组", async () => {
+  const row = {
+    account_id: "41",
+    account_name: "主组账号",
+    model: "first-model",
+    status: "failed",
+    error: "第一个模型失败",
+    request_id: "first-request",
+    duration_ms: 10,
+    completed_at: task.updated_at,
+  };
+  setup({
+    ...task,
+    result: {
+      ...task.result,
+      account_ids: ["41"],
+      targets: [
+        { account_id: "41", model: "first-model", models: ["first-model", "second-model"] },
+      ],
+      animations: [
+        row,
+        { ...row, model: "second-model", request_id: "second-request", error: "第二个模型失败" },
+      ],
+    },
+  });
+  const card = await screen.findByRole("article", { name: "检测账号 主组账号" });
+  const select = screen.getByRole("group", { name: "结果模型" });
+  expect(select.closest("article")).toBeNull();
+  await userEvent.setup().click(within(select).getByRole("button", { name: "下一个模型结果" }));
+  expect(select).toHaveTextContent("second-model");
+  expect(within(card).getByText("第二个模型失败")).toBeVisible();
+  expect(within(card).queryByText("第一个模型失败")).not.toBeInTheDocument();
+  expect(screen.getByRole("tab", { name: /主分组/ })).toHaveAttribute("aria-selected", "true");
+});
+
+it("顶部切换模型后跨分组保留选择，另一分组也显示同一模型结果", async () => {
+  const animations = ["41", "42"].flatMap((id) =>
+    ["model-a", "model-b"].map((model) => ({
+      account_id: id,
+      account_name: `账号 ${id}`,
+      model,
+      status: "failed",
+      error: `${id} ${model} 失败`,
+      request_id: `${id}-${model}`,
+      duration_ms: 10,
+      completed_at: task.updated_at,
+    })),
+  );
+  setup({ ...task, result: { ...task.result, animations } });
+  const selector = await screen.findByRole("group", { name: "结果模型" });
+  const user = userEvent.setup();
+  await user.click(within(selector).getByRole("button", { name: "下一个模型结果" }));
+  expect(screen.getByText("41 model-b 失败")).toBeVisible();
+  await user.click(screen.getByRole("tab", { name: /备用分组/ }));
+  expect(screen.getByText("42 model-b 失败")).toBeVisible();
+  expect(screen.queryByText("42 model-a 失败")).not.toBeInTheDocument();
+  expect(screen.getAllByRole("group", { name: "结果模型" })).toHaveLength(1);
+});

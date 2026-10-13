@@ -57,12 +57,14 @@ export const animationResultSchema = z.object({
   completed_at: z.string().refine((value) => Number.isFinite(Date.parse(value))),
 });
 
-const animationTargetSchema = animationResultSchema.pick({
-  account_id: true,
-  model: true,
-  endpoint: true,
-  platform: true,
-});
+const animationTargetSchema = animationResultSchema
+  .pick({
+    account_id: true,
+    model: true,
+    endpoint: true,
+    platform: true,
+  })
+  .extend({ models: z.array(z.string()).optional() });
 
 const terminalTaskStatuses = new Set<Task["status"]>([
   "succeeded",
@@ -78,11 +80,16 @@ function animationTaskRows(
   prechecks: Map<string, AnimationResult>;
   animations: Map<string, AnimationResult>;
   phases: Map<string, AnimationResult["phase"]>;
+  modelAnimations: Map<string, AnimationResult>;
+  modelPrechecks: Map<string, AnimationResult>;
 } {
   const prechecks = new Map<string, AnimationResult>();
   const animations = new Map<string, AnimationResult>();
+  const modelAnimations = new Map<string, AnimationResult>();
+  const modelPrechecks = new Map<string, AnimationResult>();
   const phases = new Map<string, AnimationResult["phase"]>();
-  if (!Array.isArray(task.result.animations)) return { prechecks, animations, phases };
+  if (!Array.isArray(task.result.animations))
+    return { prechecks, animations, phases, modelAnimations, modelPrechecks };
   for (const item of task.result.animations) {
     // Single-account consumers do not need to validate or copy the other rows.
     if (
@@ -109,11 +116,16 @@ function animationTaskRows(
       result.source_task_id = task.id;
       result.source_task_status = task.status;
     }
+    const modelMap = isPrecheck ? modelPrechecks : modelAnimations;
+    const modelKey = JSON.stringify([result.account_id, result.model]);
+    const previousModel = modelMap.get(modelKey);
+    if (!previousModel || compareTimestamps(result.completed_at, previousModel.completed_at) >= 0)
+      modelMap.set(modelKey, result);
     const existing = results.get(result.account_id);
     if (!existing || compareTimestamps(result.completed_at, existing.completed_at) >= 0)
       results.set(result.account_id, result);
   }
-  return { prechecks, animations, phases };
+  return { prechecks, animations, phases, modelAnimations, modelPrechecks };
 }
 
 function animationTaskModes(task: Task): boolean[] {
@@ -145,7 +157,9 @@ export function selectAnimationTaskResult(
   requestID: string,
 ): AnimationTaskSelection {
   const result = animationTaskModes(task).includes(false)
-    ? animationTaskRows(task, accountID).animations.get(accountID)
+    ? [...animationTaskRows(task, accountID).modelAnimations.values()].find(
+        (item) => item.request_id === requestID,
+      )
     : undefined;
   return {
     status: task.status,
@@ -210,6 +224,8 @@ export function collectAnimationTasks(
   submitting: Set<string>,
   precheckSubmitting?: Set<string>,
 ) {
+  const allModelAnimations = new Map<string, AnimationResult>();
+  const allModelPrechecks = new Map<string, AnimationResult>();
   const results = new Map<string, AnimationResult>();
   const precheckResults = new Map<string, AnimationResult>();
   const precheckStatuses = new Map<string, Task["status"]>();
@@ -235,6 +251,16 @@ export function collectAnimationTasks(
       }
     }
     const rows = animationTaskRows(task);
+    for (const [source, output] of [
+      [rows.modelAnimations, allModelAnimations],
+      [rows.modelPrechecks, allModelPrechecks],
+    ] as const) {
+      for (const [key, result] of source) {
+        const previous = output.get(key);
+        if (!previous || compareTimestamps(result.completed_at, previous.completed_at) >= 0)
+          output.set(key, result);
+      }
+    }
     const taskPrechecks = rows.prechecks;
     const taskAnimations = rows.animations;
     const ids = animationTaskAccountIDs(task, taskPrechecks, taskAnimations);
@@ -260,7 +286,14 @@ export function collectAnimationTasks(
     for (const id of ids) {
       // The backend reserves the batch's accounts until the entire task finishes.
       busyIDs.add(id);
-      if (modes.length > 0 && !taskResults.has(id))
+      const expectedModels = targets.get(id)?.models;
+      const finishedModels = [
+        ...(modes.includes(false) ? rows.modelAnimations : rows.modelPrechecks).values(),
+      ].filter((result) => result.account_id === id).length;
+      if (
+        modes.length > 0 &&
+        (!taskResults.has(id) || finishedModels < (expectedModels?.length ?? 1))
+      )
         activities.set(id, {
           ...(modes.includes(true) && (!modes.includes(false) || !taskPrechecks.has(id))
             ? { mode: "precheck" as const }
@@ -277,7 +310,21 @@ export function collectAnimationTasks(
       status: "starting",
       ...(precheckSubmitting?.has(id) ? { mode: "precheck" as const } : {}),
     });
+  const modelResults = new Map<string, AnimationResult[]>();
+  const modelPrecheckResults = new Map<string, AnimationResult[]>();
+  for (const [source, output] of [
+    [allModelAnimations, modelResults],
+    [allModelPrechecks, modelPrecheckResults],
+  ] as const) {
+    for (const result of source.values()) {
+      const list = output.get(result.account_id) ?? [];
+      list.push(result);
+      output.set(result.account_id, list);
+    }
+  }
   return {
+    modelResults,
+    modelPrecheckResults,
     targets,
     results,
     statuses,

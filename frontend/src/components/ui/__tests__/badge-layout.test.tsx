@@ -13,3 +13,14 @@ it("调用方提供的徽标说明优先于默认完整名称", () => {
   render(<Badge title="请求已完成且通过复核">成功</Badge>);
   expect(screen.getByTitle("请求已完成且通过复核")).toHaveTextContent("成功");
 });
+
+it.each([
+  ["success", "text-success", "bg-success/10"],
+  ["info", "text-info", "bg-info/10"],
+  ["warning", "text-warning", "bg-warning/10"],
+  ["destructive", "text-destructive", "bg-destructive/10"],
+  ["neutral", "text-muted-foreground", "bg-muted/30"],
+] as const)("%s 状态标签使用统一语义颜色", (variant, color, background) => {
+  render(<Badge variant={variant}>状态</Badge>);
+  expect(screen.getByTitle("状态")).toHaveClass(color, background, "h-5", "text-xs");
+});

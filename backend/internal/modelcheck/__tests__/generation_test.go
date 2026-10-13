@@ -68,7 +68,7 @@ func TestGenerationAcceptsJSONAndStreamsAcrossSupportedProtocols(t *testing.T) {
 				t.Fatal("credential leaked")
 			}
 			statuses, err := f.service.AccountStatuses(context.Background())
-			if err != nil || len(statuses) != 0 {
+			if err != nil || len(statuses) != 1 || statuses[0].Status != "not_checked" || statuses[0].TaskID != "" {
 				t.Fatal("animation must not change behavior verdicts")
 			}
 		})

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/MIEnchating/sub2api-console/backend/internal/business"
 	"slices"
 	"sort"
 	"strings"
@@ -20,6 +21,7 @@ type animationRepository interface {
 }
 
 type AnimationSchedule struct {
+	Models            []string `json:"models,omitempty"`
 	Prompt            string   `json:"prompt,omitempty"`
 	ScheduleType      string   `json:"schedule_type,omitempty"`
 	DailyTime         string   `json:"daily_time,omitempty"`
@@ -99,6 +101,11 @@ func (s *Service) loadAnimationConfiguration(ctx context.Context) error {
 }
 
 func validateAnimationSchedule(value AnimationSchedule) error {
+	if value.Enabled {
+		if _, err := normalizeAnimationModels(value.Model, value.Models); err != nil {
+			return err
+		}
+	}
 	if utf8.RuneCountInString(strings.TrimSpace(value.Prompt)) > maximumAnimationPromptLength || strings.ContainsFunc(value.Prompt, func(r rune) bool { return unicode.IsControl(r) && r != '\n' && r != '\r' && r != '\t' }) {
 		return errors.New("动画提示词不能超过 10000 个字符")
 	}
@@ -129,6 +136,7 @@ func (s *Service) AnimationSchedules() []AnimationScheduleView {
 	result := make([]AnimationScheduleView, 0, len(s.animation.schedules))
 	for id, schedule := range s.animation.schedules {
 		schedule.DailyTimes = slices.Clone(schedule.DailyTimes)
+		schedule.Models = slices.Clone(schedule.Models)
 		schedule.PrecheckQuestions = slices.Clone(schedule.PrecheckQuestions)
 		view := AnimationScheduleView{AnimationSchedule: schedule, LastTaskID: s.animation.lastTask[id], LastError: s.animation.lastError[id]}
 		if next := s.animation.next[id]; schedule.Enabled && !next.IsZero() {
@@ -198,9 +206,11 @@ func (s *Service) RunDueAnimations(ctx context.Context, now time.Time) {
 		s.animation.scheduleMu.Lock()
 		s.animation.next[key] = nextAnimationTime(schedule, now)
 		s.animation.scheduleMu.Unlock()
-		task, err := s.EnqueueAnimation(ctx, AnimationRequest{Prompt: schedule.Prompt, Targets: []AnimationTarget{{AccountID: schedule.AccountID, Model: schedule.Model}}, TimeoutSeconds: schedule.TimeoutSeconds, Mode: schedule.Mode, PrecheckQuestions: schedule.PrecheckQuestions})
+		task, err := s.EnqueueAnimation(ctx, AnimationRequest{Prompt: schedule.Prompt, Targets: []AnimationTarget{{AccountID: schedule.AccountID, Model: schedule.Model, Models: schedule.Models}}, TimeoutSeconds: schedule.TimeoutSeconds, Mode: schedule.Mode, PrecheckQuestions: schedule.PrecheckQuestions})
 		s.animation.scheduleMu.Lock()
-		if err != nil {
+		if errors.Is(err, business.ErrUpstreamExcluded) {
+			delete(s.animation.lastError, key)
+		} else if err != nil {
 			s.animation.lastError[key] = safeCredentialError(err)
 		} else {
 			s.animation.lastTask[key] = task.ID

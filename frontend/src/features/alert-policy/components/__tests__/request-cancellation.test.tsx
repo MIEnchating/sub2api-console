@@ -29,7 +29,7 @@ it("离开告警策略页会取消策略与通知配置读取，重开重新请�
   );
   client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
   seedDictionaries(client, { group: [] });
-  client.setQueryData(["groups"], groups);
+  client.setQueryData(["groups", "options"], groups);
   const page = (
     <QueryClientProvider client={client}>
       <AlertPolicyPage onOpenSettings={() => undefined} />

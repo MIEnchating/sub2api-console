@@ -131,7 +131,7 @@ test("动画与前置检测的模型参数在开始检测操作行且窄屏不�
       expect((await start.boundingBox())!.y).toBeCloseTo(fieldBox.y, 0);
     }
     expect(fieldBox.x + fieldBox.width).toBeLessThanOrEqual(page.viewportSize()!.width);
-    await expect(fields.getByRole("combobox", { name: "检测模型", exact: true })).toHaveValue(
+    await expect(fields.getByRole("combobox", { name: "检测模型", exact: true })).toHaveText(
       "gpt-6-astra",
     );
     await expect(fields.getByRole("spinbutton", { name: "请求超时（秒）" })).toBeVisible();
@@ -219,7 +219,7 @@ test("动画页只显示动画结果，卡片和预览保持对齐", async ({ pa
     await expect(cards.first()).toBeInViewport({ ratio: 1 });
     const settings = page.getByRole("group", { name: "动画检测设置", exact: true });
     expect((await settings.boundingBox())!.height).toBeLessThanOrEqual(168);
-    await expect(page.getByRole("combobox", { name: "检测模型", exact: true })).toHaveValue(
+    await expect(page.getByRole("combobox", { name: "检测模型", exact: true })).toHaveText(
       "gpt-6-astra",
     );
   }
@@ -252,7 +252,7 @@ test("成功卡片重测沿用原模型，启动与完成时卡片高度稳定�
     await route.fulfill({ json: current });
   });
   await page.route("**/api/tasks/retest-card", (route) => route.fulfill({ json: current }));
-  await expect(page.getByRole("combobox", { name: "检测模型", exact: true })).toHaveValue(
+  await expect(page.getByRole("combobox", { name: "检测模型", exact: true })).toHaveText(
     "gpt-6-astra",
   );
   await page.keyboard.press("Escape");
@@ -354,7 +354,7 @@ test("前置检测自动计划独立保存，每天指定时间和题目在重�
   await dialog.getByRole("radio", { name: "每天定时" }).check();
   await dialog.getByLabel("每天检测时间（北京时间）").fill("09:30");
   await dialog.getByRole("checkbox", { name: "开启自动检测" }).check();
-  await expect(dialog.getByRole("textbox", { name: "检测模型", exact: true })).toHaveValue(
+  await expect(dialog.getByRole("combobox", { name: "检测模型", exact: true })).toHaveText(
     "gpt-6-astra",
   );
   await dialog.getByRole("button", { name: "选择前置检测题目" }).click();

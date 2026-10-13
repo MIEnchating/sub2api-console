@@ -140,3 +140,11 @@ it("仅 JSON 导入记录禁用重新登录，长账号文案换行并允许逐�
   expect(within(table).getAllByRole("row")).toHaveLength(2);
   expect(screen.getByRole("button", { name: `删除 ${records[20].name}` })).toBeEnabled();
 });
+
+it("已记住账号的工具栏不重复显示分页账号数量", () => {
+  mount([account], vi.fn());
+  expect(
+    within(screen.getByRole("group", { name: "工作台操作" })).queryByText(/个账号/),
+  ).not.toBeInTheDocument();
+  expect(screen.getByRole("navigation", { name: "表格分页" })).toHaveTextContent(/共\s*1/);
+});

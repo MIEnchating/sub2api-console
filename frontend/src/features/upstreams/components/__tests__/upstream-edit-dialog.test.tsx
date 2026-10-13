@@ -205,7 +205,7 @@ describe("upstream edit dialog", () => {
   it("区分上游分组存在时的启禁用状态和已不存在状态", () => {
     expect(currentUpstreamGroupStatus("active")).toEqual({
       label: "存在 · 启用",
-      badgeVariant: "secondary",
+      badgeVariant: "success",
     });
     expect(currentUpstreamGroupStatus("disabled")).toEqual({
       label: "存在 · 禁用",

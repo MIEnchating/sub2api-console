@@ -70,7 +70,7 @@ export function UpstreamGroupHistoryAction(props: {
         item.upstream_id === props.change.upstream_id && item.group_id === props.change.group_id,
     );
     if (binding && binding.account_count > 0) {
-      return <Badge variant="secondary">{upstreamBindingLabels.bound}</Badge>;
+      return <Badge variant="success">{upstreamBindingLabels.bound}</Badge>;
     }
     if (!props.upstreamAvailable || !props.onAddAccount || binding?.status === "missing")
       return null;

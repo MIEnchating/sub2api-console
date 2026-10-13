@@ -1,3 +1,6 @@
+import type { ComponentProps } from "react";
+import type { Badge } from "@/components/ui/badge";
+
 export const workbenchTabs = [
   { id: "import", label: "导入账号" },
   { id: "accounts", label: "账号列表" },
@@ -21,6 +24,10 @@ export const fingerprintLabels: Record<string, string> = {
   full: "完全收敛",
 };
 export const accountStatusLabels: Record<string, string> = {
+  rate_limited: "限流（429）",
+  overloaded: "过载退避",
+  temp_unschedulable: "临时不可调度",
+  expired: "已过期",
   active: "正常",
   error: "异常",
   inactive: "已停用",
@@ -32,6 +39,7 @@ export const templateKeys = { library: ["account-workbench", "templates"] as con
 export const runKeys = { list: ["account-workbench", "runs"] as const };
 export const maintenanceKey = ["account-workbench", "maintenance"] as const;
 export const maintenanceStatusLabels: Record<string, string> = {
+  skipped: "已跳过",
   healthy: "正常",
   repaired: "已恢复",
   cooldown: "冷却中",
@@ -39,11 +47,16 @@ export const maintenanceStatusLabels: Record<string, string> = {
   manual: "需要处理",
 };
 export const maintenanceActionLabels: Record<string, string> = {
+  check: "智商检测",
   none: "检查",
   refresh: "刷新授权",
   reauthorize: "重新授权",
 };
 export const maintenanceReasonLabels: Record<string, string> = {
+  upstream_excluded: "上游已排除管控，本次未执行维护",
+  check_passed: "智商检测通过",
+  check_failed: "智商检测未通过，请查看检测结果",
+  account_expired: "账号已过期，请核对有效期",
   account_healthy: "账号状态正常",
   authorization_repaired: "授权已恢复并通过核对",
   account_deactivated: "账号已被上游停用，需人工确认",
@@ -101,3 +114,47 @@ export const loginInputLabels = {
   email_code: "邮箱验证码",
   totp_code: "2FA 验证码",
 } as const;
+
+export const proxyKeys = { list: ["account-workbench", "proxies"] as const };
+
+export const accountStatusVariants: Record<string, ComponentProps<typeof Badge>["variant"]> = {
+  rate_limited: "warning",
+  overloaded: "warning",
+  temp_unschedulable: "warning",
+  expired: "destructive",
+  active: "success",
+  error: "destructive",
+  inactive: "neutral",
+  unknown: "neutral",
+};
+export const runStatusVariants: Record<string, ComponentProps<typeof Badge>["variant"]> = {
+  queued: "neutral",
+  running: "info",
+  completed: "success",
+  needs_attention: "warning",
+  interrupted: "warning",
+  failed: "destructive",
+  exported: "success",
+  preparing: "info",
+  authorizing: "info",
+  waiting_input: "warning",
+  checking: "info",
+  review: "warning",
+};
+export const maintenanceStatusVariants: Record<string, ComponentProps<typeof Badge>["variant"]> = {
+  healthy: "success",
+  repaired: "success",
+  cooldown: "warning",
+  blocked: "neutral",
+  manual: "warning",
+};
+
+export const importModelKey = ["account-workbench", "import-model"] as const;
+
+export const recordStatusTabs = [
+  { id: "all", label: "全部" },
+  { id: "active", label: "处理中" },
+  { id: "attention", label: "需要处理" },
+  { id: "completed", label: "已完成" },
+] as const;
+export type RecordStatusTab = (typeof recordStatusTabs)[number]["id"];

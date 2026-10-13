@@ -22,7 +22,7 @@ import (
 )
 
 type Repository interface {
-	Upstreams(context.Context) (business.UpstreamSummary, error)
+	UpstreamSyncTargets(context.Context, *string) (business.UpstreamSummary, error)
 	UpstreamMutationAccountIDs(context.Context, string) ([]string, error)
 	ApplyUpstreamSync(context.Context, business.UpstreamSyncWrite) (business.UpstreamSyncWriteResult, error)
 	RecordUpstreamSyncFailure(context.Context, string, string, string, bool) error
@@ -102,6 +102,7 @@ type siteNameReader interface {
 
 type HostResult struct {
 	Host                 string                            `json:"host"`
+	RemoteWrite          bool                              `json:"remote_write"`
 	Status               string                            `json:"status"`
 	AuthStatus           string                            `json:"auth_status"`
 	BalanceStatus        string                            `json:"balance_status"`
@@ -122,6 +123,7 @@ type HostResult struct {
 }
 
 type BatchResult struct {
+	Skipped              int          `json:"skipped"`
 	Total                int          `json:"total"`
 	Succeeded            int          `json:"succeeded"`
 	AuthFailed           int          `json:"auth_failed"`
@@ -133,17 +135,18 @@ type BatchResult struct {
 }
 
 type Service struct {
-	repository    Repository
-	private       PrivateStore
-	reader        CatalogReader
-	refresher     Refresher
-	resolver      AuthResolver
-	tasks         TaskStore
-	taskRunner    taskrunner.Runner
-	rateSync      AccountRateSyncScheduler
-	timeout       time.Duration
-	workers       int
-	balanceAlerts func(context.Context, string) error
+	repository      Repository
+	private         PrivateStore
+	reader          CatalogReader
+	refresher       Refresher
+	resolver        AuthResolver
+	tasks           TaskStore
+	taskRunner      taskrunner.Runner
+	rateSync        AccountRateSyncScheduler
+	timeout         time.Duration
+	workers         int
+	balanceAlerts   func(context.Context, string) error
+	balanceRecovery func(context.Context, string, string) (bool, error)
 }
 
 type upstreamEventContextKey struct{}
@@ -167,6 +170,10 @@ func (s *Service) SetAuthResolver(resolver AuthResolver) {
 
 func (s *Service) UseTaskRunner(runner taskrunner.Runner) { s.taskRunner = runner }
 
+func (s *Service) UseBalanceRecovery(reconcile func(context.Context, string, string) (bool, error)) {
+	s.balanceRecovery = reconcile
+}
+
 func (s *Service) UseBalanceAlerts(evaluate func(context.Context, string) error) {
 	s.balanceAlerts = evaluate
 }
@@ -180,7 +187,7 @@ func (s *Service) EnqueueAll(ctx context.Context, scope Scope, actor, operation 
 	if scope.KeyID != nil {
 		return taskstore.Task{}, errors.New("批量 Host 同步不能指定 Key ID")
 	}
-	summary, err := s.repository.Upstreams(ctx)
+	summary, err := s.repository.UpstreamSyncTargets(ctx, nil)
 	if err != nil {
 		return taskstore.Task{}, err
 	}
@@ -208,7 +215,7 @@ func (s *Service) EnqueueHost(ctx context.Context, host string, scope Scope, act
 	if record == nil {
 		return taskstore.Task{}, fmt.Errorf("未找到 Host %q 的私有授权记录，请检查账号归属 Host 是否完全一致（含端口）；Base URL 可以不同", host)
 	}
-	summary, err := s.repository.Upstreams(ctx)
+	summary, err := s.repository.UpstreamSyncTargets(ctx, &host)
 	if err != nil {
 		return taskstore.Task{}, err
 	}
@@ -238,7 +245,7 @@ func (s *Service) SyncAllNow(ctx context.Context, scope Scope, actor string) (Ba
 	if scope.KeyID != nil {
 		return BatchResult{}, errors.New("批量 Host 同步不能指定 Key ID")
 	}
-	summary, err := s.repository.Upstreams(ctx)
+	summary, err := s.repository.UpstreamSyncTargets(ctx, nil)
 	if err != nil {
 		return BatchResult{}, err
 	}
@@ -309,9 +316,15 @@ func (s *Service) execute(parent context.Context, task taskstore.Task, hosts []s
 	task.Progress, task.UpdatedAt = 100, time.Now().UTC().Format(time.RFC3339Nano)
 	task.Result = map[string]any{
 		"total": result.Total, "succeeded": result.Succeeded, "auth_failed": result.AuthFailed,
-		"failed": result.Failed, "account_total": result.AccountTotal,
+		"failed": result.Failed, "skipped": result.Skipped, "account_total": result.AccountTotal,
 		"account_rate_succeeded": result.AccountRateSucceeded, "account_rate_failed": result.AccountRateFailed,
 		"hosts": result.Hosts, "remote_write": false, "credentials_exposed": false,
+	}
+	for _, host := range result.Hosts {
+		if host.RemoteWrite {
+			task.Result["remote_write"] = true
+			break
+		}
 	}
 	if routingResult != nil {
 		task.Result["routing"] = *routingResult
@@ -336,7 +349,7 @@ func (s *Service) execute(parent context.Context, task taskstore.Task, hosts []s
 		}
 	} else {
 		task.Status = "succeeded"
-		task.Message = fmt.Sprintf("上游同步完成：成功 %d", result.Succeeded)
+		task.Message = fmt.Sprintf("上游同步完成：成功 %d，跳过 %d", result.Succeeded, result.Skipped)
 		if routingResult != nil {
 			task.Message += "；已重新计算调度，自动执行由巡检按策略复核"
 		}
@@ -427,6 +440,8 @@ func (s *Service) syncHosts(ctx context.Context, hosts []string, scope Scope, ac
 			result.Hosts[index] = failedHost(hosts[index], "failed", business.UpstreamAuthStatusUnconfirmed, reason)
 		}
 		switch result.Hosts[index].Status {
+		case "skipped":
+			result.Skipped++
 		case "succeeded":
 			result.Succeeded++
 		case "auth_failed":
@@ -449,6 +464,9 @@ func applyBatchAccountCounts(result *BatchResult, summary business.UpstreamSumma
 	result.AccountTotal, result.AccountRateSucceeded, result.AccountRateFailed = 0, 0, 0
 	for index := range result.Hosts {
 		host := &result.Hosts[index]
+		if host.Status == "skipped" {
+			continue
+		}
 		if host.Status != "succeeded" && host.AccountTotal == 0 {
 			host.AccountTotal = knownAccounts[configstore.CanonicalHost(host.Host)]
 			host.AccountRateFailed = host.AccountTotal
@@ -469,10 +487,25 @@ func (s *Service) syncHost(ctx context.Context, host string, scope Scope, actor 
 			slog.Error("余额同步后的告警处理失败", "host", host, "error", safeReason(alertErr.Error()))
 		}
 	}
+	if result.balanceObserved && s.balanceRecovery != nil {
+		remoteWrite, err := s.balanceRecovery(ctx, host, actor)
+		result.RemoteWrite = remoteWrite
+		if err != nil {
+			reason := "余额已同步，账号状态恢复失败：" + safeReason(err.Error())
+			result.Status, result.Reason = "failed", &reason
+			_, _ = s.repository.RecordRuntimeEvent(ctx, "balance_recovery_failed", "failed", reason, map[string]any{"host": host})
+		}
+	}
 	return result
 }
 
 func (s *Service) syncHostData(ctx context.Context, host string, scope Scope, actor string) HostResult {
+	if err := business.CheckUpstreamManaged(ctx, s.repository, host); err != nil {
+		if !errors.Is(err, business.ErrUpstreamExcluded) {
+			return failedHost(host, "failed", "未变更", "上游排除状态读取失败："+err.Error())
+		}
+		return failedHost(host, "skipped", "未变更", err.Error())
+	}
 	if scope.Balance {
 		if policy, ok := s.repository.(balanceSyncPolicy); ok {
 			allowed, policyErr := policy.HostBalanceSyncAllowed(ctx, host)
@@ -490,6 +523,9 @@ func (s *Service) syncHostData(ctx context.Context, host string, scope Scope, ac
 	}
 	record, recovered, err := s.authRecord(ctx, host, actor)
 	if err != nil {
+		if errors.Is(err, business.ErrUpstreamExcluded) {
+			return failedHost(host, "skipped", "未变更", err.Error())
+		}
 		return s.failed(ctx, host, scope, true, "私有授权恢复失败："+err.Error())
 	}
 	if record == nil {
@@ -514,6 +550,12 @@ func (s *Service) syncHostData(ctx context.Context, host string, scope Scope, ac
 		}
 	}()
 	ctx = guardedCtx
+	if err := business.CheckUpstreamManaged(ctx, s.repository, host); err != nil {
+		if !errors.Is(err, business.ErrUpstreamExcluded) {
+			return failedHost(host, "failed", "未变更", "上游排除状态读取失败："+err.Error())
+		}
+		return failedHost(host, "skipped", "未变更", err.Error())
+	}
 	record, err = s.private.AuthRecord(ctx, host)
 	if err != nil {
 		return s.failed(ctx, host, scope, true, "获取同步租约后私有授权复读失败："+err.Error())
@@ -590,6 +632,9 @@ func stringIDsCover(locked, current []string) bool {
 }
 
 func (s *Service) authRecord(ctx context.Context, host, actor string) (*configstore.AuthRecord, bool, error) {
+	if err := business.CheckUpstreamManaged(ctx, s.repository, host); err != nil {
+		return nil, false, err
+	}
 	record, err := s.private.AuthRecord(ctx, host)
 	if err != nil || record != nil || s.resolver == nil {
 		return record, false, err

@@ -10,7 +10,15 @@ export const importSchema = z
     template_id: z.string(),
     check: z.boolean(),
     promote: z.boolean(),
-    model: z.string().trim().min(1, "请输入检测模型").max(200),
+    model: z
+      .string()
+      .trim()
+      .min(1, "请输入检测模型")
+      .refine(
+        (value) => new TextEncoder().encode(value).length <= 200 && !/\p{Cc}/u.test(value),
+        "模型最多 200 字节，不能包含控制字符",
+      ),
+    platform_proxy_id: z.string().optional(),
     proxy_enabled: z.boolean(),
     proxy_url: z.string(),
   })
@@ -25,7 +33,8 @@ export const importDefaults: ImportValues = {
   template_id: "",
   check: true,
   promote: true,
-  model: "gpt-5.6-sol",
+  model: "gpt-6-astra",
+  platform_proxy_id: "",
   proxy_enabled: false,
   proxy_url: "",
 };

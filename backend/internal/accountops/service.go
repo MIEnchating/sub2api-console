@@ -586,6 +586,9 @@ func (s *Service) Models(ctx context.Context, accountID string) ([]string, error
 }
 
 func (s *Service) PreviewModels(ctx context.Context, accountID string) ([]string, error) {
+	if err := business.CheckAccountUpstreamManaged(ctx, s.repository, accountID); err != nil {
+		return nil, err
+	}
 	if !stableID(accountID) {
 		return nil, errors.New("账号必须使用有效的稳定 ID")
 	}
@@ -1187,6 +1190,10 @@ func (s *Service) acquireAccountMutation(ctx context.Context, accountID string, 
 	resources := append([]string{mutationguard.Account(accountID)}, additionalResources...)
 	guarded, release, err := targetguard.Acquire(ctx, s.repository, resources...)
 	if err != nil {
+		return nil, nil, err
+	}
+	if err := business.CheckAccountUpstreamManaged(guarded, s.repository, accountID); err != nil {
+		release()
 		return nil, nil, err
 	}
 	return guarded, func() {

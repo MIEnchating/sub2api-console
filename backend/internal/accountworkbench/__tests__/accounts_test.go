@@ -66,3 +66,14 @@ func TestAccountListRejectsDuplicateIDs(t *testing.T) {
 		t.Fatal("duplicate account IDs accepted")
 	}
 }
+
+func TestAccountListDisplaysActiveRateLimitWindow(t *testing.T) {
+	service, _ := fixture(t, `{"data":{"items":[{"id":41,"platform":"openai","type":"oauth","status":"active","schedulable":true,"rate_limit_reset_at":"2099-01-01T00:00:00Z"},{"id":42,"platform":"openai","type":"oauth","status":"active","schedulable":true,"rate_limit_reset_at":"2000-01-01T00:00:00Z"}],"total":2}}`)
+	accounts, err := service.Accounts(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if accounts[0].Status != "rate_limited" || accounts[1].Status != "active" {
+		t.Fatalf("wrong runtime status: %+v", accounts)
+	}
+}

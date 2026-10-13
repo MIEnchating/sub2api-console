@@ -15,8 +15,9 @@ import (
 )
 
 type TemplateDistributionInput struct {
-	Revision int64  `json:"revision"`
-	Scope    string `json:"scope"`
+	MonitorIDs []int64 `json:"monitor_ids"`
+	Revision   int64   `json:"revision"`
+	Scope      string  `json:"scope"`
 }
 
 type TemplateDistributionItem struct {

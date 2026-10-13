@@ -43,7 +43,7 @@ function setup(shared = false) {
     defaultOptions: { queries: { retry: false, staleTime: Infinity } },
   });
   clients.push(client);
-  client.setQueryData(["groups"], []);
+  client.setQueryData(["groups", "options"], []);
   let signal: AbortSignal | null | undefined;
   let release!: (response: Response) => void;
   const fetcher = vi.fn<typeof fetch>().mockImplementation((_input, init) => {

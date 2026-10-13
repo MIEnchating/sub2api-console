@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/MIEnchating/sub2api-console/backend/internal/business"
 	"strconv"
 	"time"
 
@@ -16,6 +17,7 @@ type MaintenanceSettings struct {
 	Enabled          bool     `json:"enabled"`
 	IntervalMinutes  int      `json:"interval_minutes"`
 	CooldownMinutes  int      `json:"cooldown_minutes"`
+	CheckEnabled     bool     `json:"check_enabled"`
 	CheckAfterRepair bool     `json:"check_after_repair"`
 	GroupIDs         []string `json:"group_ids"`
 }
@@ -53,19 +55,20 @@ type privateMaintenancePreview struct {
 	ScopeVersion   string                     `json:"scope_version"`
 }
 type maintenanceAttempt struct {
-	Phase                      string         `json:"phase"`
-	AccountVersion             string         `json:"account_version"`
-	Credentials                map[string]any `json:"credentials,omitempty"`
-	ExpiresAt                  time.Time      `json:"expires_at"`
-	Workspace                  string         `json:"workspace"`
-	User                       string         `json:"user"`
-	SourceRunID                string         `json:"source_run_id,omitempty"`
-	SourceDocumentKey          string         `json:"source_document_key,omitempty"`
-	SourceRevision             int64          `json:"source_revision,omitempty"`
-	ConfigurationVersion       string         `json:"configuration_version"`
-	CredentialVersion          string         `json:"credential_version"`
-	ProxyURL                   string         `json:"proxy_url,omitempty"`
-	VerifiedCredentialsVersion string         `json:"verified_credentials_version,omitempty"`
+	ProxyBinding               *platformProxyBinding `json:"proxy_binding,omitempty"`
+	Phase                      string                `json:"phase"`
+	AccountVersion             string                `json:"account_version"`
+	Credentials                map[string]any        `json:"credentials,omitempty"`
+	ExpiresAt                  time.Time             `json:"expires_at"`
+	Workspace                  string                `json:"workspace"`
+	User                       string                `json:"user"`
+	SourceRunID                string                `json:"source_run_id,omitempty"`
+	SourceDocumentKey          string                `json:"source_document_key,omitempty"`
+	SourceRevision             int64                 `json:"source_revision,omitempty"`
+	ConfigurationVersion       string                `json:"configuration_version"`
+	CredentialVersion          string                `json:"credential_version"`
+	ProxyURL                   string                `json:"proxy_url,omitempty"`
+	VerifiedCredentialsVersion string                `json:"verified_credentials_version,omitempty"`
 }
 type privateMaintenance struct {
 	Public   Maintenance                    `json:"public"`
@@ -159,6 +162,12 @@ func (s *Service) maintenanceScope(ctx context.Context, target configstore.Targe
 			continue
 		}
 		id := text(account["id"])
+		if err := s.requireAccountManaged(ctx, id); err != nil {
+			if errors.Is(err, business.ErrUpstreamExcluded) {
+				continue
+			}
+			return nil, "", err
+		}
 		if _, err := strconv.ParseUint(id, 10, 63); err != nil || id == "0" || versions[id] != "" {
 			return nil, "", errors.New("维护账号缺少有效且唯一的稳定 ID")
 		}

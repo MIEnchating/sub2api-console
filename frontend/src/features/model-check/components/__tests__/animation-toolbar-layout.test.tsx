@@ -33,7 +33,9 @@ it.each(["账号检测", "前置检测"])("%s 的模型和超时位于开始检�
   const fields = within(operations).getByRole("group", { name: "动画模型参数" });
   expect(within(operations).getByRole("button", { name: /开始检测|^前置检测（/ })).toBeVisible();
   expect(fields).toHaveClass("w-full", "sm:w-[36rem]", "max-w-full");
-  expect(within(fields).getByRole("combobox", { name: "检测模型" })).toHaveValue("gpt-6-astra");
+  expect(within(fields).getByRole("combobox", { name: "检测模型" })).toHaveTextContent(
+    "gpt-6-astra",
+  );
   expect(within(fields).getByRole("spinbutton", { name: "请求超时（秒）" })).toBeVisible();
 });
 
@@ -93,6 +95,8 @@ it("提示词设置与账号选择共用下方操作栏，点击后才显示编�
   expect(operations).toHaveClass("flex-wrap", "items-center");
   const trigger = within(operations).getByRole("button", { name: "编辑动画提示词" });
   expect(trigger).toBeVisible();
+  expect(trigger).toHaveClass("text-foreground");
+  expect(trigger).not.toHaveClass("text-info", "text-success", "bg-primary");
   expect(screen.queryByRole("textbox", { name: "动画提示词" })).not.toBeInTheDocument();
   fireEvent.click(trigger);
   expect(screen.getByRole("dialog", { name: "动画提示词设置" })).toBeVisible();

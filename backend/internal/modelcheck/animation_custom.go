@@ -5,18 +5,17 @@ import (
 	"errors"
 	"net/url"
 	"strings"
-	"unicode"
-	"unicode/utf8"
 
 	"github.com/MIEnchating/sub2api-console/backend/internal/configstore"
 )
 
 // Custom credentials live only in the running task's memory, never its stored result.
 type AnimationCustomEndpoint struct {
-	BaseURL  string `json:"base_url"`
-	APIKey   string `json:"api_key"`
-	Platform string `json:"platform"`
-	Model    string `json:"model"`
+	Models   []string `json:"models,omitempty"`
+	BaseURL  string   `json:"base_url"`
+	APIKey   string   `json:"api_key"`
+	Platform string   `json:"platform"`
+	Model    string   `json:"model"`
 }
 
 func prepareCustomAnimation(request AnimationRequest) (AnimationRequest, []selectedAccount, error) {
@@ -27,12 +26,15 @@ func prepareCustomAnimation(request AnimationRequest) (AnimationRequest, []selec
 	if err != nil {
 		return request, nil, err
 	}
-	custom.Model = strings.TrimSpace(custom.Model)
-	if custom.Model == "" || utf8.RuneCountInString(custom.Model) > 256 || strings.ContainsFunc(custom.Model, unicode.IsControl) {
-		return request, nil, errors.New("请输入 1 到 256 个字符的有效模型 ID")
+	models, err := normalizeAnimationModels(custom.Model, custom.Models)
+	if err != nil {
+		return request, nil, err
 	}
-	if strings.Contains(custom.Model, custom.APIKey) {
-		return request, nil, errors.New("模型 ID 不能包含 API Key，请检查填写内容")
+	custom.Model, custom.Models = models[0], models
+	for _, model := range models {
+		if strings.Contains(model, custom.APIKey) {
+			return request, nil, errors.New("模型 ID 不能包含 API Key，请检查填写内容")
+		}
 	}
 	id, err := randomTaskID()
 	if err != nil {
@@ -40,7 +42,7 @@ func prepareCustomAnimation(request AnimationRequest) (AnimationRequest, []selec
 	}
 	id = "custom-" + id
 	request.Custom = &custom
-	request.Targets = []AnimationTarget{{AccountID: id, Model: custom.Model, Endpoint: custom.BaseURL, Platform: custom.Platform}}
+	request.Targets = []AnimationTarget{{AccountID: id, Model: custom.Model, Models: custom.Models, Endpoint: custom.BaseURL, Platform: custom.Platform}}
 	return request, []selectedAccount{{ID: id, Name: "自定义接口", Platform: custom.Platform}}, nil
 }
 

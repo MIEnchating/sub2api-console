@@ -206,8 +206,9 @@ func (s *Store) AccountIDsByGroups(ctx context.Context, groupIDs []string) ([]st
 	SELECT DISTINCT ag.account_id
 		FROM account_groups ag
 		LEFT JOIN local_groups lg ON lg.name=ag.group_name
-		WHERE ag.group_id IN (SELECT id FROM selected_group_ids)
-		   OR (ag.group_id IS NULL AND lg.remote_id IN (SELECT id FROM selected_group_ids))
+		WHERE (ag.group_id IN (SELECT id FROM selected_group_ids)
+		   OR (ag.group_id IS NULL AND lg.remote_id IN (SELECT id FROM selected_group_ids)))
+		   AND ag.account_id NOT IN (` + excludedAccountIDsSQL + `)
 		ORDER BY CASE WHEN ag.account_id GLOB '[0-9]*' THEN CAST(ag.account_id AS INTEGER) ELSE 0 END, ag.account_id`
 	args := make([]any, len(uniqueGroupIDs))
 	for index, groupID := range uniqueGroupIDs {

@@ -12,6 +12,7 @@ import {
 import { AccountRecoveryStatus } from "./account-recovery-status";
 import { accountIdentityMeta } from "@/features/accounts/lib/account-labels";
 import { cn } from "@/lib/utils";
+import { upstreamHostFromBaseUrl } from "@/lib/onboarding-entry";
 import { formatHealthScore as healthScoreValue } from "@/lib/health-score";
 import { accountConcurrencyLimitedHelp, accountConcurrencyLimitedReason } from "../constants";
 import { probePlaceholderHelp, probePlaceholderLabel } from "../constants";
@@ -217,6 +218,9 @@ export function AccountIdentityMeta(props: { account: AccountStatus; className?:
 
 export function AccountIdentityCell(props: { account: AccountStatus; groupControl?: ReactNode }) {
   const groups = props.account.groups.length ? props.account.groups.join("、") : "未分组";
+  const upstreamAddress = props.account.upstream_base_url?.trim() ?? "";
+  const addressHost = upstreamHostFromBaseUrl(upstreamAddress);
+  const displayHost = addressHost || props.account.upstream_host || "Host 未记录";
   return (
     <div className="grid min-w-0 gap-0.5">
       <div
@@ -271,10 +275,10 @@ export function AccountIdentityCell(props: { account: AccountStatus; groupContro
               />
             }
           >
-            {props.account.upstream_host ?? "Host 未记录"}
+            {displayHost}
           </TooltipTrigger>
           <TooltipContent role="tooltip" className="max-w-sm">
-            {props.account.upstream_host ?? "Host 未记录"}
+            {addressHost ? upstreamAddress : displayHost}
           </TooltipContent>
         </Tooltip>
       </div>

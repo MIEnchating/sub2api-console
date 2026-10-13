@@ -17,7 +17,7 @@ export function AnimationCheckPage(props: {
   return (
     <PageLayout fixedContent>
       <PageHeading
-        title="动画检测"
+        title="智商检测"
         eyebrow="AUDIT / ANIMATION"
         description=""
         action={

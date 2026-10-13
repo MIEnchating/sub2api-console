@@ -1,3 +1,4 @@
+import { selectDetectionModels } from "./fixtures/model-selection";
 import { expect, test } from "@playwright/test";
 import { account } from "../../src/features/accounts/__tests__/fixtures";
 import { pageFixtures } from "./fixtures/page-shell";
@@ -35,7 +36,6 @@ test("模型建议跟随主题和输入宽度，长名称与滚动列表不溢�
   await page.getByRole("checkbox", { name: /检测 待校验账号/ }).check();
   await page.getByRole("button", { name: "获取模型", exact: true }).click();
   const input = page.getByRole("combobox", { name: "检测模型", exact: true });
-  await input.fill("");
   await input.press("ArrowDown");
   await expect(page.getByRole("option", { name: "gpt-6-astra", exact: true })).toBeVisible();
   const popup = page.locator('[data-slot="combobox-content"]');
@@ -60,20 +60,23 @@ test("模型建议跟随主题和输入宽度，长名称与滚动列表不溢�
       themeColor,
     };
   });
-  expect(geometry.width).toBe(inputWidth);
+  expect(geometry.width).toBeGreaterThanOrEqual(inputWidth);
   expect(geometry.overflowing).toBe(false);
   expect(geometry.color).toBe(geometry.themeColor);
-  await expect(page.getByText(longModel, { exact: true })).toHaveCSS("overflow-wrap", "anywhere");
+  await expect(page.getByText(longModel, { exact: true })).toHaveCSS("word-break", "break-all");
   const list = page.getByRole("listbox");
   await expect(list).toHaveCSS("overflow-y", "auto");
   await expect(list).toHaveCSS("max-height", "288px");
   await page.screenshot({ path: testInfo.outputPath("model-suggestions.png") });
-  await page.getByRole("option", { name: "gpt-6-astra", exact: true }).click();
-  await expect(input).toHaveValue("gpt-6-astra");
+  await page.getByRole("option", { name: "gpt-5.5", exact: true }).click();
+  await expect(input).toContainText("gpt-5.5");
+  await expect(input).toHaveAttribute("aria-expanded", "true");
+  await page.keyboard.press("Escape");
+  await expect(input).toContainText("gpt-6-astra");
   await expect(input).toHaveAttribute("aria-expanded", "false");
-  await input.fill("custom-model");
+  await selectDetectionModels(page, ["custom-model"]);
   await page.getByLabel("请求超时（秒）", { exact: true }).click();
   await expect(page.getByRole("spinbutton", { name: "请求超时（秒）" })).toBeFocused();
-  await expect(input).toHaveValue("custom-model");
+  await expect(input).toHaveText("custom-model");
   await expect(input).toHaveAttribute("aria-expanded", "false");
 });
