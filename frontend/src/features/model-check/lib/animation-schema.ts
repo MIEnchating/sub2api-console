@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { animationPlatforms } from "../constants";
 
 export const modelID = z
   .string()
@@ -60,7 +61,7 @@ export const customAnimationSchema = z
       .min(1, "请输入 API Key")
       .max(4096, "API Key 不能超过 4096 个字符")
       .regex(/^[\x21-\x7e]+$/, "API Key 不能包含空白或非 ASCII 字符"),
-    platform: z.enum(["openai", "anthropic"]),
+    platform: z.enum(animationPlatforms),
     model: modelID,
     additional_models: additionalModels,
     prompt: z.string().max(10000, "提示词不能超过 10000 个字符").optional(),

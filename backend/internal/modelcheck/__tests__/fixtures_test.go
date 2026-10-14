@@ -28,6 +28,7 @@ type catalog struct {
 	details      map[string]*business.AccountDetail
 	raw          []byte
 	promptRaw    []byte
+	qualityRaw   []byte
 	failSave     bool
 	plans        []byte
 	groupMembers map[string][]string

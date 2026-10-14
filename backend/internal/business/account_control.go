@@ -275,6 +275,11 @@ func (s *Store) commitAccountControl(
 	if err := tx.Commit(); err != nil {
 		return PolicySnapshot{}, err
 	}
+	// Remote controls return only an error; the caller discards the policy
+	// projection. Do not scan every group after an already confirmed commit.
+	if operation != nil {
+		return PolicySnapshot{}, nil
+	}
 	return s.PolicySnapshot(ctx)
 }
 

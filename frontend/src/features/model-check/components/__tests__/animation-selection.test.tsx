@@ -93,7 +93,7 @@ it("选择多个账号和统一模型后直接按稳定 ID 创建批量任务且
   );
   expect(
     await within(screen.getByRole("group", { name: "动画检测操作" })).findByRole("button", {
-      name: "取消任务",
+      name: "取消本页动画检测",
     }),
   ).toBeEnabled();
   expect(

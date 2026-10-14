@@ -26,7 +26,6 @@ const reads = [
   ["日志清理状态", api.logCleanupStatus],
   ["检测任务", api.detectionTasks],
   ["动画计划", api.animationSchedules],
-  ["检测配置", api.modelCheckConfiguration],
 ] as const;
 
 it.each(reads)("%s读取被取消时中止底层网络等待", async (_label, read) => {

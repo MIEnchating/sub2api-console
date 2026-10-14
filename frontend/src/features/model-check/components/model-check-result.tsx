@@ -27,10 +27,13 @@ import {
 } from "@/components/ui/table";
 import { useClientPagination } from "@/hooks/use-client-pagination";
 import { astraSourceLabels } from "../constants";
+import { VerificationResult } from "./verification-result";
 
 type ResultRecord = Record<string, unknown>;
 
 const verdictLabels: Record<string, string> = {
+  NO_ANOMALIES: "未发现异常",
+  ANOMALY: "发现待核对异常",
   MATCH: "匹配",
   GROUP_MATCH: "兼容组匹配",
   MISMATCH: "不匹配",
@@ -168,6 +171,7 @@ function Metric(props: { label: string; value: number | null }) {
 }
 
 function ResultMetrics(props: { result: ResultRecord }) {
+  if (props.result.checker === "verification") return <VerificationResult result={props.result} />;
   if (props.result.checker === "astra") {
     const source = textValue(props.result.access_source) ?? "inconclusive";
     const checks = resultRows(props.result.checks).filter(
@@ -262,7 +266,8 @@ function LiveModelCheckResult(props: { task: Task; rows: ResultRecord[] }) {
                   {textValue(item.claimed_model) ?? "模型"}
                 </span>
                 <Badge variant="outline" className="ml-auto shrink-0">
-                  {textValue(item.mode) === "claude" ? "Claude" : "Responses"}
+                  {numberValue(item.completed_probes) ?? 0}/
+                  {numberValue(item.planned_probes) ?? "—"} 项
                 </Badge>
               </div>
             ))
@@ -446,7 +451,7 @@ export function ModelCheckResult(props: { task: Task }) {
               <TableHead className="w-[17%]">账号</TableHead>
               <TableHead className="w-[20%]">模型</TableHead>
               <TableHead className="w-[15%]">结论</TableHead>
-              <TableHead className="w-[22%]">行为指标</TableHead>
+              <TableHead className="w-[22%]">检测结论</TableHead>
               <TableHead className="w-[10%]">成功请求</TableHead>
               <TableHead>详情</TableHead>
             </TableRow>

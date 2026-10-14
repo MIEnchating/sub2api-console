@@ -670,8 +670,9 @@ func upstreamSyncTestStore(t *testing.T) *Store {
 		t.Fatal(err)
 	}
 	name := "Example"
+	mode := "auto"
 	if _, err := store.CreateUpstreamConfiguration(ctx, UpstreamConfigurationWrite{
-		Host: "api.example", Name: &name, BaseURL: "https://api.example", UpstreamType: "sub2api",
+		Host: "api.example", Name: &name, NameMode: &mode, BaseURL: "https://api.example", UpstreamType: "sub2api",
 		AuthMode: "sub2api_user_token", RechargeRate: "0.3",
 	}); err != nil {
 		t.Fatal(err)

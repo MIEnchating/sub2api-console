@@ -37,6 +37,22 @@ func TestDatabaseContractAccountControlCommitsConfirmedScheduling(t *testing.T) 
 					}
 				}
 			}()
+			snapshot, err := store.AccountMutationSnapshot(t.Context(), "780041")
+			if err != nil || snapshot.ID != "780041" || snapshot.Name != "control-contract" || snapshot.ManualPriority != nil {
+				t.Fatalf("mutation snapshot=%+v error=%v", snapshot, err)
+			}
+			for _, selection := range []struct {
+				ids  []string
+				want bool
+			}{
+				{[]string{"780041", "780041"}, true},
+				{[]string{"780041", "987654321098"}, false},
+			} {
+				exists, err := store.AccountIDsExist(t.Context(), selection.ids)
+				if err != nil || exists != selection.want {
+					t.Fatalf("selection=%v exists=%t error=%v", selection.ids, exists, err)
+				}
+			}
 			for _, scenario := range []struct {
 				action  string
 				enabled bool

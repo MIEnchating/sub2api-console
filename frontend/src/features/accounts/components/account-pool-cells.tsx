@@ -15,7 +15,7 @@ import { cn } from "@/lib/utils";
 import { upstreamHostFromBaseUrl } from "@/lib/onboarding-entry";
 import { formatHealthScore as healthScoreValue } from "@/lib/health-score";
 import { accountConcurrencyLimitedHelp, accountConcurrencyLimitedReason } from "../constants";
-import { probePlaceholderHelp, probePlaceholderLabel } from "../constants";
+import { AccountProbePlaceholder } from "./account-probe-placeholder";
 import {
   accountLoadFactorLabel,
   effectiveAccountLoadFactor,
@@ -225,14 +225,14 @@ export function AccountIdentityCell(props: { account: AccountStatus; groupContro
     <div className="grid min-w-0 gap-0.5">
       <div
         data-slot="account-identity-heading"
-        className="flex min-w-0 flex-nowrap items-center gap-2"
+        className="flex h-8 min-w-0 flex-nowrap items-center gap-2"
       >
         <Tooltip>
           <TooltipTrigger
             render={
               <strong
                 tabIndex={0}
-                className="block min-w-0 flex-1 truncate rounded-sm font-semibold outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                className="block min-w-0 truncate rounded-sm font-semibold outline-none focus-visible:ring-2 focus-visible:ring-ring"
               />
             }
           >
@@ -242,25 +242,8 @@ export function AccountIdentityCell(props: { account: AccountStatus; groupContro
             {props.account.name}
           </TooltipContent>
         </Tooltip>
+        <AccountProbePlaceholder account={props.account} />
       </div>
-      {props.account.probe_placeholder_at ? (
-        <Tooltip>
-          <TooltipTrigger
-            render={
-              <span
-                tabIndex={0}
-                className="w-fit max-w-full rounded-sm text-xs text-amber-700 outline-none focus-visible:ring-2 focus-visible:ring-ring dark:text-amber-400"
-              />
-            }
-          >
-            {probePlaceholderLabel}
-          </TooltipTrigger>
-          <TooltipContent role="tooltip" className="max-w-sm">
-            {probePlaceholderHelp} 最近发现：
-            {new Date(props.account.probe_placeholder_at).toLocaleString("zh-CN")}
-          </TooltipContent>
-        </Tooltip>
-      ) : null}
       <div
         data-slot="account-identity-meta"
         className="flex min-w-0 flex-nowrap items-center gap-2 text-xs text-muted-foreground"

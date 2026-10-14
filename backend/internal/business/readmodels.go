@@ -34,6 +34,7 @@ type AccountRecentResult struct {
 
 type AccountStatus struct {
 	ProbePlaceholderAt          *string                    `json:"probe_placeholder_at,omitempty"`
+	ProbePlaceholder            *ProbePlaceholder          `json:"probe_placeholder,omitempty"`
 	ManualFused                 bool                       `json:"manual_fused"`
 	GroupsLocked                bool                       `json:"groups_locked"`
 	IgnoreCostWall              bool                       `json:"ignore_cost_wall"`
@@ -101,6 +102,14 @@ type AccountStatus struct {
 	Weight                      *float64                   `json:"weight"`
 }
 
+type ProbePlaceholder struct {
+	GroupName    string `json:"group_name,omitempty"`
+	RequestModel string `json:"request_model,omitempty"`
+	Result       string `json:"result,omitempty"`
+	Attempt      int    `json:"attempt,omitempty"`
+	Preview      string `json:"preview,omitempty"`
+}
+
 type AccountBinding struct {
 	ID               int64   `json:"id"`
 	LocalAccountID   string  `json:"local_account_id"`
@@ -131,11 +140,13 @@ type AccountDetail struct {
 
 type accountProjection struct {
 	AccountStatus
-	manualFused  bool
-	metadataRaw  string
-	groupIDs     map[string]*string
-	groupRates   map[string]*string
-	latestEvents map[string]string
+	manualFused   bool
+	metadataRaw   string
+	metadataState string
+	metadata      map[string]any
+	groupIDs      map[string]*string
+	groupRates    map[string]*string
+	latestEvents  map[string]string
 }
 
 type decisionProjection struct {
@@ -342,7 +353,7 @@ func (s *Store) accountProjectionsWithOptions(ctx context.Context, options accou
 		ownership.upstream_host,ownership.upstream_id,COALESCE(ownership.identity_count,0),COALESCE(u.upstream_type,a.upstream_type),u.base_url,a.schedulable,a.priority,
 		a.load_factor,a.concurrency,a.multiplier,a.balance,a.paused,a.paused_reason,a.routing_state,a.health_status,
 		a.failure_streak,a.recovery_pass_streak,a.target_priority,a.target_load_factor,a.target_schedulable,
-		a.target_concurrency,a.metadata_json,m.priority,m.sync_balance_multiplier,placeholder.observed_at FROM accounts a
+		a.target_concurrency,a.metadata_json,m.priority,m.sync_balance_multiplier,placeholder.observed_at,placeholder.value_json FROM accounts a
 		LEFT JOIN (
 			SELECT b.local_account_id,MIN(COALESCE(primary_host.host,b.upstream_host)) AS upstream_host,
 				MIN(bi.upstream_id) AS upstream_id,
@@ -370,7 +381,7 @@ func (s *Store) accountProjectionsWithOptions(ctx context.Context, options accou
 	projections := make([]accountProjection, 0)
 	for rows.Next() {
 		var item accountProjection
-		var placeholderAt sql.NullString
+		var placeholderAt, placeholderValue sql.NullString
 		var upstreamID, upstreamHost, recordedUpstreamHost, bindingUpstreamHost sql.NullString
 		var upstreamType, upstreamBaseURL, loadFactor, multiplier, balance sql.NullString
 		var pausedReason, routingState, healthStatus, targetLoadFactor sql.NullString
@@ -382,11 +393,25 @@ func (s *Store) accountProjectionsWithOptions(ctx context.Context, options accou
 			&upstreamType, &upstreamBaseURL, &schedulable, &priority,
 			&loadFactor, &concurrency, &multiplier, &balance, &paused, &pausedReason, &routingState,
 			&healthStatus, &failureStreak, &recoveryPassStreak, &targetPriority, &targetLoadFactor,
-			&targetSchedulable, &targetConcurrency, &item.metadataRaw, &manualPriority, &manualSyncBalanceMultiplier, &placeholderAt,
+			&targetSchedulable, &targetConcurrency, &item.metadataRaw, &manualPriority, &manualSyncBalanceMultiplier, &placeholderAt, &placeholderValue,
 		); err != nil {
 			return nil, err
 		}
 		item.ProbePlaceholderAt = nullString(placeholderAt)
+		if placeholderValue.Valid {
+			var details struct {
+				ProbePlaceholder
+				Cleared bool `json:"cleared"`
+			}
+			if json.Unmarshal([]byte(placeholderValue.String), &details) == nil &&
+				(details.Preview != "" || details.GroupName != "" || details.RequestModel != "" || details.Result != "" || details.Attempt != 0) {
+				item.ProbePlaceholder = &details.ProbePlaceholder
+			}
+			if details.Cleared {
+				item.ProbePlaceholderAt = nil
+				item.ProbePlaceholder = nil
+			}
+		}
 		item.Groups = []string{}
 		item.RecentResults = []AccountRecentResult{}
 		item.groupIDs = map[string]*string{}
@@ -400,6 +425,14 @@ func (s *Store) accountProjectionsWithOptions(ctx context.Context, options accou
 			(item.RecordedUpstreamHost == nil || !strings.EqualFold(*item.RecordedUpstreamHost, *bindingHost))
 		item.UpstreamType = nullString(upstreamType)
 		metadata, metadataErr := decodeObject(item.metadataRaw)
+		// Group statistics evaluate the same metadata for scope, blocking and
+		// availability, possibly for several groups. Keep one decoded object for
+		// these short-lived projections instead of parsing it per membership.
+		if !options.includeRecentEvidence {
+			item.metadata = metadata
+		}
+		status, _ := metadata["status"].(string)
+		item.metadataState = NormalizeAccountState(status)
 		item.Platform = accountMetadataValueText(metadata, "platform")
 		item.AccountType = accountMetadataValueText(metadata, "account_type", "type")
 		item.BaseURL = accountMetadataValueText(metadata, "base_url")
@@ -1067,8 +1100,8 @@ func applyAccountCalculations(
 	if item.manualFused && item.Schedulable != nil && !*item.Schedulable {
 		currentHealth = AccountStateFused
 	}
-	if metadataState := accountMetadataState(item.metadataRaw); metadataState == AccountStateDisabled {
-		currentHealth = metadataState
+	if projectionMetadataState(item) == AccountStateDisabled {
+		currentHealth = AccountStateDisabled
 	}
 	effectiveHealth := currentHealth
 	if item.Paused != nil && *item.Paused {
@@ -1140,6 +1173,20 @@ func accountMetadataState(raw string) string {
 	return NormalizeAccountState(status)
 }
 
+func projectionMetadataState(item *accountProjection) string {
+	if item.metadataState != "" {
+		return item.metadataState
+	}
+	return accountMetadataState(item.metadataRaw)
+}
+
+func projectionMetadata(item accountProjection) (map[string]any, error) {
+	if item.metadata != nil {
+		return item.metadata, nil
+	}
+	return decodeObject(item.metadataRaw)
+}
+
 func accountMetadataText(raw string, keys ...string) *string {
 	metadata, err := decodeObject(raw)
 	if err != nil {
@@ -1199,7 +1246,7 @@ func applyMonitoringHealth(item *accountProjection, excluded map[string]struct{}
 	if current == AccountStateUnknown && item.HealthStatus != nil {
 		current = NormalizeAccountState(*item.HealthStatus)
 	}
-	if accountMetadataState(item.metadataRaw) == AccountStateDisabled {
+	if projectionMetadataState(item) == AccountStateDisabled {
 		current = AccountStateDisabled
 	}
 	reason := (*string)(nil)

@@ -5770,8 +5770,8 @@ export function OnboardingPage() {
   );
   const [probeTarget, setProbeTarget] = useState<ProbeDialogTarget | null>(null);
   const detectionSequence = React.useRef(0);
-  const autoDetectedName = React.useRef("");
   const [upstreamName, setUpstreamName] = useState("");
+  const upstreamNameEdited = React.useRef(false);
   const [rechargeRate, setRechargeRate] = useState("1");
   const [authMode, setAuthMode] = useState(defaultAuthModeForPlatform("sub2api"));
   const [showCustomHeaders, setShowCustomHeaders] = useState(false);
@@ -6023,8 +6023,7 @@ export function OnboardingPage() {
       }
       if (result.name_detected && result.name) {
         setUpstreamName((current) => {
-          if (current.trim() && current !== autoDetectedName.current) return current;
-          autoDetectedName.current = result.name!;
+          if (upstreamNameEdited.current) return current;
           return result.name!;
         });
       }
@@ -6115,6 +6114,7 @@ export function OnboardingPage() {
       const payload = {
         host: normalizedHost,
         name: upstreamName.trim() || normalizedHost,
+        name_mode: upstreamNameEdited.current ? "manual" : "auto",
         base_url: baseUrl,
         account_base_url: values.account_base_url.trim(),
         upstream_type: upstreamType,
@@ -6768,7 +6768,10 @@ export function OnboardingPage() {
                   <Input
                     id={`${fieldID}-name`}
                     value={upstreamName}
-                    onChange={(event) => setUpstreamName(event.target.value)}
+                    onChange={(event) => {
+                      upstreamNameEdited.current = Boolean(event.target.value.trim());
+                      setUpstreamName(event.target.value);
+                    }}
                     placeholder="输入地址后自动获取"
                   />
                 </FormField>

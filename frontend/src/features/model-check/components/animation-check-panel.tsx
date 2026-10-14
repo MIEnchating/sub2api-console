@@ -51,6 +51,8 @@ function AnimationCheckContent(props: {
   const [tab, setTab] = useState("accounts");
   const [filters, setFilters] = useState(defaultAnimationFilters);
   const tasks = useAnimationTasks(props.active);
+  const cancellationMode = tab === "precheck" ? "precheck" : "animation";
+  const cancellationLabel = tab === "precheck" ? "取消本页前置检测" : "取消本页动画检测";
   const [scheduleEdit, setScheduleEdit] = useState<{
     mode: "animation" | "precheck";
     targets: ScheduleTarget[];
@@ -258,7 +260,7 @@ function AnimationCheckContent(props: {
                       <TooltipContent>重新读取检测记录</TooltipContent>
                     </Tooltip>
                   ) : null}
-                  {tasks.activeTaskIDs.size > 0 ? (
+                  {tasks.cancellableTaskIDs[cancellationMode].length > 0 ? (
                     <Tooltip>
                       <TooltipTrigger
                         render={
@@ -266,15 +268,18 @@ function AnimationCheckContent(props: {
                             type="button"
                             variant="outline"
                             size="icon"
-                            aria-label="取消任务"
+                            aria-label={cancellationLabel}
                             disabled={tasks.cancelling}
-                            onClick={() => void tasks.cancelActive()}
+                            onClick={() => void tasks.cancelActive(cancellationMode)}
                           />
                         }
                       >
                         <Square aria-hidden="true" />
                       </TooltipTrigger>
-                      <TooltipContent>取消任务</TooltipContent>
+                      <TooltipContent>
+                        {cancellationLabel}（{tasks.cancellableTaskIDs[cancellationMode].length}{" "}
+                        个任务）
+                      </TooltipContent>
                     </Tooltip>
                   ) : null}
                 </>

@@ -111,7 +111,7 @@ func TestCustomAnimationRejectsInvalidCredentialsAndMixedTargets(t *testing.T) {
 		{"unsupported scheme", "file:///tmp/test", "openai", "key", "model"},
 		{"embedded credentials", "https://user:password@example.invalid", "openai", "key", "model"},
 		{"query credentials", "https://example.invalid?key=secret", "openai", "key", "model"},
-		{"unsupported platform", "https://example.invalid", "gemini", "key", "model"},
+		{"unsupported platform", "https://example.invalid", "unsupported", "key", "model"},
 		{"empty key", "https://example.invalid", "openai", "  ", "model"},
 		{"header injection", "https://example.invalid", "openai", "key\r\nx-injected: true", "model"},
 		{"key in URL path", "https://example.invalid/" + fixtureSecret, "openai", fixtureSecret, "model"},

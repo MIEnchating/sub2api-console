@@ -41,6 +41,9 @@ func (sender directBundleSender) Send(ctx context.Context, _ string, model, prom
 func (sender directBundleSender) SendWithReasoning(ctx context.Context, _ string, model, prompt string, timeoutSeconds int, effort string) (string, string, error) {
 	requestContext, cancel := context.WithTimeout(ctx, time.Duration(timeoutSeconds)*time.Second)
 	defer cancel()
+	if sender.credential.Platform == "gemini" {
+		return sendGeminiGeneration(requestContext, sender.client, sender.credential, model, prompt, sender.requestID, 4096, sender.usage, nil)
+	}
 	if strings.EqualFold(strings.TrimSpace(sender.credential.Platform), "anthropic") {
 		if effort != "" && sender.usage == nil {
 			return "", "", visibleRequestError{message: "Astra 检测需要支持思考等级的 OpenAI 接口，请检查账号平台配置"}
@@ -258,11 +261,22 @@ func directEndpoint(baseURL, endpointPath string) (string, error) {
 		return "", errors.New("invalid Base URL")
 	}
 	basePath := strings.TrimRight(parsed.Path, "/")
+	if strings.HasPrefix(endpointPath, "/v1beta/") {
+		for _, suffix := range []string{"/v1beta", "/v1"} {
+			if strings.HasSuffix(basePath, suffix) {
+				basePath = strings.TrimSuffix(basePath, suffix)
+				break
+			}
+		}
+	}
 	if strings.HasSuffix(strings.ToLower(basePath), "/v1") && strings.HasPrefix(endpointPath, "/v1/") {
 		endpointPath = strings.TrimPrefix(endpointPath, "/v1")
 	}
 	parsed.Path = basePath + endpointPath
 	parsed.RawPath, parsed.RawQuery, parsed.Fragment = "", "", ""
+	if isGeminiGenerationPath(endpointPath) {
+		parsed.RawQuery = "alt=sse"
+	}
 	return parsed.String(), nil
 }
 

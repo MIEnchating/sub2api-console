@@ -19,7 +19,7 @@ export function ProbeAnimationStage(props: { result: ProbeResult | null; pending
     <div
       role="region"
       aria-label={ready ? "动画测试预览" : "动画展示区域"}
-      className="mx-auto aspect-[4/3] w-full max-w-[min(38rem,calc(max(12rem,100svh-24rem)*4/3))] min-w-0 overflow-hidden rounded-lg border bg-muted/30"
+      className="mx-auto aspect-[4/3] w-full max-w-[min(38rem,calc(max(10rem,100svh-31rem)*4/3))] sm:max-w-[min(38rem,calc(max(12rem,100svh-28rem)*4/3))] min-w-0 overflow-hidden rounded-lg border bg-muted/30"
     >
       {ready ? (
         <Suspense fallback={<ContentLoading label="正在加载动画预览" />}>

@@ -120,6 +120,7 @@ type HostResult struct {
 	Reason               *string                           `json:"reason,omitempty"`
 	Catalog              *business.UpstreamCatalogSnapshot `json:"-"`
 	balanceObserved      bool
+	nameChanged          bool
 }
 
 type BatchResult struct {
@@ -479,6 +480,18 @@ func applyBatchAccountCounts(result *BatchResult, summary business.UpstreamSumma
 
 func (s *Service) syncHost(ctx context.Context, host string, scope Scope, actor string) HostResult {
 	result := s.syncHostData(ctx, host, scope, actor)
+	if result.Status == "succeeded" && (scope.Name || result.nameChanged) {
+		if syncer, ok := s.rateSync.(interface {
+			SyncHostAccountNames(context.Context, string, string) (bool, error)
+		}); ok {
+			written, err := syncer.SyncHostAccountNames(ctx, host, actor)
+			result.RemoteWrite = written
+			if err != nil {
+				reason := "上游名称已读取，账号名称同步失败：" + safeReason(err.Error())
+				result.Status, result.Reason = "failed", &reason
+			}
+		}
+	}
 	// Notify after committing the balance and releasing the mutation lease.
 	// Each Host can recover while other Hosts or inspection stages are still busy.
 	if result.balanceObserved && s.balanceAlerts != nil {
@@ -489,7 +502,7 @@ func (s *Service) syncHost(ctx context.Context, host string, scope Scope, actor 
 	}
 	if result.balanceObserved && s.balanceRecovery != nil {
 		remoteWrite, err := s.balanceRecovery(ctx, host, actor)
-		result.RemoteWrite = remoteWrite
+		result.RemoteWrite = result.RemoteWrite || remoteWrite
 		if err != nil {
 			reason := "余额已同步，账号状态恢复失败：" + safeReason(err.Error())
 			result.Status, result.Reason = "failed", &reason
@@ -614,7 +627,7 @@ func (s *Service) syncHostData(ctx context.Context, host string, scope Scope, ac
 		GroupCount: persisted.GroupCount, KeyCount: persisted.KeyCount,
 		AccountTotal: persisted.AccountTotal, AccountRateSucceeded: persisted.AccountRateSucceeded,
 		AccountRateFailed: persisted.AccountRateFailed, AuthRecovered: recovered,
-		Catalog: catalog, balanceObserved: scope.Balance && balance != nil && balance.RawBalance != nil,
+		Catalog: catalog, balanceObserved: scope.Balance && balance != nil && balance.RawBalance != nil, nameChanged: persisted.NameChanged,
 	}
 }
 

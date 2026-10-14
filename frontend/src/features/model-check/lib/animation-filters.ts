@@ -1,5 +1,6 @@
 import type { AccountStatus } from "@/api";
 import type { AnimationAccountSort } from "../constants";
+import { supportsAnimationPlatform } from "../constants";
 
 export const priorityOptions = ["manual", "automatic"] as const;
 export type PriorityFilter = (typeof priorityOptions)[number];
@@ -30,7 +31,7 @@ export function selectableDetectionAccountIDs(
     .filter(
       (account) =>
         !busyIDs.has(account.id) &&
-        (account.platform == null || ["openai", "anthropic"].includes(account.platform)),
+        (account.platform == null || supportsAnimationPlatform(account.platform)),
     )
     .map((account) => account.id);
 }

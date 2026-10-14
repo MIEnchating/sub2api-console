@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/MIEnchating/sub2api-console/backend/internal/animationquality"
 	"log/slog"
 	"maps"
 	"net/http"
@@ -16,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -105,6 +107,8 @@ type preparedRun struct {
 }
 
 type Service struct {
+	qualityModel          atomic.Pointer[animationquality.Detector]
+	qualitySettings       qualitySettingsState
 	animationPrompt       animationPromptState
 	tasks                 TaskStore
 	credentials           CredentialStore
@@ -147,22 +151,9 @@ func New(tasks TaskStore, credentials CredentialStore, accounts AccountCatalog, 
 	service.configuration = newBuiltinConfiguration(claudeProfiles, sol)
 	if repository, ok := accounts.(configurationRepository); ok {
 		service.profileRepository = repository
-		raw, loadErr := repository.LoadModelCheckConfiguration(context.Background())
-		if loadErr != nil {
-			return nil, fmt.Errorf("模型检测画像配置读取失败: %w", loadErr)
-		}
-		if len(raw) > 0 {
-			state, decodeErr := decodeConfigurationState(raw)
-			if decodeErr != nil {
-				return nil, decodeErr
-			}
-			activeClaude, activeSol, profileErr := profilesFromDefinitions(state.Active.Payload)
-			if profileErr != nil {
-				return nil, fmt.Errorf("模型检测已发布画像无效: %w", profileErr)
-			}
-			service.configuration = state
-			service.claudeProfiles, service.solProfile = activeClaude, activeSol
-		}
+	}
+	if err := service.loadQualitySettings(context.Background()); err != nil {
+		return nil, err
 	}
 	if err := service.loadAnimationPrompt(context.Background()); err != nil {
 		return nil, err
@@ -303,8 +294,8 @@ func (s *Service) prepare(ctx context.Context, request Request) (preparedRun, er
 		}
 	}
 	for _, model := range request.Models {
-		if utf8.RuneCountInString(model) > 256 || checkerForModel(model, claudeProfiles, solProfile) == "" {
-			return preparedRun{}, fmt.Errorf("模型 %s 暂无行为检测画像", model)
+		if !utf8.ValidString(model) || utf8.RuneCountInString(model) > 256 || strings.ContainsAny(model, "\r\n\x00") {
+			return preparedRun{}, errors.New("模型名称无效，请重新选择")
 		}
 	}
 	if request.Rounds == 0 {
@@ -322,6 +313,16 @@ func (s *Service) prepare(ctx context.Context, request Request) (preparedRun, er
 	selected, err := s.selectCheckAccounts(ctx, request.AccountIDs)
 	if err != nil {
 		return preparedRun{}, err
+	}
+	profileVersion, profileFingerprint = verificationVersion, verificationVersion
+	for _, account := range selected {
+		if account.AccountType == "oauth" {
+			for _, model := range request.Models {
+				if strings.HasPrefix(model, "claude-") || strings.HasPrefix(model, "gemini-") {
+					return preparedRun{}, errors.New("OpenAI OAuth 账号不支持所选平台模型，请重新选择")
+				}
+			}
+		}
 	}
 	target, err := s.prepareOAuthTarget(ctx, selected)
 	if err != nil {
@@ -344,7 +345,7 @@ func (s *Service) selectCheckAccounts(ctx context.Context, accountIDs []string) 
 			}
 			return nil, err
 		}
-		detail, err := s.accounts.Account(ctx, accountID)
+		detail, err := s.detectionAccount(ctx, accountID)
 		if errors.Is(err, sql.ErrNoRows) || err == nil && detail == nil {
 			return nil, fmt.Errorf("账号 %s 不存在，请刷新账号列表后重试", accountID)
 		}
@@ -466,12 +467,22 @@ func (s *Service) execute(parent context.Context, task taskstore.Task, prepared 
 		}
 	}
 	type combinationEvent struct {
-		index   int
-		started bool
-		result  map[string]any
+		index    int
+		started  bool
+		progress bool
+		result   map[string]any
 	}
 	jobs := make(chan int)
-	workers := min(2, len(combinations))
+	challenges := make([][]verificationChallenge, prepared.request.Rounds)
+	for round := range challenges {
+		var err error
+		challenges[round], err = verificationChallenges()
+		if err != nil {
+			s.finishFailed(ctx, task, prepared.request.AccountIDs, errors.New("检测题目生成失败，请重试"))
+			return
+		}
+	}
+	workers := min(2, len(prepared.accounts))
 	// A single ordered stream prevents a late start event from reviving a
 	// completed combination. Buffer only in proportion to active workers.
 	events := make(chan combinationEvent, workers)
@@ -480,37 +491,51 @@ func (s *Service) execute(parent context.Context, task taskstore.Task, prepared 
 		workerGroup.Add(1)
 		go func() {
 			defer workerGroup.Done()
-			for index := range jobs {
-				if ctx.Err() != nil {
-					return
-				}
-				current := combinations[index]
-				events <- combinationEvent{index: index, started: true, result: map[string]any{
-					"account_id": current.account.ID, "account_name": current.account.Name,
-					"claimed_model": current.model,
-					"mode":          checkerForModel(current.model, prepared.claudeProfiles, prepared.solProfile),
-				}}
-				credential := credentials[current.account.ID]
-				input := targetRequest{
-					AccountID: current.account.ID, AccountName: current.account.Name,
-					Model: current.model, Rounds: prepared.request.Rounds,
-					TimeoutSeconds: prepared.request.TimeoutSeconds,
-				}
-				result, runErr := runPreparedCheck(ctx, client, oauthClient, credential, prepared, input)
-				if runErr != nil {
-					result = map[string]any{
-						"account_id": current.account.ID, "account_name": current.account.Name,
-						"claimed_model": current.model, "verdict": "ERROR", "error": runErr.Error(),
+			for accountIndex := range jobs {
+				for modelIndex := range prepared.request.Models {
+					index := accountIndex*len(prepared.request.Models) + modelIndex
+					if ctx.Err() != nil {
+						return
 					}
+					current := combinations[index]
+					events <- combinationEvent{index: index, started: true, result: map[string]any{
+						"account_id": current.account.ID, "account_name": current.account.Name,
+						"claimed_model": current.model,
+						"mode":          "verification",
+					}}
+					credential := credentials[current.account.ID]
+					input := targetRequest{
+						Challenges: challenges,
+						AccountID:  current.account.ID, AccountName: current.account.Name,
+						Model: current.model, Rounds: prepared.request.Rounds,
+						TimeoutSeconds: prepared.request.TimeoutSeconds,
+					}
+					input.Progress = func(report VerificationReport) {
+						raw, _ := json.Marshal(report)
+						snapshot := map[string]any{}
+						if json.Unmarshal(raw, &snapshot) != nil {
+							return
+						}
+						snapshot["account_id"], snapshot["account_name"], snapshot["claimed_model"] = current.account.ID, current.account.Name, current.model
+						snapshot["completed_probes"], snapshot["planned_probes"] = len(report.Probes), report.Total
+						events <- combinationEvent{index: index, progress: true, result: snapshot}
+					}
+					result, runErr := runPreparedCheck(ctx, client, oauthClient, credential, prepared, input)
+					if runErr != nil {
+						result = map[string]any{
+							"account_id": current.account.ID, "account_name": current.account.Name,
+							"claimed_model": current.model, "verdict": "ERROR", "error": runErr.Error(),
+						}
+					}
+					result["credentials_persisted"] = credential.err == nil && credential.oauth == nil
+					events <- combinationEvent{index: index, result: result}
 				}
-				result["credentials_persisted"] = credential.err == nil && credential.oauth == nil
-				events <- combinationEvent{index: index, result: result}
 			}
 		}()
 	}
 	go func() {
 		defer close(jobs)
-		for index := range combinations {
+		for index := range prepared.accounts {
 			select {
 			case jobs <- index:
 			case <-ctx.Done():
@@ -527,7 +552,10 @@ func (s *Service) execute(parent context.Context, task taskstore.Task, prepared 
 	completed := 0
 	active := map[int]map[string]any{}
 	for event := range events {
-		if event.started {
+		if event.progress {
+			active[event.index] = event.result
+			task.Message = fmt.Sprintf("账号 %s：已完成 %v/%v 项检测", event.result["account_name"], event.result["completed_probes"], event.result["planned_probes"])
+		} else if event.started {
 			active[event.index] = event.result
 			task.Message = fmt.Sprintf("正在检测账号 %s 的模型 %s；已完成 %d/%d 个组合", event.result["account_name"], event.result["claimed_model"], completed, len(combinations))
 		} else {
@@ -552,6 +580,7 @@ func (s *Service) execute(parent context.Context, task taskstore.Task, prepared 
 		s.finishFailed(ctx, task, prepared.request.AccountIDs, errors.New("账号模型检测被中断"))
 		return
 	}
+	addVerificationComparisons(results)
 	summary := map[string]int{}
 	for _, result := range results {
 		verdict, _ := result["verdict"].(string)
@@ -604,7 +633,7 @@ func (s *Service) acquirePreparedAccounts(
 			}
 			return fail(err)
 		}
-		detail, readErr := s.accounts.Account(guarded, queued.ID)
+		detail, readErr := s.detectionAccount(guarded, queued.ID)
 		if readErr != nil {
 			return fail(fmt.Errorf("获取模型检测租约后账号 %s 详情读取失败：%w", queued.ID, readErr))
 		}

@@ -13,6 +13,19 @@ const result: AnimationResult = {
   completed_at: "2026-09-13T00:00:00Z",
 };
 
+it("Gemini 自定义动画历史保留接口类型、实际模型和生成内容", () => {
+  const gemini: AnimationResult = {
+    ...result,
+    platform: "gemini",
+    model: "gemini-test",
+    response_model: "gemini-actual",
+    endpoint: "https://example.test",
+  };
+  expect(collectAnimationTasks([task([gemini])], new Set()).results.get("41")).toMatchObject(
+    gemini,
+  );
+});
+
 it("历史动画读取手动结论，重测的新结果不继承旧标记", () => {
   const marked = {
     ...result,
@@ -252,6 +265,7 @@ it.each([
   ["queued", "queued"],
   ["running", "running"],
   ["generating", "generating"],
+  ["reviewing", "reviewing"],
 ] as const)("阶段 %s 的动画结果显示为 %s 活动状态", (phase, status) => {
   const running = task([
     { ...result, phase, status: "failed", completed_at: "2026-09-13T00:00:01Z" },
@@ -336,4 +350,19 @@ it("失败动画历史记录保留被拒绝的原文和截断标记供详情展�
     source: "<svg>未完成的生成内容",
     source_truncated: true,
   });
+});
+it("自动评审完成后历史读取保留理由和评审来源", () => {
+  const quality = {
+    status: "normal" as const,
+    score: null,
+    benchmark: "custom",
+    source: "model_review" as const,
+    explanation: "结构完整",
+    reviewer_account_id: "42",
+    settings_version: 2,
+    model_version: "review-model",
+  };
+  expect(
+    collectAnimationTasks([task([{ ...result, quality }])], new Set()).results.get("41")?.quality,
+  ).toEqual(quality);
 });

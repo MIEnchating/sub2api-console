@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 
+import { pageFixtures } from "./fixtures/page-shell";
 import { pricing } from "./fixtures/settings";
 
 const catalog = {
@@ -21,6 +22,16 @@ test.beforeEach(async ({ page, colorScheme }) => {
     const fixtures: Record<string, unknown> = {
       "/api/setup/status": { initialized: true, configuration_errors: [] },
       "/api/auth/session": { authenticated: true, username: "价格布局测试" },
+      "/api/overview": {
+        database_available: true,
+        account_count: 0,
+        group_count: catalog.groups.length,
+        open_alerts: 0,
+        recent_runs: 0,
+        last_activity: null,
+        mode: "完全模式",
+      },
+      "/api/preferences/navigation": pageFixtures["/api/preferences/navigation"],
       "/api/inspection/automation": {
         enabled: false,
         running: false,

@@ -90,33 +90,5 @@ func runPreparedCheck(ctx context.Context, directClient, oauthClient *http.Clien
 	if credential.err != nil {
 		return nil, credential.err
 	}
-	var sender interface {
-		bundleSender
-		reasoningSender
-	} = directBundleSender{stream: input.Model == astraModel, client: directClient, credential: credential.value}
-	if credential.oauth != nil {
-		if checkerForModel(input.Model, prepared.claudeProfiles, prepared.solProfile) == "claude" {
-			return nil, errors.New("OpenAI OAuth 账号不支持 Claude 模型，请选择 OpenAI 检测模型")
-		}
-		sender = oauthBundleSender{
-			stream: input.Model == astraModel,
-			client: oauthClient, credential: *credential.oauth,
-			models: append(append([]string(nil), prepared.solProfile.Models...), astraModel), slots: make(chan struct{}, 2),
-		}
-	}
-	var result map[string]any
-	var err error
-	switch checkerForModel(input.Model, prepared.claudeProfiles, prepared.solProfile) {
-	case "astra":
-		result, err = runAstraCheck(ctx, sender, input)
-	case "claude":
-		result, err = runClaudeCheck(ctx, sender, prepared.claudeProfiles, input)
-	default:
-		result, err = runSolCheck(ctx, sender, prepared.solProfile, input)
-	}
-	if err == nil && credential.oauth != nil {
-		result["transport"] = "oauth-direct"
-		result["production_path_equivalent"] = false
-	}
-	return result, err
+	return runVerification(ctx, directClient, oauthClient, credential, input)
 }

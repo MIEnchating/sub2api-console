@@ -628,13 +628,29 @@ export function NewAPIModelPrices(props: PriceProps) {
                       ) : null}
                       <TableCell className="w-56 align-top text-right" overflowTooltip={false}>
                         {tab === "unset" ? (
-                          <TableActionButton
-                            label="查询远程价格"
-                            ariaLabel={`查询 ${row.model} 远程模型价格`}
-                            onClick={() => showRemotePrices(row.model)}
+                          <div
+                            role="group"
+                            aria-label={`${row.model} 价格操作`}
+                            className="flex items-center justify-end gap-1"
                           >
-                            <Search aria-hidden="true" />
-                          </TableActionButton>
+                            <TableActionButton
+                              label="查询远程价格"
+                              ariaLabel={`查询 ${row.model} 远程模型价格`}
+                              onClick={() => showRemotePrices(row.model)}
+                            >
+                              <Search aria-hidden="true" />
+                            </TableActionButton>
+                            {props.onWriteModelPrice && availableSources.length > 0 ? (
+                              <TableActionButton
+                                label="套用其他模型价格"
+                                ariaLabel={`套用其他模型价格到 ${row.model}`}
+                                disabled={actionPending}
+                                onClick={() => setApplyPriceRequest({ target: row.configured })}
+                              >
+                                <Copy aria-hidden="true" />
+                              </TableActionButton>
+                            ) : null}
+                          </div>
                         ) : null}
                         {tab === "models" ? (
                           <div className="flex min-w-52 items-center justify-end gap-1">
@@ -717,18 +733,6 @@ export function NewAPIModelPrices(props: PriceProps) {
                               </>
                             ) : null}
                           </div>
-                        ) : null}
-                        {tab === "unset" &&
-                        props.onWriteModelPrice &&
-                        availableSources.length > 0 ? (
-                          <TableActionButton
-                            label="套用其他模型价格"
-                            ariaLabel={`套用其他模型价格到 ${row.model}`}
-                            disabled={actionPending}
-                            onClick={() => setApplyPriceRequest({ target: row.configured })}
-                          >
-                            <Copy aria-hidden="true" />
-                          </TableActionButton>
                         ) : null}
                       </TableCell>
                     </TableRow>

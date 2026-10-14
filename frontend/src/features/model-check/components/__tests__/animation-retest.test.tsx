@@ -72,8 +72,15 @@ it("账号处于提交中时重测按钮禁用", () => {
 });
 
 it("账号平台已不支持动画检测时禁止重测旧结果", () => {
-  setup({ result, platform: "gemini" });
+  setup({ result, platform: "unsupported" });
   expect(screen.getByRole("button", { name: "重测 重测账号" })).toBeDisabled();
+});
+
+it("Gemini 账号可以重测并保留原结果模型", async () => {
+  const user = userEvent.setup();
+  const onRetry = setup({ result: { ...result, model: "gemini-test" }, platform: "gemini" });
+  await user.click(screen.getByRole("button", { name: "重测 重测账号" }));
+  expect(onRetry).toHaveBeenCalledWith({ account_id: "41", model: "gemini-test" });
 });
 
 it("未检测的账号显示空状态且不提供无模型的重测入口", () => {

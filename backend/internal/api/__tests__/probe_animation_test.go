@@ -17,7 +17,8 @@ import (
 
 type animationProbeOnboarding struct {
 	api.OnboardingService
-	mode string
+	mode     string
+	promptID string
 }
 
 func (s *animationProbeOnboarding) EnqueueProbe(_ context.Context, action, host, group, model, mode string) (taskstore.Task, error) {
@@ -62,6 +63,44 @@ func TestAnimationProbeAPIRequiresAuthenticatedTaskAndValidMode(t *testing.T) {
 			}
 			if scenario.status != 200 && service.mode != "" {
 				t.Fatal("invalid request created task")
+			}
+		})
+	}
+}
+
+func (s *animationProbeOnboarding) EnqueueProbeWithPrompt(ctx context.Context, action, host, group, model, mode, promptID string) (taskstore.Task, error) {
+	s.promptID = promptID
+	return s.EnqueueProbe(ctx, action, host, group, model, mode)
+}
+
+func TestAnimationProbeAPIForwardsSelectedPromptAndRejectsWrongMode(t *testing.T) {
+	for _, tc := range []struct {
+		mode, id string
+		status   int
+	}{
+		{"animation", `"whale"`, 200}, {"default", `"whale"`, 422}, {"candy", `"whale"`, 422}, {"animation", `12`, 422}, {"animation", `""`, 422},
+	} {
+		t.Run(tc.mode+tc.id, func(t *testing.T) {
+			service := &animationProbeOnboarding{}
+			private, err := configstore.Open(filepath.Join(t.TempDir(), "private.sqlite3"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = private.Close() })
+			router := api.New(config.Config{AdminToken: "isolated-token"}, private, nil, api.Dependencies{Onboarding: service})
+			request := httptest.NewRequest("POST", "/api/onboarding/probe/tasks/probe", strings.NewReader(`{"host":"upstream.test","group_id":"6","model":"gpt-6-astra","mode":"`+tc.mode+`","animation_prompt_id":`+tc.id+`}`))
+			request.Header.Set("Content-Type", "application/json")
+			request.Header.Set("Authorization", "Bearer isolated-token")
+			response := httptest.NewRecorder()
+			router.ServeHTTP(response, request)
+			if response.Code != tc.status {
+				t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+			}
+			if tc.status == 200 && service.promptID != "whale" {
+				t.Fatal("selection lost")
+			}
+			if tc.status != 200 && service.mode != "" {
+				t.Fatal("invalid selection enqueued")
 			}
 		})
 	}

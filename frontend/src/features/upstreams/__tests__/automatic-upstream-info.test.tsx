@@ -1,5 +1,5 @@
 import type { QueryClient } from "@tanstack/react-query";
-import { screen, waitFor } from "@testing-library/react";
+import { act, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, it, vi } from "vitest";
 
@@ -14,7 +14,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-it("新上游验证成功后自动获取开户所需的上游信息", async () => {
+it.each([false, true])("新上游手动命名=%s时保存正确名称来源并自动获取开户信息", async (manual) => {
   const user = userEvent.setup();
   vi.stubGlobal("PointerEvent", MouseEvent);
   vi.spyOn(api, "detectUpstream").mockResolvedValue({
@@ -29,6 +29,10 @@ it("新上游验证成功后自动获取开户所需的上游信息", async () =
   });
   vi.spyOn(api, "createUpstream").mockResolvedValue(upstream);
   client = renderOnboarding();
+  vi.mocked(api.upstreamOptions).mockResolvedValue([]);
+  await act(async () => {
+    await client!.invalidateQueries({ queryKey: ["upstreams", "options"] });
+  });
 
   await user.click(await screen.findByLabelText("上游地址", { exact: true }));
   await user.paste(upstream.host);
@@ -38,10 +42,21 @@ it("新上游验证成功后自动获取开户所需的上游信息", async () =
   await user.paste("access-token");
   await user.click(screen.getByLabelText("刷新 Token", { exact: true }));
   await user.paste("refresh-token");
+  if (manual) {
+    await user.click(screen.getByLabelText("名称", { exact: true }));
+    await user.paste("自定义站点");
+  }
   await user.click(screen.getByRole("button", { name: "添加并验证上游" }));
 
   await waitFor(() =>
     expect(api.prepareOnboarding).toHaveBeenCalledWith(upstream.host, expect.any(Object)),
   );
   expect(await screen.findByRole("region", { name: "当前上游概况" })).toBeVisible();
+  expect(api.createUpstream).toHaveBeenCalledWith(
+    expect.objectContaining({
+      name_mode: manual ? "manual" : "auto",
+      name: manual ? "自定义站点" : upstream.host,
+    }),
+    expect.anything(),
+  );
 });

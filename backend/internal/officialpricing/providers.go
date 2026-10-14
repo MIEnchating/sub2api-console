@@ -10,10 +10,13 @@ import (
 
 type Provider struct{ ID, Name, URL string }
 
-var Providers = []Provider{{"deepseek", "DeepSeek", DeepSeekURL}, {"kimi", "Kimi", KimiURL}, {"minimax", "MiniMax", MiniMaxURL}, {"glm", "GLM", GLMURL}, {"qwen", "Qwen", QwenURL}, {"grok", "Grok", GrokURL}, {"claude", "Claude", ClaudeURL}, {"openai", "OpenAI", OpenAIURL}}
+var Providers = []Provider{{"deepseek", "DeepSeek", DeepSeekURL}, {"kimi", "Kimi", KimiURL}, {"minimax", "MiniMax", MiniMaxURL}, {"glm", "GLM", GLMURL}, {"qwen", "Qwen", QwenURL}, {"grok", "Grok", GrokURL}, {"claude", "Claude", ClaudeURL}, {"openai", "OpenAI", OpenAIURL}, {"gemini", "Gemini", GeminiURL}}
 
 func ProviderID(model string) string {
 	model = strings.ToLower(model)
+	if strings.HasPrefix(model, "gemini-") {
+		return "gemini"
+	}
 	for _, p := range []struct{ prefix, id string }{{"deepseek-", "deepseek"}, {"kimi-", "kimi"}, {"moonshot-", "kimi"}, {"minimax-", "minimax"}, {"glm-", "glm"}, {"qwen", "qwen"}, {"qwq-", "qwen"}, {"qvq-", "qwen"}, {"grok-", "grok"}, {"claude-", "claude"}, {"gpt-", "openai"}, {"chatgpt-", "openai"}} {
 		if strings.HasPrefix(model, p.prefix) {
 			return p.id
@@ -43,6 +46,8 @@ func Fetch(ctx context.Context, client *http.Client, provider Provider) ([]Price
 		raw, err = fetchRetry(ctx, client, provider.URL+markdownSuffix(provider.ID))
 		if err == nil {
 			switch provider.ID {
+			case "gemini":
+				ps, err = ParseGemini(raw)
 			case "kimi":
 				ps, err = ParseKimi(raw)
 			case "minimax":

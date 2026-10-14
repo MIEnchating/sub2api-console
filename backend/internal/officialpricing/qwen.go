@@ -69,6 +69,32 @@ func ParseQwen(raw []byte) ([]Price, error) {
 	}
 	return finish(prices)
 }
+
+func qwenTextModel(text string) string {
+	name := qwenName.FindString(text)
+	for _, part := range []string{"omni", "audio", "realtime", "tts", "asr", "embedding", "rerank", "image"} {
+		if strings.Contains(name, part) {
+			return ""
+		}
+	}
+	return name
+}
+
+func hasQwenTextRows(rows []*html.Node) bool {
+	for _, row := range rows {
+		for cell := row.FirstChild; cell != nil; cell = cell.NextSibling {
+			if cell.Type != html.ElementNode || (cell.Data != "td" && cell.Data != "th") {
+				continue
+			}
+			if qwenTextModel(nodeText(cell)) != "" {
+				return true
+			}
+			break
+		}
+	}
+	return false
+}
+
 func parseQwenTable(table *html.Node, prices map[string]*Price) error {
 	trs := elements(table, "tr")
 	if len(trs) == 0 {
@@ -76,6 +102,12 @@ func parseQwenTable(table *html.Node, prices map[string]*Price) error {
 	}
 	header := nodeText(trs[0])
 	if !strings.Contains(header, "输入单价（每百万Token）") || !strings.Contains(header, "输出单价（每百万Token）") {
+		return nil
+	}
+	// The page also lists third-party and unsupported modality prices. Their
+	// table layout must not invalidate Qwen text prices (e.g. a stale rowspan
+	// on a MiniMax free-quota cell). Relevant tables still get strict validation.
+	if !hasQwenTextRows(trs) {
 		return nil
 	}
 	grid, e := tableGrid(table)
@@ -118,17 +150,8 @@ func parseQwenTable(table *html.Node, prices map[string]*Price) error {
 		return nil
 	}
 	for _, row := range grid[start:] {
-		name := qwenName.FindString(row[0])
+		name := qwenTextModel(row[0])
 		if name == "" {
-			continue
-		}
-		unsupported := false
-		for _, part := range []string{"omni", "audio", "realtime", "tts", "asr", "embedding", "rerank", "image"} {
-			if strings.Contains(name, part) {
-				unsupported = true
-			}
-		}
-		if unsupported {
 			continue
 		}
 		in, e := qwenRate(row[input])

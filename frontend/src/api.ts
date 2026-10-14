@@ -582,6 +582,9 @@ export type UpstreamGroupChange = {
 };
 
 export type UpstreamConfiguration = {
+  name_mode?: "auto" | "manual";
+  name_sync_task_id?: string;
+  name_sync_error?: string;
   upstream_id: string;
   host: string;
   name: string;
@@ -613,6 +616,7 @@ export type UpstreamConfiguration = {
 };
 
 export type UpstreamConfigurationUpdate = {
+  name_mode?: "auto" | "manual";
   host?: string;
   name?: string;
   base_url: string;
@@ -664,6 +668,14 @@ export type ProbeResult = {
   latency_ms: number;
   http_status: number;
   temporary_key?: boolean;
+};
+
+type AnimationPromptTemplate = { id: string; name: string; prompt: string };
+export type AnimationPromptSettings = {
+  prompt: string;
+  version: number;
+  templates: AnimationPromptTemplate[];
+  default_id: string;
 };
 
 export type OnboardingProbeMode = "stream" | "default" | "animation" | "candy";
@@ -1105,6 +1117,13 @@ export type AccountRecovery = {
 
 export type AccountStatus = {
   probe_placeholder_at?: string | null;
+  probe_placeholder?: {
+    group_name?: string;
+    request_model?: string;
+    result?: string;
+    attempt?: number;
+    preview?: string;
+  } | null;
   ignore_cost_wall?: boolean;
   id: string;
   name: string;
@@ -1603,7 +1622,7 @@ export type AnimationCustomEndpoint = {
   models?: string[];
   base_url: string;
   api_key: string;
-  platform: "openai" | "anthropic";
+  platform: "openai" | "anthropic" | "gemini";
   model: string;
 };
 export type AnimationRequest = {
@@ -1614,7 +1633,59 @@ export type AnimationRequest = {
   timeout_seconds: number;
   custom?: AnimationCustomEndpoint;
 };
+export type AnimationQualitySettings = {
+  enabled: boolean;
+  account_id: string;
+  model: string;
+  timeout_seconds: number;
+  version: number;
+};
+export type AnimationQualityPrediction = {
+  source?: "model_review";
+  explanation?: string;
+  reviewer_account_id?: string;
+  settings_version?: number;
+  reviewed_at?: string;
+  response_model?: string;
+  status: "normal" | "suspicious" | "unknown";
+  score: number | null;
+  reason?: string;
+  benchmark: string;
+  model_version?: string;
+  model_sha256?: string;
+};
+type AnimationQualityAnnotation = {
+  label: AnimationQualityPrediction["status"];
+  reason: string;
+  source_group: string;
+  version: number;
+  updated_at: string;
+  updated_by: string;
+};
+export type AnimationQualityReview = {
+  prediction: AnimationQualityPrediction;
+  annotation?: AnimationQualityAnnotation;
+  sample_id: string;
+  benchmark: string;
+  source_sha256: string;
+  prompt_sha256: string;
+};
+export type AnimationQualitySample = {
+  id: string;
+  task_id: string;
+  account_id: string;
+  request_id: string;
+  benchmark: string;
+  prompt: string;
+  prompt_sha256: string;
+  html: string;
+  source_sha256: string;
+  prediction: AnimationQualityPrediction;
+  annotation: AnimationQualityAnnotation;
+  created_at: string;
+};
 export type AnimationResult = {
+  quality?: AnimationQualityPrediction;
   source_task_id?: string;
   source_task_status?: Task["status"];
   manual_verdict?: AnimationManualVerdict;
@@ -1634,12 +1705,12 @@ export type AnimationResult = {
   account_id: string;
   account_name: string;
   endpoint?: string;
-  platform?: "openai" | "anthropic";
+  platform?: "openai" | "anthropic" | "gemini";
   model: string;
   response_model?: string;
   request_id: string;
   status: "succeeded" | "failed";
-  phase?: "queued" | "running" | "generating" | "completed";
+  phase?: "queued" | "running" | "generating" | "reviewing" | "completed";
   html?: string;
   source?: string;
   source_truncated?: boolean;
@@ -1689,12 +1760,6 @@ export type ModelCheckCapabilities = {
   astra_models?: string[];
 };
 
-export type ModelCheckAstraProfile = {
-  model: string;
-  version: string;
-  questions: Array<{ id: string; question: string; effort: "low" | "medium"; expected: string }>;
-};
-
 export type ModelCheckAccountStatus = {
   confidence?: AccountQualityStatistics;
   account_id: string;
@@ -1722,71 +1787,6 @@ export type ModelCheckRequest = {
   models: string[];
   rounds: number;
   timeout_seconds: number;
-};
-
-type ModelCheckNumericTolerance = {
-  value: number;
-  mode: "absolute" | "relative";
-};
-
-type ModelCheckProbeDefinition = {
-  id: string;
-  kind: "choice" | "numeric";
-  question?: string;
-  stem?: string;
-  options?: string[];
-  clusters?: Array<{ id: string; center: number }>;
-  tolerance?: ModelCheckNumericTolerance;
-  weights: Record<string, number[]>;
-};
-
-type ModelCheckClaudeProfileDefinition = {
-  identity_group: string[];
-  candidate_models: string[];
-  thresholds: number[];
-  score_bands: number[];
-  probes: ModelCheckProbeDefinition[];
-};
-
-type ModelCheckSolThresholds = {
-  sol_accept_min: number;
-  non_sol_accept_max: number;
-  subtype_accept_min: number;
-  min_coverage: number;
-  min_evidence_coverage: number;
-};
-
-export type ModelCheckProfilePayload = {
-  claude_profiles: Record<string, ModelCheckClaudeProfileDefinition>;
-  sol_profile: {
-    candidate_models: string[];
-    quick: ModelCheckProbeDefinition[];
-    reserve: ModelCheckProbeDefinition[];
-    thresholds: Record<"quick" | "full", ModelCheckSolThresholds>;
-  };
-};
-
-export type ModelCheckConfigurationVersion = {
-  id: string;
-  status: "draft" | "published" | "archived";
-  note: string;
-  fingerprint: string;
-  created_at: string;
-  created_by: string;
-  published_at: string | null;
-  payload: ModelCheckProfilePayload;
-};
-
-type ModelCheckConfigurationVersionSummary = Omit<ModelCheckConfigurationVersion, "payload"> & {
-  claude_profiles: number;
-  probe_count: number;
-};
-
-export type ModelCheckConfiguration = {
-  builtin_astra_profile?: ModelCheckAstraProfile;
-  active: ModelCheckConfigurationVersion;
-  draft: ModelCheckConfigurationVersion | null;
-  history: ModelCheckConfigurationVersionSummary[];
 };
 
 export type TrafficRankingSort = "traffic" | "stability" | "success_rate" | "latency";
@@ -3143,6 +3143,38 @@ export const api = {
     }),
   animationHistory: (signal?: AbortSignal) =>
     request<Task[]>("/api/model-checks/animations", { signal }),
+  animationQualitySettings: (signal?: AbortSignal) =>
+    request<AnimationQualitySettings>("/api/model-checks/animation-quality/settings", { signal }),
+  saveAnimationQualitySettings: (payload: AnimationQualitySettings) =>
+    request<AnimationQualitySettings>("/api/model-checks/animation-quality/settings", {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    }),
+  animationQuality: (taskId: string, accountId: string, requestId: string, signal?: AbortSignal) =>
+    request<AnimationQualityReview>(
+      `/api/model-checks/animations/${encodeURIComponent(taskId)}/quality?${new URLSearchParams({ account_id: accountId, request_id: requestId })}`,
+      { signal },
+    ),
+  saveAnimationQuality: (
+    taskId: string,
+    payload: {
+      account_id: string;
+      request_id: string;
+      label: AnimationQualityPrediction["status"];
+      reason: string;
+      source_group: string;
+      version: number;
+    },
+  ) =>
+    request<AnimationQualityReview>(
+      `/api/model-checks/animations/${encodeURIComponent(taskId)}/quality`,
+      { method: "PUT", body: JSON.stringify(payload) },
+    ),
+  animationQualitySamples: (after: string, signal?: AbortSignal) =>
+    request<{ items: AnimationQualitySample[]; next_cursor?: string }>(
+      `/api/model-checks/animation-quality/samples?${new URLSearchParams({ after, limit: "50" })}`,
+      { signal },
+    ),
   setAnimationManualVerdict: (
     taskId: string,
     payload: { account_id: string; request_id: string; verdict: AnimationManualVerdict["verdict"] },
@@ -3185,9 +3217,9 @@ export const api = {
       body: JSON.stringify({ version }),
     }),
   animationPrompt: (signal?: AbortSignal) =>
-    request<{ prompt: string; version: number }>("/api/model-checks/animation-prompt", { signal }),
-  saveAnimationPrompt: (payload: { prompt: string; version: number }) =>
-    request<{ prompt: string; version: number }>("/api/model-checks/animation-prompt", {
+    request<AnimationPromptSettings>("/api/model-checks/animation-prompt", { signal }),
+  saveAnimationPrompt: (payload: Omit<AnimationPromptSettings, "prompt">) =>
+    request<AnimationPromptSettings>("/api/model-checks/animation-prompt", {
       method: "PUT",
       body: JSON.stringify(payload),
     }),
@@ -3210,36 +3242,6 @@ export const api = {
     request<ModelCheckCapabilities>("/api/model-checks/capabilities", { signal }),
   modelCheckAccountStatuses: (signal?: AbortSignal) =>
     request<ModelCheckAccountStatus[]>("/api/model-checks/account-statuses", { signal }),
-  modelCheckConfiguration: (signal?: AbortSignal) =>
-    request<ModelCheckConfiguration>("/api/model-checks/configuration", { signal }),
-  saveModelCheckDraft: (payload: {
-    expected_fingerprint: string;
-    note: string;
-    payload: ModelCheckProfilePayload;
-  }) =>
-    request<ModelCheckConfiguration>("/api/model-checks/configuration/draft", {
-      method: "PUT",
-      body: JSON.stringify(payload),
-    }),
-  publishModelCheckDraft: (expectedFingerprint: string) =>
-    request<ModelCheckConfiguration>("/api/model-checks/configuration/publish", {
-      method: "POST",
-      body: JSON.stringify({ expected_fingerprint: expectedFingerprint }),
-    }),
-  discardModelCheckDraft: (expectedFingerprint: string) =>
-    request<ModelCheckConfiguration>("/api/model-checks/configuration/discard", {
-      method: "POST",
-      body: JSON.stringify({ expected_fingerprint: expectedFingerprint }),
-    }),
-  restoreModelCheckVersion: (versionId: string, expectedFingerprint: string, note: string) =>
-    request<ModelCheckConfiguration>("/api/model-checks/configuration/restore", {
-      method: "POST",
-      body: JSON.stringify({
-        version_id: versionId,
-        expected_fingerprint: expectedFingerprint,
-        note,
-      }),
-    }),
   runModelCheck: (payload: ModelCheckRequest) =>
     request<Task>("/api/model-checks", {
       method: "POST",
@@ -3398,10 +3400,17 @@ export const api = {
     groupId: string,
     model?: string,
     mode?: OnboardingProbeMode,
+    animationPromptId?: string,
   ) =>
     request<Task>(`/api/onboarding/probe/tasks/${action}`, {
       method: "POST",
-      body: JSON.stringify({ host, group_id: groupId, model, mode }),
+      body: JSON.stringify({
+        host,
+        group_id: groupId,
+        model,
+        mode,
+        animation_prompt_id: animationPromptId,
+      }),
     }),
   runOnboardingProbe: (
     host: string,

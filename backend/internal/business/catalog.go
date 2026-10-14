@@ -30,6 +30,7 @@ type UpstreamHost struct {
 	BaseURL                string                        `json:"base_url"`
 	AccountBaseURL         string                        `json:"account_base_url"`
 	Name                   string                        `json:"name"`
+	NameMode               string                        `json:"name_mode"`
 	UpstreamType           string                        `json:"upstream_type"`
 	AccountCount           int64                         `json:"account_count"`
 	GroupCount             int64                         `json:"group_count"`
@@ -274,6 +275,7 @@ func (s *Store) readUpstreams(ctx context.Context, configurationHost *string, in
 			item.AccountBaseURL = item.BaseURL
 		}
 		item.Name = upstreamDisplayName(metadata, item.BaseURL, derivedNames[item.Host])
+		item.NameMode = upstreamMetadataNameMode(metadata)
 		item.Hosts = append([]string{}, identityHosts[item.UpstreamID]...)
 		item.RawBalance = nullString(rawBalance)
 		if item.RawBalance == nil && legacyBalance.Valid {
@@ -1120,7 +1122,7 @@ func classifyGroupAccount(group *GroupStatus, account accountProjection, now tim
 		group.survivorAccounts++
 		return
 	}
-	metadata, err := decodeObject(account.metadataRaw)
+	metadata, err := projectionMetadata(account)
 	if err == nil {
 		switch AccountUpstreamBlock(metadata, account.Schedulable, now) {
 		case AccountBlockRateLimited:
@@ -1163,7 +1165,7 @@ func availableGroupAccounts(accounts []accountProjection, groupName string, minS
 		case "fused", "cost_blocked", AccountStateConcurrencyLimited, "paused", "disabled", "excluded":
 			continue
 		}
-		metadata, err := decodeObject(account.metadataRaw)
+		metadata, err := projectionMetadata(account)
 		if err != nil || AccountUpstreamBlock(metadata, account.Schedulable, now) != "" {
 			continue
 		}
@@ -1194,7 +1196,7 @@ func groupAccountMetadataManaged(account accountProjection, control map[string]a
 	if !typesValid || !platformsValid {
 		return true
 	}
-	metadata, err := decodeObject(account.metadataRaw)
+	metadata, err := projectionMetadata(account)
 	if err != nil {
 		return false
 	}

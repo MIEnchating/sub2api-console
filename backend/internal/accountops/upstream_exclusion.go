@@ -27,7 +27,7 @@ func (s *Service) StopExcludedAccount(ctx context.Context, id, actor string) (ma
 		}
 		return nil, errors.New("账号所属上游尚未排除，已停止操作")
 	}
-	mode, local, err := s.localAccount(ctx, id)
+	mode, local, err := s.controlAccount(ctx, id)
 	if err != nil {
 		return nil, err
 	}

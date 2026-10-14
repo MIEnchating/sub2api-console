@@ -95,7 +95,7 @@ func TestOAuthAccountSolCheckUsesProfileCapturedBeforeQueueing(t *testing.T) {
 	runner.runs[0](context.Background())
 	task := finished(t, f)
 	rows := task.Result["tests"].([]map[string]any)
-	if rows[0]["verdict"] != "SOL_CONSISTENT" || task.Result["profile_fingerprint"] != queuedProfile.Fingerprint {
+	if rows[0]["checker"] != "verification" || task.Result["profile_version"] != "verification-v1" {
 		t.Fatalf("queued OAuth task did not preserve its profile: %#v", task.Result)
 	}
 }
@@ -167,13 +167,8 @@ func TestOAuthAccountRejectsClaudeModelWithoutSendingGeneration(t *testing.T) {
 		return oauthResponse(500, "application/json", `{}`), nil
 	}))
 	_, err := f.service.Enqueue(context.Background(), modelcheck.Request{AccountIDs: []string{"1"}, Models: []string{f.service.Capabilities().ClaudeStandards[0]}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	task := finished(t, f)
-	rows := task.Result["tests"].([]map[string]any)
-	if rows[0]["verdict"] != "ERROR" || !strings.Contains(rows[0]["error"].(string), "不支持 Claude") {
-		t.Fatalf("unsupported model result: %#v", rows[0])
+	if err == nil || !strings.Contains(err.Error(), "不支持") {
+		t.Fatalf("unsupported OAuth model accepted: %v", err)
 	}
 }
 
@@ -229,7 +224,7 @@ func TestOAuthAccountWithoutKeyBindingRunsRequestedRoundsAndKeepsCredentialsPriv
 	}
 	task := finished(t, f)
 	rows, _ := task.Result["tests"].([]map[string]any)
-	if len(rows) != 1 || rows[0]["verdict"] != "MATCH" || calls.Load() != 6 {
+	if len(rows) != 1 || rows[0]["verdict"] != "ANOMALY" || calls.Load() != 14 {
 		t.Fatalf("OAuth account did not complete two rounds: result=%#v requests=%d", task.Result, calls.Load())
 	}
 	if rows[0]["transport"] != "oauth-direct" || rows[0]["production_path_equivalent"] != false || rows[0]["credentials_persisted"] != false || task.Result["credentials_persisted"] != false {

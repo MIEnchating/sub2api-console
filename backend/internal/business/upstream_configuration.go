@@ -14,6 +14,7 @@ import (
 type UpstreamConfigurationWrite struct {
 	Host           string
 	Name           *string
+	NameMode       *string
 	BaseURL        string
 	AccountBaseURL string
 	UpstreamType   string
@@ -122,7 +123,7 @@ func (s *Store) CreateUpstreamConfiguration(ctx context.Context, value UpstreamC
 	ctx = guarded
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	metadata, err := json.Marshal(map[string]any{
-		"site_name": name, "account_base_url": accountBaseURL, "auth_verified_at": now, "balance_status": "未读取", "catalog_status": "未同步",
+		"site_name": name, "name_mode": upstreamNameMode(value), "account_base_url": accountBaseURL, "auth_verified_at": now, "balance_status": "未读取", "catalog_status": "未同步",
 	})
 	if err != nil {
 		return UpstreamConfigurationWriteResult{}, err
@@ -187,11 +188,21 @@ func (s *Store) UpdateUpstreamConfiguration(ctx context.Context, value UpstreamC
 	if err != nil {
 		return UpstreamConfigurationWriteResult{}, errors.New("上游 metadata 记录损坏")
 	}
-	if value.Name != nil {
-		metadata["site_name"] = name
-	} else {
-		name = upstreamDisplayName(metadata, baseURL, "")
+	if value.NameMode != nil || value.Name != nil {
+		mode := upstreamNameMode(value)
+		metadata["name_mode"] = mode
+		if mode == "manual" && value.Name != nil {
+			metadata["site_name"] = name
+		}
+		if mode == "auto" {
+			if observed := strings.TrimSpace(stringValue(metadata["observed_site_name"])); observed != "" {
+				metadata["site_name"] = observed
+			} else if value.Name != nil {
+				metadata["site_name"] = name
+			}
+		}
 	}
+	name = upstreamDisplayName(metadata, baseURL, "")
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	metadata["auth_verified_at"] = now
 	metadata["account_base_url"] = accountBaseURL
@@ -326,6 +337,9 @@ func normalizeUpstreamConfiguration(value UpstreamConfigurationWrite) (string, s
 		return "", "", "", "", "", "", errors.New("上游配置必须包含 Host")
 	}
 	name := ""
+	if value.NameMode != nil && *value.NameMode != "auto" && *value.NameMode != "manual" {
+		return "", "", "", "", "", "", errors.New("名称来源必须是 auto 或 manual")
+	}
 	if value.Name != nil {
 		name = strings.TrimSpace(*value.Name)
 		if name == "" || len([]rune(name)) > 100 {

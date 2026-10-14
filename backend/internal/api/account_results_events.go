@@ -2,9 +2,7 @@ package api
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
-	"errors"
 	"net/http"
 	"slices"
 	"strings"
@@ -60,20 +58,14 @@ func (s *Server) accountResultsEvents(c *gin.Context) {
 		writeError(c, http.StatusServiceUnavailable, "实时请求采集尚未就绪")
 		return
 	}
-	for _, id := range ids {
-		account, err := s.business.Account(c.Request.Context(), id)
-		if errors.Is(err, sql.ErrNoRows) {
-			writeError(c, http.StatusNotFound, "账号不存在，请刷新列表")
-			return
-		}
-		if err != nil {
-			writeError(c, http.StatusInternalServerError, "账号读取失败")
-			return
-		}
-		if account == nil {
-			writeError(c, http.StatusNotFound, "账号不存在，请刷新列表")
-			return
-		}
+	exist, err := s.business.AccountIDsExist(c.Request.Context(), ids)
+	if err != nil {
+		writeError(c, http.StatusInternalServerError, "账号读取失败")
+		return
+	}
+	if !exist {
+		writeError(c, http.StatusNotFound, "账号不存在，请刷新列表")
+		return
 	}
 	if !s.acquireSSESlot() {
 		writeError(c, http.StatusTooManyRequests, "实时连接数量已达上限，请稍后重试")

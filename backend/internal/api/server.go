@@ -59,7 +59,7 @@ import (
 
 const (
 	sessionCookie        = "sub2api_console_session"
-	sessionTTL           = 12 * time.Hour
+	sessionTTL           = 30 * 24 * time.Hour
 	maximumRequestBytes  = 2 << 20
 	responseWriteTimeout = 60 * time.Second
 )
@@ -78,6 +78,8 @@ type Business interface {
 	ProbeEnabled(context.Context) (bool, error)
 	Accounts(context.Context) ([]business.AccountStatus, error)
 	Account(context.Context, string) (*business.AccountDetail, error)
+	AccountMutationSnapshot(context.Context, string) (*business.AccountMutationSnapshot, error)
+	AccountIDsExist(context.Context, []string) (bool, error)
 	TrafficRanking(context.Context, business.TrafficRankingQuery) (business.TrafficRanking, error)
 	Groups(context.Context) ([]business.GroupStatus, error)
 	GroupAllocation(context.Context, string) (business.GroupAllocation, error)
@@ -264,14 +266,6 @@ type ModelCheckService interface {
 	Capabilities() modelcheck.Capabilities
 	AccountStatuses(context.Context) ([]modelcheck.AccountCheckStatus, error)
 	Enqueue(context.Context, modelcheck.Request) (taskstore.Task, error)
-}
-
-type ModelCheckConfigurationService interface {
-	Configuration() modelcheck.ConfigurationView
-	SaveDraft(context.Context, modelcheck.SaveDraftRequest, string) (modelcheck.ConfigurationView, error)
-	PublishDraft(context.Context, modelcheck.PublishRequest, string) (modelcheck.ConfigurationView, error)
-	DiscardDraft(context.Context, modelcheck.PublishRequest, string) (modelcheck.ConfigurationView, error)
-	RestoreVersion(context.Context, modelcheck.RestoreRequest, string) (modelcheck.ConfigurationView, error)
 }
 
 type PricingService interface {
@@ -870,17 +864,17 @@ func New(cfg config.Config, private *configstore.Store, business Business, depen
 	authorized.PUT("/account-workbench/templates/preference", server.accountWorkbenchChangeTemplate)
 	authorized.DELETE("/account-workbench/templates", server.accountWorkbenchChangeTemplate)
 	authorized.GET("/model-checks/account-statuses", server.modelCheckAccountStatuses)
-	authorized.GET("/model-checks/configuration", server.modelCheckConfiguration)
-	authorized.PUT("/model-checks/configuration/draft", server.saveModelCheckDraft)
-	authorized.POST("/model-checks/configuration/publish", server.publishModelCheckDraft)
-	authorized.POST("/model-checks/configuration/discard", server.discardModelCheckDraft)
-	authorized.POST("/model-checks/configuration/restore", server.restoreModelCheckVersion)
 	authorized.POST("/model-checks", server.runModelCheck)
 	authorized.GET("/model-checks/animations", server.animationCheckHistory)
 	authorized.GET("/model-checks/animation-prompt", server.animationPromptSettings)
 	authorized.PUT("/model-checks/animation-prompt", server.saveAnimationPrompt)
 	authorized.POST("/model-checks/animations", server.runAnimationCheck)
 	authorized.PUT("/model-checks/animations/:task_id/manual-verdict", server.setAnimationManualVerdict)
+	authorized.GET("/model-checks/animations/:task_id/quality", server.getAnimationQuality)
+	authorized.PUT("/model-checks/animations/:task_id/quality", server.saveAnimationQuality)
+	authorized.GET("/model-checks/animation-quality/samples", server.listAnimationQualitySamples)
+	authorized.GET("/model-checks/animation-quality/settings", server.animationQualitySettings)
+	authorized.PUT("/model-checks/animation-quality/settings", server.saveAnimationQualitySettings)
 	authorized.GET("/model-checks/terminal-continuity", server.terminalContinuityHistory)
 	authorized.GET("/model-checks/detection-tasks", server.detectionTaskEndpoint)
 	authorized.PUT("/model-checks/detection-tasks", server.detectionTaskEndpoint)
@@ -2263,7 +2257,7 @@ func (s *Server) accountMutationPreflight(c *gin.Context, accountID string, requ
 		writeError(c, http.StatusConflict, "运行模式无效："+mode)
 		return "", false
 	}
-	if _, err := s.business.Account(c.Request.Context(), accountID); errors.Is(err, sql.ErrNoRows) {
+	if _, err := s.business.AccountMutationSnapshot(c.Request.Context(), accountID); errors.Is(err, sql.ErrNoRows) {
 		writeError(c, http.StatusNotFound, "账号不存在")
 		return "", false
 	} else if err != nil {
@@ -2639,7 +2633,7 @@ func (s *Server) onboardingProbeModels(c *gin.Context) {
 		writeError(c, http.StatusServiceUnavailable, "接入前探活服务尚未就绪")
 		return
 	}
-	host, groupID, _, _, ok := onboardingProbePayload(c, false)
+	host, groupID, _, _, _, ok := onboardingProbePayload(c, false)
 	if !ok {
 		return
 	}
@@ -2712,7 +2706,7 @@ func (s *Server) onboardingProbe(c *gin.Context) {
 		writeError(c, http.StatusServiceUnavailable, "接入前探活服务尚未就绪")
 		return
 	}
-	host, groupID, model, mode, ok := onboardingProbePayload(c, true)
+	host, groupID, model, mode, _, ok := onboardingProbePayload(c, true)
 	if !ok {
 		return
 	}
@@ -2739,7 +2733,7 @@ func (s *Server) cancelOnboardingProbe(c *gin.Context) {
 		writeError(c, http.StatusServiceUnavailable, "接入前探活服务尚未就绪")
 		return
 	}
-	host, groupID, _, _, ok := onboardingProbePayload(c, false)
+	host, groupID, _, _, _, ok := onboardingProbePayload(c, false)
 	if !ok {
 		return
 	}
@@ -2750,7 +2744,7 @@ func (s *Server) cancelOnboardingProbe(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"cancelled": true})
 }
 
-func onboardingProbePayload(c *gin.Context, requireModel bool) (string, string, string, string, bool) {
+func onboardingProbePayload(c *gin.Context, requireModel bool) (string, string, string, string, string, bool) {
 	payload, err := decodeRequestObject(c)
 	if err != nil {
 		fields := "host、group_id"
@@ -2758,29 +2752,29 @@ func onboardingProbePayload(c *gin.Context, requireModel bool) (string, string, 
 			fields += "、model 和 mode"
 		}
 		writeError(c, http.StatusUnprocessableEntity, "接入前探活参数必须只包含 "+fields)
-		return "", "", "", "", false
+		return "", "", "", "", "", false
 	}
 	allowed := 2
 	if requireModel {
 		allowed = 4
 	}
-	if len(payload) != allowed && !(requireModel && len(payload) == 3) {
+	if len(payload) != allowed && !(requireModel && (len(payload) == 3 || len(payload) == 5)) {
 		fields := "host、group_id"
 		if requireModel {
 			fields += "、model 和 mode"
 		}
 		writeError(c, http.StatusUnprocessableEntity, "接入前探活参数必须只包含 "+fields)
-		return "", "", "", "", false
+		return "", "", "", "", "", false
 	}
 	host, err := requiredText(payload, "host", 1, 255)
 	if err != nil {
 		writeError(c, http.StatusUnprocessableEntity, err.Error())
-		return "", "", "", "", false
+		return "", "", "", "", "", false
 	}
 	groupID, err := requiredText(payload, "group_id", 1, 255)
 	if err != nil {
 		writeError(c, http.StatusUnprocessableEntity, err.Error())
-		return "", "", "", "", false
+		return "", "", "", "", "", false
 	}
 	model := ""
 	mode := "default"
@@ -2788,24 +2782,36 @@ func onboardingProbePayload(c *gin.Context, requireModel bool) (string, string, 
 		model, err = requiredText(payload, "model", 1, 255)
 		if err != nil {
 			writeError(c, http.StatusUnprocessableEntity, err.Error())
-			return "", "", "", "", false
+			return "", "", "", "", "", false
 		}
 		if raw, present := payload["mode"]; present {
 			value, ok := raw.(string)
 			mode = strings.ToLower(strings.TrimSpace(value))
 			if !ok || (mode != "stream" && mode != "default" && mode != "animation" && mode != "candy") {
 				writeError(c, http.StatusUnprocessableEntity, "探活模式必须是 stream、default、animation 或 candy")
-				return "", "", "", "", false
+				return "", "", "", "", "", false
 			}
 		}
 	}
 	for key := range payload {
-		if key != "host" && key != "group_id" && (!requireModel || (key != "model" && key != "mode")) {
+		if key != "host" && key != "group_id" && (!requireModel || (key != "model" && key != "mode" && key != "animation_prompt_id")) {
 			writeError(c, http.StatusUnprocessableEntity, "接入前探活参数包含未知字段："+key)
-			return "", "", "", "", false
+			return "", "", "", "", "", false
 		}
 	}
-	return host, groupID, model, mode, true
+	promptID := ""
+	if _, present := payload["animation_prompt_id"]; present {
+		if mode != "animation" || c.FullPath() != "/api/onboarding/probe/tasks/:action" {
+			writeError(c, http.StatusUnprocessableEntity, "仅动画探活任务支持选择动画提示词")
+			return "", "", "", "", "", false
+		}
+		promptID, err = requiredText(payload, "animation_prompt_id", 1, 64)
+		if err != nil {
+			writeError(c, http.StatusUnprocessableEntity, err.Error())
+			return "", "", "", "", "", false
+		}
+	}
+	return host, groupID, model, mode, promptID, true
 }
 
 func (s *Server) createOnboarding(c *gin.Context) {
@@ -3926,7 +3932,7 @@ func writeUpstreamMutation(c *gin.Context, result upstreamconfig.Configuration, 
 
 func parseUpstreamInput(payload map[string]any, creating bool) (upstreamconfig.Input, error) {
 	allowed := map[string]struct{}{
-		"host": {}, "name": {}, "base_url": {}, "account_base_url": {}, "upstream_type": {}, "auth_mode": {}, "recharge_rate": {},
+		"host": {}, "name": {}, "name_mode": {}, "base_url": {}, "account_base_url": {}, "upstream_type": {}, "auth_mode": {}, "recharge_rate": {},
 		"access_token": {}, "refresh_token": {}, "admin_key": {}, "user_id": {}, "headers": {}, "cookies": {},
 		"username": {}, "password": {}, "save_to_vault": {}, "entry": {},
 	}
@@ -3962,6 +3968,13 @@ func parseUpstreamInput(payload map[string]any, creating bool) (upstreamconfig.I
 	result := upstreamconfig.Input{
 		BaseURL: baseURL, AccountBaseURL: accountBaseURL, UpstreamType: platform, AuthMode: authMode, RechargeRate: recharge,
 		Headers: map[string]string{}, Cookies: map[string]string{}, Present: map[string]bool{},
+	}
+	if raw, present := payload["name_mode"]; present {
+		mode, ok := raw.(string)
+		if !ok || (mode != "auto" && mode != "manual") {
+			return upstreamconfig.Input{}, errors.New("名称来源必须是 auto 或 manual")
+		}
+		result.NameMode = &mode
 	}
 	if !creating {
 		if _, present := payload["host"]; present {
@@ -4735,109 +4748,6 @@ func (s *Server) modelCheckAccountStatuses(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, statuses)
-}
-
-func (s *Server) modelCheckConfiguration(c *gin.Context) {
-	service, ok := s.modelChecks.(ModelCheckConfigurationService)
-	if !ok {
-		writeError(c, http.StatusServiceUnavailable, "模型检测画像管理服务尚未就绪")
-		return
-	}
-	c.JSON(http.StatusOK, service.Configuration())
-}
-
-func (s *Server) saveModelCheckDraft(c *gin.Context) {
-	service, ok := s.modelChecks.(ModelCheckConfigurationService)
-	if !ok {
-		writeError(c, http.StatusServiceUnavailable, "模型检测画像管理服务尚未就绪")
-		return
-	}
-	var payload modelcheck.SaveDraftRequest
-	if err := bindRequestJSON(c, &payload); err != nil {
-		writeError(c, http.StatusUnprocessableEntity, "模型检测画像草稿参数无效")
-		return
-	}
-	actor, err := s.requestActor(c)
-	if err != nil {
-		writeError(c, http.StatusInternalServerError, "控制台会话读取失败")
-		return
-	}
-	result, err := service.SaveDraft(c.Request.Context(), payload, actor)
-	writeModelCheckConfigurationResult(c, result, err)
-}
-
-func (s *Server) publishModelCheckDraft(c *gin.Context) {
-	service, ok := s.modelChecks.(ModelCheckConfigurationService)
-	if !ok {
-		writeError(c, http.StatusServiceUnavailable, "模型检测画像管理服务尚未就绪")
-		return
-	}
-	var payload modelcheck.PublishRequest
-	if err := bindRequestJSON(c, &payload); err != nil {
-		writeError(c, http.StatusUnprocessableEntity, "模型检测画像发布参数无效")
-		return
-	}
-	actor, err := s.requestActor(c)
-	if err != nil {
-		writeError(c, http.StatusInternalServerError, "控制台会话读取失败")
-		return
-	}
-	result, err := service.PublishDraft(c.Request.Context(), payload, actor)
-	writeModelCheckConfigurationResult(c, result, err)
-}
-
-func (s *Server) discardModelCheckDraft(c *gin.Context) {
-	service, ok := s.modelChecks.(ModelCheckConfigurationService)
-	if !ok {
-		writeError(c, http.StatusServiceUnavailable, "模型检测画像管理服务尚未就绪")
-		return
-	}
-	var payload modelcheck.PublishRequest
-	if err := bindRequestJSON(c, &payload); err != nil {
-		writeError(c, http.StatusUnprocessableEntity, "模型检测画像草稿删除参数无效")
-		return
-	}
-	actor, err := s.requestActor(c)
-	if err != nil {
-		writeError(c, http.StatusInternalServerError, "控制台会话读取失败")
-		return
-	}
-	result, err := service.DiscardDraft(c.Request.Context(), payload, actor)
-	writeModelCheckConfigurationResult(c, result, err)
-}
-
-func (s *Server) restoreModelCheckVersion(c *gin.Context) {
-	service, ok := s.modelChecks.(ModelCheckConfigurationService)
-	if !ok {
-		writeError(c, http.StatusServiceUnavailable, "模型检测画像管理服务尚未就绪")
-		return
-	}
-	var payload modelcheck.RestoreRequest
-	if err := bindRequestJSON(c, &payload); err != nil {
-		writeError(c, http.StatusUnprocessableEntity, "模型检测画像恢复参数无效")
-		return
-	}
-	actor, err := s.requestActor(c)
-	if err != nil {
-		writeError(c, http.StatusInternalServerError, "控制台会话读取失败")
-		return
-	}
-	result, err := service.RestoreVersion(c.Request.Context(), payload, actor)
-	writeModelCheckConfigurationResult(c, result, err)
-}
-
-func writeModelCheckConfigurationResult(c *gin.Context, result modelcheck.ConfigurationView, err error) {
-	if err != nil {
-		status := http.StatusUnprocessableEntity
-		if strings.Contains(err.Error(), "已变化") {
-			status = http.StatusConflict
-		} else if strings.Contains(err.Error(), "保存失败") {
-			status = http.StatusInternalServerError
-		}
-		writeError(c, status, err.Error())
-		return
-	}
-	c.JSON(http.StatusOK, result)
 }
 
 func (s *Server) runModelCheck(c *gin.Context) {

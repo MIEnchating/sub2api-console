@@ -60,6 +60,7 @@ type UpstreamSyncWrite struct {
 }
 
 type UpstreamSyncWriteResult struct {
+	NameChanged          bool    `json:"name_changed"`
 	Host                 string  `json:"host"`
 	GroupCount           int     `json:"group_count"`
 	KeyCount             int     `json:"key_count"`
@@ -190,8 +191,9 @@ func (s *Store) ApplyUpstreamSync(ctx context.Context, value UpstreamSyncWrite) 
 	if unit := strings.TrimSpace(stringValue(metadata["balance_unit"])); unit != "" {
 		result.BalanceUnit = &unit
 	}
+	previousName := strings.TrimSpace(stringValue(metadata["site_name"]))
 	if value.NameOnly {
-		setOptionalMetadata(metadata, "site_name", value.Balance.SiteName)
+		applyObservedUpstreamName(metadata, value.Balance.SiteName)
 		metadata["name_status"], metadata["name_error"], metadata["name_checked_at"] = "已读取", nil, now
 		balance = nil
 	}
@@ -235,7 +237,7 @@ func (s *Store) ApplyUpstreamSync(ctx context.Context, value UpstreamSyncWrite) 
 		metadata["balance_status"] = balance.Status
 		metadata["balance_error"] = nil
 		metadata["balance_checked_at"] = now
-		setOptionalMetadata(metadata, "site_name", balance.SiteName)
+		applyObservedUpstreamName(metadata, balance.SiteName)
 		setOptionalMetadata(metadata, "quota_per_unit", balance.QuotaPerUnit)
 		setOptionalMetadata(metadata, "display_balance", balance.DisplayBalance)
 		setOptionalMetadata(metadata, "balance_unit", balance.BalanceUnit)
@@ -266,6 +268,7 @@ func (s *Store) ApplyUpstreamSync(ctx context.Context, value UpstreamSyncWrite) 
 			metadata["last_auth_recovery_method"] = "refresh_token"
 		}
 	}
+	result.NameChanged = previousName != strings.TrimSpace(stringValue(metadata["site_name"]))
 	encoded, err := json.Marshal(metadata)
 	if err != nil {
 		return UpstreamSyncWriteResult{}, err

@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -16,14 +17,21 @@ import (
 	"unicode/utf8"
 )
 
+type animationModelID struct {
+	ID string `json:"id"`
+}
+
 type animationModelsPage struct {
-	Data []struct {
-		ID string `json:"id"`
-	} `json:"data"`
-	HasMore bool            `json:"has_more"`
-	LastID  string          `json:"last_id"`
-	Error   json.RawMessage `json:"error"`
-	Success *bool           `json:"success"`
+	Data   []animationModelID `json:"data"`
+	Models []struct {
+		Name                       string   `json:"name"`
+		SupportedGenerationMethods []string `json:"supportedGenerationMethods"`
+	} `json:"models"`
+	NextPageToken string          `json:"nextPageToken"`
+	HasMore       bool            `json:"has_more"`
+	LastID        string          `json:"last_id"`
+	Error         json.RawMessage `json:"error"`
+	Success       *bool           `json:"success"`
 }
 
 func (s *Service) CustomAnimationModels(ctx context.Context, input AnimationCustomEndpoint) ([]string, error) {
@@ -33,7 +41,11 @@ func (s *Service) CustomAnimationModels(ctx context.Context, input AnimationCust
 	}
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
-	endpoint, err := directEndpoint(custom.BaseURL, "/v1/models")
+	path := "/v1/models"
+	if custom.Platform == "gemini" {
+		path = "/v1beta/models"
+	}
+	endpoint, err := directEndpoint(custom.BaseURL, path)
 	if err != nil {
 		return nil, errors.New("Base URL 无效，请检查地址后重试")
 	}
@@ -44,7 +56,14 @@ func (s *Service) CustomAnimationModels(ctx context.Context, input AnimationCust
 	cursor := ""
 	for pageIndex := 0; pageIndex < 20; pageIndex++ {
 		pageURL, _ := url.Parse(endpoint)
-		if custom.Platform == "anthropic" || cursor != "" {
+		if custom.Platform == "gemini" {
+			query := pageURL.Query()
+			query.Set("pageSize", "100")
+			if cursor != "" {
+				query.Set("pageToken", cursor)
+			}
+			pageURL.RawQuery = query.Encode()
+		} else if custom.Platform == "anthropic" || cursor != "" {
 			query := pageURL.Query()
 			query.Set("limit", "100")
 			if cursor != "" {
@@ -75,7 +94,7 @@ func (s *Service) CustomAnimationModels(ctx context.Context, input AnimationCust
 			return models, nil
 		}
 		cursor = strings.TrimSpace(page.LastID)
-		if cursor == "" || len(cursor) > 1024 || cursors[cursor] || len(page.Data) == 0 {
+		if cursor == "" || len(cursor) > 1024 || cursors[cursor] || (len(page.Data) == 0 && len(page.Models) == 0) {
 			return nil, errors.New("上游模型列表分页信息无效，请检查接口后重试")
 		}
 		cursors[cursor] = true
@@ -102,6 +121,8 @@ func readAnimationModelsPage(ctx context.Context, client *http.Client, custom An
 		if custom.Platform == "anthropic" {
 			request.Header.Set("x-api-key", custom.APIKey)
 			request.Header.Set("anthropic-version", "2023-06-01")
+		} else if custom.Platform == "gemini" {
+			request.Header.Set("x-goog-api-key", custom.APIKey)
 		} else {
 			request.Header.Set("Authorization", "Bearer "+custom.APIKey)
 		}
@@ -135,6 +156,23 @@ func readAnimationModelsPage(ctx context.Context, client *http.Client, custom An
 		}
 		if len(page.Error) > 0 && !bytes.Equal(bytes.TrimSpace(page.Error), []byte("null")) || page.Success != nil && !*page.Success {
 			return page, errors.New("上游拒绝读取模型列表，请检查 Key、权限或余额后重试")
+		}
+		if custom.Platform == "gemini" {
+			if page.Models == nil {
+				return page, errors.New("Gemini 响应缺少模型列表，请检查接口后重试")
+			}
+			page.Data = []animationModelID{}
+			for _, model := range page.Models {
+				if !slices.Contains(model.SupportedGenerationMethods, "generateContent") && !slices.Contains(model.SupportedGenerationMethods, "streamGenerateContent") {
+					continue
+				}
+				id, err := geminiModelID(model.Name)
+				if err != nil {
+					return page, err
+				}
+				page.Data = append(page.Data, animationModelID{ID: id})
+			}
+			page.HasMore, page.LastID = page.NextPageToken != "", page.NextPageToken
 		}
 		if page.Data == nil {
 			return page, errors.New("上游响应缺少模型列表，请检查接口后重试")

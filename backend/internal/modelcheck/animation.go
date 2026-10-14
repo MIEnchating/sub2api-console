@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/MIEnchating/sub2api-console/backend/internal/animationquality"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -20,7 +21,7 @@ import (
 )
 
 const animationSkill = "sub2api-model-animation"
-const animationPrompt = `请生成可直接运行的单文件HTML，使用内联SVG绘制鹈鹕骑自行车的二维循环动画。画面以鹈鹕和自行车为主体，展示清晰的身体结构、踩踏动作和车轮转动，配合协调的背景、配色与层次。动画应流畅自然、衔接连续，并适配不同屏幕尺寸。可使用内联JavaScript脚本实现动画，但不得发送网络请求、加载外部脚本或引用外部资源，只输出完整HTML，不要代码围栏或解释文字。`
+const animationPrompt = animationquality.PelicanPrompt
 const maximumAnimationPromptLength = 10000
 
 type AnimationTarget struct {
@@ -41,30 +42,31 @@ type AnimationRequest struct {
 }
 
 type AnimationResult struct {
-	ManualVerdict        *AnimationManualVerdict `json:"manual_verdict,omitempty"`
-	Mode                 string                  `json:"mode,omitempty"`
-	Precheck             *PrecheckResult         `json:"precheck,omitempty"`
-	AccountID            string                  `json:"account_id"`
-	AccountName          string                  `json:"account_name"`
-	Endpoint             string                  `json:"endpoint,omitempty"`
-	Platform             string                  `json:"platform,omitempty"`
-	Model                string                  `json:"model"`
-	ResponseModel        string                  `json:"response_model,omitempty"`
-	RequestID            string                  `json:"request_id"`
-	Status               string                  `json:"status"`
-	Phase                string                  `json:"phase,omitempty"`
-	HTML                 string                  `json:"html,omitempty"`
-	Source               string                  `json:"source,omitempty"`
-	SourceTruncated      bool                    `json:"source_truncated,omitempty"`
-	Prompt               string                  `json:"prompt,omitempty"`
-	ReasoningEffort      string                  `json:"reasoning_effort,omitempty"`
-	Usage                *AnimationUsage         `json:"usage,omitempty"`
-	GenerationDurationMS int64                   `json:"generation_duration_ms,omitempty"`
-	SVG                  string                  `json:"svg,omitempty"`
-	Error                string                  `json:"error,omitempty"`
-	RetryCount           int                     `json:"retry_count,omitempty"`
-	DurationMS           int64                   `json:"duration_ms"`
-	CompletedAt          string                  `json:"completed_at"`
+	Quality              *animationquality.Prediction `json:"quality,omitempty"`
+	ManualVerdict        *AnimationManualVerdict      `json:"manual_verdict,omitempty"`
+	Mode                 string                       `json:"mode,omitempty"`
+	Precheck             *PrecheckResult              `json:"precheck,omitempty"`
+	AccountID            string                       `json:"account_id"`
+	AccountName          string                       `json:"account_name"`
+	Endpoint             string                       `json:"endpoint,omitempty"`
+	Platform             string                       `json:"platform,omitempty"`
+	Model                string                       `json:"model"`
+	ResponseModel        string                       `json:"response_model,omitempty"`
+	RequestID            string                       `json:"request_id"`
+	Status               string                       `json:"status"`
+	Phase                string                       `json:"phase,omitempty"`
+	HTML                 string                       `json:"html,omitempty"`
+	Source               string                       `json:"source,omitempty"`
+	SourceTruncated      bool                         `json:"source_truncated,omitempty"`
+	Prompt               string                       `json:"prompt,omitempty"`
+	ReasoningEffort      string                       `json:"reasoning_effort,omitempty"`
+	Usage                *AnimationUsage              `json:"usage,omitempty"`
+	GenerationDurationMS int64                        `json:"generation_duration_ms,omitempty"`
+	SVG                  string                       `json:"svg,omitempty"`
+	Error                string                       `json:"error,omitempty"`
+	RetryCount           int                          `json:"retry_count,omitempty"`
+	DurationMS           int64                        `json:"duration_ms"`
+	CompletedAt          string                       `json:"completed_at"`
 }
 
 // cloneAnimationResult publishes an immutable task snapshot while a worker may
@@ -149,8 +151,8 @@ func (s *Service) prepareAnimation(ctx context.Context, request AnimationRequest
 		if account.CredentialError != "" {
 			return request, nil, fmt.Errorf("账号 %s：%s", account.ID, account.CredentialError)
 		}
-		if account.Platform != "openai" && account.Platform != "anthropic" && account.Platform != "" {
-			return request, nil, fmt.Errorf("账号 %s 暂不支持动画检测，请使用 OpenAI 或 Anthropic 接口账号", account.ID)
+		if account.Platform != "openai" && account.Platform != "anthropic" && account.Platform != "gemini" && account.Platform != "" {
+			return request, nil, fmt.Errorf("账号 %s 暂不支持动画检测，请使用 OpenAI、Anthropic 或 Gemini 接口账号", account.ID)
 		}
 	}
 	return request, accounts, nil
@@ -429,6 +431,9 @@ func (s *Service) runAnimationTarget(ctx context.Context, account selectedAccoun
 		return time.Since(started), err
 	}
 	defer release()
+	if credential.Platform == "gemini" {
+		result.ReasoningEffort = ""
+	}
 	if result.Mode == precheckMode {
 		client := &http.Client{Timeout: time.Duration(timeout) * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 		err := runPrecheckTarget(guarded, client, credential, timeout, questions, result)

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -70,7 +71,7 @@ func TestAnimationPromptPersistsAndRejectsStaleInvalidOrFailedWrites(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := restarted.AnimationPromptSettings(); got != saved || got.Prompt != "蓝色鲸鱼" {
+	if got := restarted.AnimationPromptSettings(); !reflect.DeepEqual(got, saved) || got.Prompt != "蓝色鲸鱼" {
 		t.Fatalf("not restored: %+v", got)
 	}
 	for _, value := range []modelcheck.AnimationPromptSettings{
@@ -87,7 +88,7 @@ func TestAnimationPromptPersistsAndRejectsStaleInvalidOrFailedWrites(t *testing.
 	if _, err := f.service.SaveAnimationPrompt(context.Background(), modelcheck.AnimationPromptSettings{Prompt: "failed", Version: saved.Version}, "test"); err == nil {
 		t.Fatal("write failure ignored")
 	}
-	if got := f.service.AnimationPromptSettings(); got != saved {
+	if got := f.service.AnimationPromptSettings(); !reflect.DeepEqual(got, saved) {
 		t.Fatalf("failed update changed state: %+v", got)
 	}
 }

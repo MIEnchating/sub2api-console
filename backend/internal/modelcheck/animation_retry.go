@@ -141,6 +141,17 @@ func (s *Service) runAnimationWithRetry(ctx context.Context, account selectedAcc
 		result.GenerationDurationMS = attemptDuration.Milliseconds()
 		result.Usage.complete()
 		if err == nil {
+			reviewStarted := time.Now()
+			quality := s.autoAnimationQuality(ctx, *result, func() {
+				result.Phase = "reviewing"
+				for _, notify := range onPhase {
+					if notify != nil {
+						notify()
+					}
+				}
+			})
+			elapsed += time.Since(reviewStarted)
+			result.Quality = &quality
 			result.DurationMS = elapsed.Milliseconds()
 			return nil
 		}

@@ -17,6 +17,21 @@ import (
 func TestProbeCandyPreservesModelClassifiesAnswerAndCleansKey(t *testing.T) {
 	for _, scenario := range []struct{ name, answer, status string }{
 		{"correct", "21", "passed"},
+		{"bold answer passes", "**21**", "passed"},
+		{"underscore bold answer passes", "__21__", "passed"},
+		{"italic answer passes", "*21*", "passed"},
+		{"underscore italic answer passes", "_21_", "passed"},
+		{"bold italic answer passes", "***21***", "passed"},
+		{"underscore bold italic answer passes", "___21___", "passed"},
+		{"inline code answer passes", "`21`", "passed"},
+		{"surrounding whitespace passes", " \n**21**\n", "passed"},
+		{"formatted wrong answer fails", "**22**", "failed"},
+		{"formatted explanation fails", "**答案是21**", "failed"},
+		{"multiple answers fail", "**21** 或 **22**", "failed"},
+		{"unbalanced formatting fails", "**21*", "failed"},
+		{"internal markers fail", "**2**1", "failed"},
+		{"strikethrough answer fails", "~~21~~", "failed"},
+		{"empty answer fails", "", "failed"},
 		{"wrong", "22", "failed"},
 		{"credential echo", testKey, "failed"},
 		{"partial stream", "21", "failed"},
@@ -78,7 +93,7 @@ func TestProbeCandyPreservesModelClassifiesAnswerAndCleansKey(t *testing.T) {
 			if !ok || result.Status != scenario.status || result.RequestModel != "selected-model" {
 				t.Fatalf("unexpected result: %+v", tasks.final)
 			}
-			if scenario.name == "correct" && (result.ResponseText != "21" || result.ActualModel != "actual-model") {
+			if scenario.status == "passed" && (result.ResponseText != strings.TrimSpace(scenario.answer) || result.ActualModel != "actual-model") {
 				t.Fatalf("missing answer/model: %+v", result)
 			}
 			if len(keys.created) != 1 || len(keys.deleted) != 1 {

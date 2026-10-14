@@ -82,6 +82,9 @@ func (s *Service) mergeOfficialPricing(ctx context.Context, store pricingCacheSt
 			item.CreateCacheRatio = priceRatio(item.InputPrice, item.CacheWritePrice)
 			item.CreateCache1hRatio = priceRatio(item.InputPrice, item.CacheWrite1hPrice)
 			item.ImageRatio = priceRatio(item.InputPrice, item.ImageInputPrice)
+			if p.SyncError != "" {
+				item.ModelRatio, item.CompletionRatio = "", ""
+			}
 			byModel[item.Model] = item
 			// Case variants of the exact published ID are allowed; no dated aliases or
 			// reseller prefixes are inferred from family names.

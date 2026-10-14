@@ -45,6 +45,11 @@ func accountConfidence(tasks []taskstore.Task, now time.Time) map[string]account
 }
 
 func modelCheckOutcome(row map[string]any) string {
+	if row["checker"] == "verification" {
+		// No-anomaly reports are not verified identities and must not inflate
+		// historical identity confidence or change scheduling evidence.
+		return "inconclusive"
+	}
 	if !modelCheckRequestFailed(row) {
 		switch row["verdict"] {
 		case "MATCH", "GROUP_MATCH", "SOL_CONSISTENT":

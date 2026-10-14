@@ -41,7 +41,7 @@ func newConfigurationService(t *testing.T, accounts *profileAccounts) *Service {
 	return service
 }
 
-func TestConfigurationDraftPublishAndReloadPreserveVersionHistory(t *testing.T) {
+func TestRetiredConfigurationDoesNotReloadIntoDetection(t *testing.T) {
 	accounts := &profileAccounts{}
 	service := newConfigurationService(t, accounts)
 	builtin := service.Configuration()
@@ -82,7 +82,7 @@ func TestConfigurationDraftPublishAndReloadPreserveVersionHistory(t *testing.T) 
 	}
 
 	reloaded := newConfigurationService(t, accounts)
-	if view := reloaded.Configuration(); view.Active.ID != published.Active.ID || len(view.History) != 1 {
+	if view := reloaded.Configuration(); view.Active.ID != "builtin" || len(view.History) != 0 {
 		t.Fatalf("reloaded=%#v", view)
 	}
 }

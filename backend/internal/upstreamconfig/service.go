@@ -83,6 +83,7 @@ type authHostRenamer interface {
 type Input struct {
 	Host                 string
 	Name                 *string
+	NameMode             *string
 	BaseURL              string
 	AccountBaseURL       string
 	UpstreamType         string
@@ -106,6 +107,7 @@ type Configuration struct {
 	UpstreamID           string                   `json:"upstream_id"`
 	Host                 string                   `json:"host"`
 	Name                 string                   `json:"name"`
+	NameMode             string                   `json:"name_mode"`
 	BaseURL              string                   `json:"base_url"`
 	AccountBaseURL       string                   `json:"account_base_url"`
 	UpstreamType         string                   `json:"upstream_type"`
@@ -131,6 +133,8 @@ type Configuration struct {
 	RateSyncError        *string                  `json:"rate_sync_error,omitempty"`
 	BaseURLSyncTaskID    *string                  `json:"base_url_sync_task_id,omitempty"`
 	BaseURLSyncError     *string                  `json:"base_url_sync_error,omitempty"`
+	NameSyncTaskID       *string                  `json:"name_sync_task_id,omitempty"`
+	NameSyncError        *string                  `json:"name_sync_error,omitempty"`
 }
 
 func New(businessStore Business, privateStore PrivateStore, verifier Verifier, schedulers ...AccountRateSyncScheduler) *Service {
@@ -162,7 +166,7 @@ func (s *Service) Get(ctx context.Context, host string) (Configuration, error) {
 		return Configuration{}, err
 	}
 	result := Configuration{
-		UpstreamID: public.UpstreamID, Host: host, Name: public.Name, BaseURL: public.BaseURL, AccountBaseURL: public.AccountBaseURL, UpstreamType: public.UpstreamType,
+		UpstreamID: public.UpstreamID, Host: host, Name: public.Name, NameMode: public.NameMode, BaseURL: public.BaseURL, AccountBaseURL: public.AccountBaseURL, UpstreamType: public.UpstreamType,
 		AuthMode: "custom_headers", RechargeRate: public.RechargeRate, RawBalance: public.RawBalance,
 		Balance: public.Balance, Headers: map[string]string{}, HeaderNames: []string{}, CookieNames: []string{}, Groups: groups,
 		ConcurrencyLimit: public.ConcurrencyLimit, ConcurrencyStatus: public.ConcurrencyStatus,
@@ -394,6 +398,21 @@ func (s *Service) Update(ctx context.Context, host string, input Input, actor st
 	result.RateSyncError = rateSyncError
 	result.BaseURLSyncTaskID = baseURLSyncTaskID
 	result.BaseURLSyncError = baseURLSyncError
+	if previous.Name != result.Name {
+		if scheduler, ok := s.scheduler.(interface {
+			EnqueueHostAccountNameSync(context.Context, string, string) (string, error)
+		}); ok {
+			scheduleCtx, cancel := detachedOperationContext(ctx)
+			taskID, scheduleErr := scheduler.EnqueueHostAccountNameSync(scheduleCtx, syncHost, actorOrConsole(actor))
+			cancel()
+			if scheduleErr != nil {
+				message := scheduleErr.Error()
+				result.NameSyncError = &message
+			} else if taskID != "" {
+				result.NameSyncTaskID = &taskID
+			}
+		}
+	}
 	return result, nil
 }
 
@@ -652,7 +671,7 @@ func (s *Service) commitPrivateAndPublic(
 		return business.UpstreamConfigurationWriteResult{}, errors.Join(err, rollbackFailure("密码箱", s.restoreVault(rollbackCtx, change)))
 	}
 	write := business.UpstreamConfigurationWrite{
-		Host: record.Host, Name: input.Name, BaseURL: record.BaseURL, AccountBaseURL: input.AccountBaseURL, UpstreamType: record.UpstreamType,
+		Host: record.Host, Name: input.Name, NameMode: input.NameMode, BaseURL: record.BaseURL, AccountBaseURL: input.AccountBaseURL, UpstreamType: record.UpstreamType,
 		AuthMode: record.AuthMode, RechargeRate: input.RechargeRate,
 	}
 	var result business.UpstreamConfigurationWriteResult

@@ -248,6 +248,9 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	if err := modelChecks.LoadAnimationQualityModel(os.Getenv("SUB2API_CONSOLE_ANIMATION_QUALITY_MODEL")); err != nil {
+		return fmt.Errorf("动画质量模型加载失败: %w", err)
+	}
 	upstreamDetector := upstreamdetect.New(&http.Client{Timeout: 8 * time.Second})
 	authClient := upstreamauth.New(&http.Client{Timeout: 20 * time.Second})
 	upstreamConfigurations := upstreamconfig.New(

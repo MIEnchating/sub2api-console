@@ -17,6 +17,9 @@ func TestAstraOAuthClassifiesOnlyConsistentLowAndMediumAnswers(t *testing.T) {
 		name, candy, low, mid, verdict, source string
 	}{
 		{"subscription", "21", "2", "4", "MATCH", "subscription"},
+		{"bold candy answer matches", "**21**", "2", "4", "MATCH", "subscription"},
+		{"bold wrong candy answer mismatches", "**22**", "2", "4", "MISMATCH", "subscription"},
+		{"juice answers remain strict", "21", "**2**", "4", "MATCH", "inconclusive"},
 		{"official key", "21", "4", "10", "MATCH", "official_key"},
 		{"conflicting levels", "21", "2", "10", "MATCH", "inconclusive"},
 		{"number with explanation", "21", "Juice: 2", "4", "MATCH", "inconclusive"},
@@ -83,7 +86,10 @@ func TestAstraAccountChecksPreserveReasoningOnChatFallbackAndAcrossRounds(t *tes
 	for _, fallback := range []bool{false, true} {
 		t.Run(fmt.Sprintf("chat fallback %t", fallback), func(t *testing.T) {
 			var efforts []string
-			responses := []string{"21", "2", "4", "21", "4", "10"}
+			responses := make([]string, 14)
+			for i := range responses {
+				responses[i] = "21"
+			}
 			f := setup(t, 1, "openai", func(w http.ResponseWriter, r *http.Request) {
 				var body struct {
 					Stream    bool `json:"stream"`
@@ -100,10 +106,7 @@ func TestAstraAccountChecksPreserveReasoningOnChatFallbackAndAcrossRounds(t *tes
 				if !body.Stream {
 					t.Error("Astra candy requests must use streaming in both Responses and Chat fallback")
 				}
-				expected := "low"
-				if len(efforts)%3 == 2 {
-					expected = "medium"
-				}
+				expected := "medium"
 				if r.URL.Path == "/v1/responses" {
 					if body.Reasoning.Effort != expected {
 						t.Errorf("Responses effort = %q, want %q", body.Reasoning.Effort, expected)
@@ -141,15 +144,15 @@ func TestAstraAccountChecksPreserveReasoningOnChatFallbackAndAcrossRounds(t *tes
 			}
 			task := finished(t, f)
 			rows := task.Result["tests"].([]map[string]any)
-			if len(rows) != 1 || rows[0]["verdict"] != "MATCH" || rows[0]["access_source"] != "inconclusive" || len(efforts) != 6 {
+			if len(rows) != 1 || rows[0]["verdict"] != "ANOMALY" || rows[0]["checker"] != "verification" || len(efforts) != 14 {
 				t.Fatalf("task = %#v, efforts = %v", task, efforts)
 			}
 		})
 	}
 }
 
-func TestAstraRejectsAnthropicTransportWithoutSendingUncontrolledReasoning(t *testing.T) {
-	f := setup(t, 1, "anthropic", func(http.ResponseWriter, *http.Request) { t.Error("unsupported transport reached upstream") })
+func TestVerificationAnthropicRejectsUnsupportedParametersWithoutRetry(t *testing.T) {
+	f := setup(t, 1, "anthropic", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusBadRequest) })
 	_, err := f.service.Enqueue(context.Background(), modelcheck.Request{AccountIDs: []string{"1"}, Models: []string{"gpt-6-astra"}, Rounds: 1, TimeoutSeconds: 5})
 	if err != nil {
 		t.Fatal(err)

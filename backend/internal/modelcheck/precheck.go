@@ -128,7 +128,7 @@ func runPrecheckQuestions(ctx context.Context, questions []string, result *Anima
 			row.Answer, row.AnswerTruncated = precheckAnswer(text)
 			verdict, _ := classifyAstraAnswer(question.ID, text)
 			if question.ID == "candy" && verdict != "MATCH" {
-				// 糖果题只有严格回答 21 才通过；任何成功返回的其他内容都表示降智。
+				// 糖果题允许数字外的 Markdown 样式，解析后只有答案 21 才通过。
 				verdict = "MISMATCH"
 			}
 			switch verdict {

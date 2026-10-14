@@ -11,11 +11,12 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import type { CustomAnimationForm } from "../lib/animation-schema";
+import { animationPlatforms, animationPlatformLabels } from "../constants";
 
-const platforms = [
-  { value: "openai", label: "OpenAI" },
-  { value: "anthropic", label: "Anthropic" },
-] as const;
+const platforms = animationPlatforms.map((value) => ({
+  value,
+  label: animationPlatformLabels[value],
+}));
 
 const fields = [
   { name: "base_url", label: "Base URL", type: "url", placeholder: "https://api.example.com/v1" },

@@ -12,21 +12,25 @@ import (
 	"strings"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/MIEnchating/sub2api-console/backend/internal/adminclient"
 	"github.com/MIEnchating/sub2api-console/backend/internal/upstreamerror"
 )
 
 type attemptOutcome struct {
-	ignoredPlaceholder bool
-	firstTokenAt       time.Time
-	receivedContent    bool
-	failureCode        string
-	status             *int
-	content            bool
-	reason             string
-	model              string
-	unavailable        bool
+	ignoredPlaceholder   bool
+	placeholderText      string
+	placeholderPreview   string
+	placeholderTruncated bool
+	firstTokenAt         time.Time
+	receivedContent      bool
+	failureCode          string
+	status               *int
+	content              bool
+	reason               string
+	model                string
+	unavailable          bool
 }
 
 func probeAttempt(ctx context.Context, account *adminclient.AccountProbe, target Target, config Config, protocol string) attemptOutcome {
@@ -60,6 +64,14 @@ func probeAttempt(ctx context.Context, account *adminclient.AccountProbe, target
 	}
 	result.reason = limitedText(account.Redact(result.reason))
 	result.model = limitedText(account.Redact(result.model))
+	if result.ignoredPlaceholder {
+		preview := account.Redact(result.placeholderText)
+		if result.placeholderTruncated {
+			preview += "…"
+		}
+		result.placeholderPreview = strconv.QuoteToGraphic(preview)
+		result.placeholderText = ""
+	}
 	return result
 }
 
@@ -130,6 +142,8 @@ func readProbeResponse(body io.Reader, contentType, protocol string) attemptOutc
 		event := probeEventOutcome(payload)
 		if !result.receivedContent && event.ignoredPlaceholder {
 			result.ignoredPlaceholder = true
+			appendPlaceholderText(&result, event.placeholderText)
+			result.placeholderTruncated = result.placeholderTruncated || event.placeholderTruncated
 		}
 		if event.model != "" {
 			result.model = event.model
@@ -220,11 +234,38 @@ func probeEventOutcome(value any) attemptOutcome {
 		reason = probeTerminationError(value)
 	}
 	content := eventHasContent(value)
-	result := attemptOutcome{ignoredPlaceholder: eventHasText(value, placeholderText), model: eventModel(value), reason: reason, receivedContent: content, content: reason == "" && content}
+	placeholder := eventPlaceholderText(value)
+	result := attemptOutcome{ignoredPlaceholder: placeholder != "", model: eventModel(value), reason: reason, receivedContent: content, content: reason == "" && content}
+	appendPlaceholderText(&result, placeholder)
 	if reason != "" {
 		result.status = eventErrorStatus(value)
 	}
 	return result
+}
+
+func eventPlaceholderText(value any) string {
+	var text string
+	eventHasText(value, func(candidate any) bool {
+		if !placeholderText(candidate) {
+			return false
+		}
+		text, _ = candidate.(string)
+		return true
+	})
+	return text
+}
+
+func appendPlaceholderText(result *attemptOutcome, text string) {
+	const limit = 80
+	remaining := limit - utf8.RuneCountInString(result.placeholderText)
+	for _, character := range text {
+		if remaining == 0 {
+			result.placeholderTruncated = true
+			return
+		}
+		result.placeholderText += string(character)
+		remaining--
+	}
 }
 
 func eventErrorStatus(value any) *int {

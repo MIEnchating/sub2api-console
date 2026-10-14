@@ -36,7 +36,7 @@ function setup(
       id: String(index + 1),
       name: `分页账号 ${index + 1}`,
       groups: [],
-      platform: unavailable && index === 0 ? "gemini" : "openai",
+      platform: unavailable && index === 0 ? "unsupported" : "openai",
     })),
   );
   client.setQueryData(["model-animation", "schedules"], []);

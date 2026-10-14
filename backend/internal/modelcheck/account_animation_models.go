@@ -18,7 +18,7 @@ func (s *Service) AccountAnimationModels(ctx context.Context, accountID string) 
 	}
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	detail, err := s.accounts.Account(ctx, accountID)
+	detail, err := s.detectionAccount(ctx, accountID)
 	if err != nil {
 		return nil, errors.New("账号详情读取失败，请刷新账号后重试")
 	}

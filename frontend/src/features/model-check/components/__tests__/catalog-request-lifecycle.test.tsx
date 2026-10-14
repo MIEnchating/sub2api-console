@@ -6,11 +6,6 @@ import { RegularCheckPanel } from "../regular-check-panel";
 
 const queries = [
   { path: "/api/accounts", key: ["accounts"], value: [] },
-  {
-    path: "/api/model-checks/capabilities",
-    key: ["model-check-capabilities"],
-    value: { claude_standards: [], sol_models: [] },
-  },
   { path: "/api/model-checks/account-statuses", key: ["model-check-account-statuses"], value: [] },
 ];
 const clients: QueryClient[] = [];
@@ -51,9 +46,9 @@ function setup(shared: boolean) {
   return { ...view, client, pending, fetcher, closePanel: () => view.rerender(tree(false)) };
 }
 
-it("离开模型检测时取消账号、检测能力和状态读取，迟到结果不写回缓存", async () => {
+it("离开模型检测时取消账号和状态读取，迟到结果不写回缓存", async () => {
   const view = setup(false);
-  await waitFor(() => expect(view.pending.size).toBe(3));
+  await waitFor(() => expect(view.pending.size).toBe(2));
   try {
     view.unmount();
     for (const query of queries) expect(view.pending.get(query.path)?.signal?.aborted).toBe(true);
@@ -69,10 +64,9 @@ it("离开模型检测时取消账号、检测能力和状态读取，迟到结�
 
 it("模型检测离开后共享账号观察者保留目录和状态读取，最后卸载才取消", async () => {
   const view = setup(true);
-  await waitFor(() => expect(view.pending.size).toBe(3));
+  await waitFor(() => expect(view.pending.size).toBe(2));
   try {
     view.closePanel();
-    expect(view.pending.get("/api/model-checks/capabilities")?.signal?.aborted).toBe(true);
     expect(view.pending.get("/api/accounts")?.signal?.aborted).toBe(false);
     expect(view.pending.get("/api/model-checks/account-statuses")?.signal?.aborted).toBe(false);
     view.unmount();
@@ -83,5 +77,5 @@ it("模型检测离开后共享账号观察者保留目录和状态读取，最�
         view.pending.get(query.path)!.release(Response.json(query.value));
     });
   }
-  expect(view.fetcher).toHaveBeenCalledTimes(3);
+  expect(view.fetcher).toHaveBeenCalledTimes(2);
 });

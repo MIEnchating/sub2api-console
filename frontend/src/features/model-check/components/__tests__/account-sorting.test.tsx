@@ -86,7 +86,7 @@ it.each([
     within(screen.getByRole("article", { name: "账号 手动账号" })).getByRole("checkbox"),
   );
   await user.click(screen.getByRole("combobox", { name: "账号排序" }));
-  await user.click(screen.getByRole("option", { name: scenario.label }));
+  await user.click(await screen.findByRole("option", { name: scenario.label }));
   expect(screen.getAllByRole("article").map((card) => card.getAttribute("aria-label"))).toEqual(
     scenario.names.map((name) => `账号 ${name}`),
   );
@@ -120,7 +120,7 @@ it("在第二页调整排序后回到首页，分页前排序且账号刷新后�
   const sort = screen.getByRole("combobox", { name: "账号排序" });
   sort.focus();
   await user.keyboard("{Enter}");
-  await user.click(screen.getByRole("option", { name: "权重：从大到小" }));
+  await user.click(await screen.findByRole("option", { name: "权重：从大到小" }));
   expect(screen.getAllByRole("article")).toHaveLength(12);
   expect(screen.getAllByRole("article")[0]).toHaveAccessibleName("账号 账号13");
   expect(screen.getByRole("button", { name: "转到上一页" })).toBeDisabled();
@@ -140,7 +140,7 @@ it("筛选无结果或接口返回空列表时仍可选择排序且不启用检�
   setup([]);
   const user = userEvent.setup();
   await user.click(screen.getByRole("combobox", { name: "账号排序" }));
-  await user.click(screen.getByRole("option", { name: "优先级：从小到大" }));
+  await user.click(await screen.findByRole("option", { name: "优先级：从小到大" }));
   expect(screen.getByText("没有匹配的账号")).toBeVisible();
   expect(screen.getByRole("button", { name: /开始检测/ })).toBeDisabled();
 });

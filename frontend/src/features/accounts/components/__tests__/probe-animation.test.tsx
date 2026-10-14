@@ -27,6 +27,15 @@ function completed(id: string, result: Task["result"]): Task {
 }
 
 function setup(modelOptions = ["model-a"]) {
+  vi.spyOn(api, "animationPrompt").mockResolvedValue({
+    version: 1,
+    prompt: "默认动画",
+    default_id: "bird",
+    templates: [
+      { id: "bird", name: "鹈鹕", prompt: "默认动画" },
+      { id: "whale", name: "鲸鱼", prompt: "鲸鱼动画" },
+    ],
+  });
   const models = completed("models", { models: modelOptions, steps: [] });
   const start = vi.spyOn(api, "startOnboardingProbeTask").mockResolvedValue(models);
   vi.spyOn(api, "task").mockResolvedValue(models);
@@ -127,6 +136,7 @@ it("动画运行期间禁用参数和重复提交，取消后等待临时 Key �
   await waitFor(() => expect(screen.getByRole("button", { name: "测试中" })).toBeDisabled());
   expect(screen.getByRole("combobox", { name: "选择测试模式" })).toBeDisabled();
   expect(screen.getByRole("combobox", { name: "选择测试模型" })).toBeDisabled();
+  expect(screen.getByRole("combobox", { name: "选择动画提示词" })).toBeDisabled();
   expect(screen.getByRole("status", { name: "正在生成动画，请稍候" })).toBeVisible();
   expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
   const cleaned = completed("cleanup", { steps: [] });
@@ -236,4 +246,92 @@ it("动画生成失败时展示实际原因，保留重试入口且不显示预�
   expect(await screen.findByText("动画包含外部资源，请重试")).toBeVisible();
   expect(screen.getByRole("button", { name: "重试" })).toBeEnabled();
   expect(screen.queryByRole("region", { name: "动画测试预览" })).not.toBeInTheDocument();
+});
+
+it("手动选择动画提示词后请求携带稳定 ID，切换模式与重试保留选择", async () => {
+  const view = setup();
+  await selectAnimation();
+  const selector = await screen.findByRole("combobox", { name: "选择动画提示词" });
+  expect(selector).toHaveTextContent("使用默认（鹈鹕）");
+  selector.focus();
+  await userEvent.keyboard("{ArrowDown}");
+  await userEvent.click(await screen.findByRole("option", { name: "鲸鱼" }));
+  await userEvent.click(screen.getByRole("combobox", { name: "选择测试模式" }));
+  await userEvent.click(await screen.findByRole("option", { name: "常规请求" }));
+  await selectAnimation();
+  expect(screen.getByRole("combobox", { name: "选择动画提示词" })).toHaveTextContent("鲸鱼");
+  const task = completed("animation", {
+    steps: [],
+    probe_result: {
+      status: "failed",
+      message: "测试失败，请重试",
+      request_model: "model-a",
+      actual_model: "",
+      latency_ms: 0,
+      http_status: 500,
+    },
+  });
+  view.start.mockResolvedValue(task);
+  vi.mocked(api.task).mockResolvedValue(task);
+  await userEvent.click(screen.getByRole("button", { name: "开始测试" }));
+  await waitFor(() =>
+    expect(view.start).toHaveBeenLastCalledWith(
+      "probe",
+      "upstream.test",
+      "6",
+      "model-a",
+      "animation",
+      "whale",
+    ),
+  );
+  const retry = await screen.findByRole("button", { name: "重试" });
+  const retried = { ...task, id: "animation-retry" };
+  view.start.mockResolvedValue(retried);
+  vi.mocked(api.task).mockResolvedValue(retried);
+  await userEvent.click(retry);
+  await waitFor(() => expect(screen.getByRole("button", { name: "重试" })).toBeEnabled());
+  expect(view.start).toHaveBeenLastCalledWith(
+    "probe",
+    "upstream.test",
+    "6",
+    "model-a",
+    "animation",
+    "whale",
+  );
+});
+
+it("动画提示词首次读取失败时禁用测试，重新读取成功后可使用默认", async () => {
+  setup();
+  const settings = vi.mocked(api.animationPrompt);
+  settings.mockRejectedValueOnce(new Error("读取失败"));
+  await selectAnimation();
+  const retry = await screen.findByRole("button", { name: "重新读取" });
+  expect(screen.getByRole("button", { name: "开始测试" })).toBeDisabled();
+  await userEvent.click(retry);
+  expect(await screen.findByRole("combobox", { name: "选择动画提示词" })).toHaveTextContent(
+    "使用默认（鹈鹕）",
+  );
+  expect(screen.getByRole("button", { name: "开始测试" })).toBeEnabled();
+});
+
+it("刷新后所选提示词被删除时阻止启动，允许改回默认", async () => {
+  setup();
+  await selectAnimation();
+  await userEvent.click(await screen.findByRole("combobox", { name: "选择动画提示词" }));
+  await userEvent.click(await screen.findByRole("option", { name: "鲸鱼" }));
+  vi.mocked(api.animationPrompt).mockResolvedValue({
+    version: 2,
+    prompt: "默认动画",
+    default_id: "bird",
+    templates: [{ id: "bird", name: "鹈鹕", prompt: "默认动画" }],
+  });
+  await userEvent.click(screen.getByRole("combobox", { name: "选择测试模式" }));
+  await userEvent.click(await screen.findByRole("option", { name: "常规请求" }));
+  await selectAnimation();
+  await waitFor(() => expect(screen.getByRole("button", { name: "开始测试" })).toBeDisabled());
+  const selector = screen.getByRole("combobox", { name: "选择动画提示词" });
+  expect(selector).toHaveAttribute("aria-invalid", "true");
+  await userEvent.click(selector);
+  await userEvent.click(await screen.findByRole("option", { name: "使用默认（鹈鹕）" }));
+  expect(screen.getByRole("button", { name: "开始测试" })).toBeEnabled();
 });

@@ -64,7 +64,7 @@ func (s *Service) EnqueuePoolModeSync(ctx context.Context, accountIDs []string, 
 		if _, duplicate := seen[accountID]; duplicate {
 			return taskstore.Task{}, fmt.Errorf("账号 ID 不能重复：%s", accountID)
 		}
-		if _, _, err := s.localAccount(ctx, accountID); err != nil {
+		if _, _, err := s.controlAccount(ctx, accountID); err != nil {
 			return taskstore.Task{}, fmt.Errorf("账号 %s 不存在：%w", accountID, err)
 		}
 		seen[accountID] = struct{}{}
@@ -172,7 +172,7 @@ func (s *Service) syncPoolModeAccount(ctx context.Context, accountID string, set
 		return item
 	}
 	defer release()
-	if mode, local, err := s.localAccount(guarded, accountID); err != nil {
+	if mode, local, err := s.controlAccount(guarded, accountID); err != nil {
 		item.Error = err.Error()
 		return item
 	} else if mode != runtimepolicy.Full {

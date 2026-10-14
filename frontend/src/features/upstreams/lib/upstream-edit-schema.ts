@@ -3,6 +3,7 @@ import { z } from "zod";
 export { parseJsonStringMap as parseStringMap } from "@/lib/json-string-map";
 
 export const upstreamEditSchema = z.object({
+  name_mode: z.enum(["auto", "manual"]).optional(),
   name: z.string().trim().min(1, "请输入上游名称").max(100, "上游名称不能超过 100 个字符"),
   base_url: z
     .string()

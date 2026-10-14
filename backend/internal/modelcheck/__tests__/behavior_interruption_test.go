@@ -95,7 +95,7 @@ func TestInterruptedBehaviorCheckPreservesCompletedResults(t *testing.T) {
 			if !ok || len(rows) == 0 || len(rows) >= 4 {
 				t.Fatalf("interruption lost partial results: %+v", final.Result)
 			}
-			if rows[0]["account_id"] != "1" || rows[0]["verdict"] != "MATCH" {
+			if rows[0]["account_id"] != "1" || rows[0]["verdict"] != "ANOMALY" {
 				t.Fatalf("completed verdict was replaced: %+v", rows)
 			}
 			if final.Result["completed"] != len(rows) || final.Result["total"] != 4 || final.Result["credentials_persisted"] != true || final.Result["profile_fingerprint"] == nil {

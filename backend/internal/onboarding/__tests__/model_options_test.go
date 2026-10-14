@@ -86,7 +86,7 @@ func modelOptionsFixture(t *testing.T, gateway string, existingKey bool) (*onboa
 	return service, keys, tasks, runner
 }
 
-func modelOptionsFixtureStores(t *testing.T, gateway string, existingKey bool) (*onboarding.Service, *modelOptionsKeys, *modelOptionsTasks, *modelOptionsRunner, *business.Store, *configstore.Store) {
+func modelOptionsFixtureStores(t *testing.T, gateway string, existingKey bool, platforms ...string) (*onboarding.Service, *modelOptionsKeys, *modelOptionsTasks, *modelOptionsRunner, *business.Store, *configstore.Store) {
 	t.Helper()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "business.sqlite3")
@@ -106,7 +106,11 @@ func modelOptionsFixtureStores(t *testing.T, gateway string, existingKey bool) (
 		t.Fatal(err)
 	}
 	defer db.Close()
-	if _, err := db.Exec(`INSERT INTO upstream_groups(host,group_id,name,platform,status,raw_rate,effective_rate,updated_at) VALUES('options.test','6','OpenAI','openai','active','1','1','now')`); err != nil {
+	platform := "openai"
+	if len(platforms) > 0 {
+		platform = platforms[0]
+	}
+	if _, err := db.Exec(`INSERT INTO upstream_groups(host,group_id,name,platform,status,raw_rate,effective_rate,updated_at) VALUES('options.test','6',?,?,'active','1','1','now')`, platform, platform); err != nil {
 		t.Fatal(err)
 	}
 	if existingKey {

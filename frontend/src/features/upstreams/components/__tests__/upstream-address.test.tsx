@@ -101,6 +101,62 @@ function renderUpstream(options?: { savedHost: string; showAccounts: boolean }):
 }
 
 describe("编辑上游地址", () => {
+  it("打开编辑窗口时名称标签与跟随开关保持同一行", async () => {
+    renderUpstream();
+    const follow = await screen.findByRole("switch", { name: "跟随上游站点名称" });
+    const row = follow.closest('[data-slot="field-label-row"]');
+    expect(row).toHaveClass("flex", "items-center", "justify-between", "flex-nowrap");
+    expect(row).toContainElement(screen.getByText("名称", { selector: "label" }));
+    expect(row).not.toContainElement(screen.getByRole("textbox", { name: "名称" }));
+  });
+
+  it("保存地址时保留自动名称来源", async () => {
+    const user = userEvent.setup();
+    const state = renderUpstream();
+    expect(await screen.findByRole("switch", { name: "跟随上游站点名称" })).toBeChecked();
+    await user.click(screen.getByRole("button", { name: "保存并重算" }));
+    await waitFor(() => expect(state.onSaved).toHaveBeenCalled());
+    expect(state.writes[0].payload.name_mode).toBe("auto");
+    expect(state.writes[0].payload.name).toBeUndefined();
+  });
+
+  it("手动修改名称时关闭跟随并提交自定义名称", async () => {
+    const user = userEvent.setup();
+    const state = renderUpstream();
+    const name = await screen.findByRole("textbox", { name: "名称" });
+    await user.clear(name);
+    await user.type(name, "自定义上游");
+    expect(screen.getByRole("switch", { name: "跟随上游站点名称" })).not.toBeChecked();
+    await user.click(screen.getByRole("button", { name: "保存并重算" }));
+    await waitFor(() => expect(state.onSaved).toHaveBeenCalled());
+    expect(state.writes[0].payload).toMatchObject({ name: "自定义上游", name_mode: "manual" });
+  });
+
+  it("通过键盘恢复跟随时不提交旧的自定义名称", async () => {
+    const user = userEvent.setup();
+    const state = renderUpstream();
+    const name = await screen.findByRole("textbox", { name: "名称" });
+    await user.clear(name);
+    await user.type(name, "自定义上游");
+    const follow = screen.getByRole("switch", { name: "跟随上游站点名称" });
+    follow.focus();
+    await user.keyboard(" ");
+    expect(follow).toBeChecked();
+    await user.click(screen.getByRole("button", { name: "保存并重算" }));
+    await waitFor(() => expect(state.onSaved).toHaveBeenCalled());
+    expect(state.writes[0].payload.name_mode).toBe("auto");
+    expect(state.writes[0].payload.name).toBeUndefined();
+  });
+
+  it("打开旧 Host 对应的配置时副标题显示当前名称和地址", async () => {
+    renderUpstream();
+    await screen.findByRole("textbox", { name: "上游地址" });
+    expect(screen.getByRole("dialog", { name: "编辑上游" })).toHaveAccessibleDescription(
+      "测试上游 · https://admin.example.test/console",
+    );
+    expect(screen.queryByText("old.example.test")).not.toBeInTheDocument();
+  });
+
   it.each(["old.example.test", "new.example.test:8443"])(
     "保存后绑定 Host 为 %s 时，已缓存的账号重新读取当前上游地址",
     async (savedHost) => {

@@ -19,6 +19,7 @@ import { schedulingMetric } from "@/lib/scheduling-display";
 import { PrecheckAccountResult } from "./precheck-account-result";
 import { AnimationManualVerdictControls } from "./animation-manual-verdict";
 import { DetectionAccountControls } from "./detection-account-controls";
+import { supportsAnimationPlatform } from "../constants";
 
 export const AnimationAccountCard = memo(function AnimationAccountCard(props: {
   mode?: "animation" | "precheck";
@@ -52,7 +53,7 @@ export const AnimationAccountCard = memo(function AnimationAccountCard(props: {
   const result = precheckMode ? props.result : current;
   const precheckResult = precheckMode ? current : props.precheckResult;
   const unavailable =
-    props.account.platform != null && !["openai", "anthropic"].includes(props.account.platform);
+    props.account.platform != null && !supportsAnimationPlatform(props.account.platform);
   const currentStatus = precheckMode ? props.precheckStatus : props.taskStatus;
   const activityMatchesMode = (props.activity?.mode === "precheck") === precheckMode;
   const currentActivity = activityMatchesMode ? props.activity : undefined;

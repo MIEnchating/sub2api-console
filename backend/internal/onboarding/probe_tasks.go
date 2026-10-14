@@ -46,6 +46,13 @@ func probeStep(ctx context.Context, stage string) func(error) {
 // EnqueueProbe exposes only stage metadata and the public result; credentials
 // stay inside the synchronous domain operations.
 func (s *Service) EnqueueProbe(ctx context.Context, action, host, groupID, model, mode string) (taskstore.Task, error) {
+	return s.EnqueueProbeWithPrompt(ctx, action, host, groupID, model, mode, "")
+}
+
+func (s *Service) EnqueueProbeWithPrompt(ctx context.Context, action, host, groupID, model, mode, promptID string) (taskstore.Task, error) {
+	if promptID != "" && (action != "probe" || mode != "animation") {
+		return taskstore.Task{}, errors.New("仅动画探活支持选择动画提示词")
+	}
 	if action != "models" && action != "model-options" && action != "probe" && action != "cleanup" {
 		return taskstore.Task{}, errors.New("不支持的探活操作")
 	}
@@ -63,7 +70,11 @@ func (s *Service) EnqueueProbe(ctx context.Context, action, host, groupID, model
 		if s.animations == nil {
 			return taskstore.Task{}, errors.New("模型测试服务尚未就绪，请稍后重试")
 		}
-		animationPrompt = s.animations.AnimationPromptSettings().Prompt
+		var err error
+		animationPrompt, err = s.animations.ResolveAnimationPrompt(promptID)
+		if err != nil {
+			return taskstore.Task{}, err
+		}
 	}
 	task, err := s.newQueuedTask("onboarding-probe-"+action, "探活任务已排队")
 	if err != nil {

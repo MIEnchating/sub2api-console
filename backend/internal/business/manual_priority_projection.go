@@ -10,7 +10,7 @@ func applyManualPriorityProjection(item *accountProjection) {
 	}
 	if item.Paused != nil && *item.Paused {
 		item.Health = AccountStatePaused
-	} else if accountMetadataState(item.metadataRaw) == AccountStateDisabled {
+	} else if projectionMetadataState(item) == AccountStateDisabled {
 		item.Health = AccountStateDisabled
 	}
 	item.DesiredHealth = nil

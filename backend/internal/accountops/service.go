@@ -35,6 +35,7 @@ type TargetStore interface {
 type Repository interface {
 	Mode(context.Context) (string, error)
 	Account(context.Context, string) (*business.AccountDetail, error)
+	AccountMutationSnapshot(context.Context, string) (*business.AccountMutationSnapshot, error)
 	SetAccountScopeControl(context.Context, string, string, string) (business.PolicySnapshot, error)
 	CommitAccountControlReadback(context.Context, string, string, string, bool, business.AccountOperation) error
 	CommitAccountFieldsReadback(context.Context, string, *string, *int64, *string, *int64, *bool, *string, *string, *string, bool, *string, business.AccountOperation) error
@@ -183,7 +184,7 @@ func (s *Service) Control(ctx context.Context, accountID, action, actor string) 
 }
 
 func (s *Service) controlLocked(ctx context.Context, accountID, action, actor string, schedulable bool) (map[string]any, error) {
-	mode, local, err := s.localAccount(ctx, accountID)
+	mode, local, err := s.controlAccount(ctx, accountID)
 	if err != nil {
 		return nil, err
 	}
@@ -265,7 +266,7 @@ func (s *Service) EnqueueControl(ctx context.Context, accountID, action, actor s
 	if _, valid := accountControlActions[action]; !valid {
 		return taskstore.Task{}, errors.New("账号控制 action 无效")
 	}
-	mode, _, err := s.localAccount(ctx, accountID)
+	mode, _, err := s.controlAccount(ctx, accountID)
 	if err != nil {
 		return taskstore.Task{}, err
 	}
@@ -300,7 +301,7 @@ func (s *Service) scopeControl(ctx context.Context, accountID, action, actor str
 		return nil, err
 	}
 	defer releaseMutation()
-	_, local, err := s.localAccount(ctx, accountID)
+	_, local, err := s.controlAccount(ctx, accountID)
 	if err != nil {
 		return nil, err
 	}
@@ -561,7 +562,7 @@ func (s *Service) Models(ctx context.Context, accountID string) ([]string, error
 		return nil, err
 	}
 	defer releaseMutation()
-	if _, _, err := s.localAccount(ctx, accountID); err != nil {
+	if _, _, err := s.controlAccount(ctx, accountID); err != nil {
 		return nil, err
 	}
 	ctx, err = targetguard.Bind(ctx, s.targets)
@@ -592,7 +593,7 @@ func (s *Service) PreviewModels(ctx context.Context, accountID string) ([]string
 	if !stableID(accountID) {
 		return nil, errors.New("账号必须使用有效的稳定 ID")
 	}
-	if _, _, err := s.localAccount(ctx, accountID); err != nil {
+	if _, _, err := s.controlAccount(ctx, accountID); err != nil {
 		return nil, err
 	}
 	ctx, err := targetguard.Bind(ctx, s.targets)
@@ -646,7 +647,7 @@ func (s *Service) EnqueueSettings(ctx context.Context, accountID string, input S
 	if _, ok := s.repository.(accountSettingsRepository); !ok {
 		return taskstore.Task{}, errors.New("账号设置服务尚未就绪")
 	}
-	mode, local, err := s.localAccount(ctx, accountID)
+	mode, local, err := s.controlAccount(ctx, accountID)
 	if err != nil {
 		return taskstore.Task{}, err
 	}
@@ -1184,6 +1185,18 @@ func (s *Service) localAccount(ctx context.Context, accountID string) (string, *
 		return "", nil, err
 	}
 	return mode, detail, nil
+}
+
+func (s *Service) controlAccount(ctx context.Context, accountID string) (string, *business.AccountMutationSnapshot, error) {
+	mode, err := s.repository.Mode(ctx)
+	if err != nil {
+		return "", nil, err
+	}
+	account, err := s.repository.AccountMutationSnapshot(ctx, accountID)
+	if err != nil {
+		return "", nil, err
+	}
+	return mode, account, nil
 }
 
 func (s *Service) acquireAccountMutation(ctx context.Context, accountID string, additionalResources ...string) (context.Context, func(), error) {

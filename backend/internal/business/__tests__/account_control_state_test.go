@@ -90,12 +90,14 @@ func BenchmarkAccountControlState(b *testing.B) {
 	if _, err := db.Exec(`INSERT INTO accounts(id,name,schedulable,routing_state,metadata_json,updated_at) VALUES('41','control',1,'healthy',?,'now')`, `{"status":"active","notes":"`+strings.Repeat("x", 64<<10)+`"}`); err != nil {
 		b.Fatal(err)
 	}
-	for _, name := range []string{"detail", "control-state"} {
+	for _, name := range []string{"detail", "control-state", "mutation-snapshot"} {
 		b.Run(name, func(b *testing.B) {
 			b.ReportAllocs()
 			for b.Loop() {
 				if name == "detail" {
 					_, err = store.Account(context.Background(), "41")
+				} else if name == "mutation-snapshot" {
+					_, err = store.AccountMutationSnapshot(context.Background(), "41")
 				} else {
 					_, err = store.AccountControlState(context.Background(), "41")
 				}

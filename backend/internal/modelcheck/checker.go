@@ -34,6 +34,8 @@ type bundleSender interface {
 }
 
 type targetRequest struct {
+	Challenges     [][]verificationChallenge
+	Progress       func(VerificationReport)
 	AccountID      string
 	AccountName    string
 	Model          string

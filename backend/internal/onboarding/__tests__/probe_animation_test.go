@@ -170,3 +170,53 @@ func TestProbeAnimationPreservesExistingKeyAndReportsCleanupFailure(t *testing.T
 		})
 	}
 }
+
+func TestProbeSelectedAnimationPromptIsFrozenWithoutChangingDefault(t *testing.T) {
+	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct{ Input string }
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if body.Input != "本次选择的鲸鱼动画" {
+			t.Errorf("prompt=%q", body.Input)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]string{"output_text": "<!DOCTYPE html><html><body><svg><circle r='10'/></svg></body></html>"})
+	}))
+	t.Cleanup(gateway.Close)
+	service, keys, tasks, runner := modelOptionsFixture(t, gateway.URL, false)
+	deps := &animationDependencies{}
+	animations, err := modelcheck.New(deps, deps, deps, deps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	saved, err := animations.SaveAnimationPrompt(t.Context(), modelcheck.AnimationPromptSettings{DefaultID: "bird", Templates: []modelcheck.AnimationPromptTemplate{
+		{ID: "bird", Name: "鹈鹕", Prompt: "默认动画"},
+		{ID: "whale", Name: "鲸鱼", Prompt: "本次选择的鲸鱼动画"},
+	}}, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	service.UseAnimationService(animations)
+	if _, err := service.EnqueueProbeWithPrompt(t.Context(), "probe", "options.test", "6", "gpt-6-astra", "animation", "whale"); err != nil {
+		t.Fatal(err)
+	}
+	if animations.AnimationPromptSettings().DefaultID != "bird" {
+		t.Fatal("selection changed default")
+	}
+	saved.Templates = saved.Templates[:1]
+	if _, err := animations.SaveAnimationPrompt(t.Context(), saved, "test"); err != nil {
+		t.Fatal(err)
+	}
+	runner.run(t.Context())
+	if tasks.final.Status != "succeeded" || len(keys.deleted) != 1 {
+		t.Fatalf("task=%+v", tasks.final)
+	}
+	result := tasks.final.Result["probe_result"].(onboarding.ProbeResult)
+	if result.Animation.Prompt != "本次选择的鲸鱼动画" {
+		t.Fatal("snapshot lost")
+	}
+	if _, err := service.EnqueueProbeWithPrompt(t.Context(), "probe", "options.test", "6", "gpt-6-astra", "animation", "whale"); err == nil {
+		t.Fatal("deleted prompt accepted")
+	}
+	if len(keys.created) != 1 {
+		t.Fatal("invalid selection created a key")
+	}
+}

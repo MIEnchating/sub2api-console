@@ -77,10 +77,6 @@ export type ModelCheckSelectionProps = {
   onSubmit: () => void;
 };
 
-function modelProtocol(model: string): string {
-  return model.startsWith("claude-") ? "Anthropic" : "Responses";
-}
-
 function accountCheckTime(value: string | null | undefined): string {
   if (!value) return "-";
   const timestamp = new Date(value);
@@ -416,7 +412,6 @@ function ModelList(props: ModelCheckSelectionProps) {
               </TooltipTrigger>
               <TooltipContent className="max-w-sm break-all">{model}</TooltipContent>
             </Tooltip>
-            <Badge variant="outline">{modelProtocol(model)}</Badge>
           </label>
         );
       })}
@@ -565,6 +560,10 @@ function MatrixPanel(props: ModelCheckSelectionProps) {
             <span className="text-muted-foreground text-[11px]">组合</span>
           </div>
         </div>
+        <p className="text-muted-foreground mb-3 text-xs">
+          计划 {props.combinationCount * props.rounds * 7} 项检测；每项通常 1 次请求，协议回退时最多
+          2 次，按上游用量计费。同一账号依次检测，不自动重试失败请求。
+        </p>
         <FieldError message={props.selectionError} className="mb-2" />
         <Button
           type="button"

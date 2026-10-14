@@ -377,6 +377,18 @@ func (f fakeBusiness) Account(context.Context, string) (*business.AccountDetail,
 	}
 	return f.accountDetail, nil
 }
+func (f fakeBusiness) AccountMutationSnapshot(context.Context, string) (*business.AccountMutationSnapshot, error) {
+	if f.accountDetail == nil {
+		return nil, sql.ErrNoRows
+	}
+	return &business.AccountMutationSnapshot{
+		ID: f.accountDetail.ID, Name: f.accountDetail.Name,
+		ManualPriority: f.accountDetail.ManualPriority,
+	}, nil
+}
+func (f fakeBusiness) AccountIDsExist(context.Context, []string) (bool, error) {
+	return f.accountDetail != nil, nil
+}
 func (f fakeBusiness) TrafficRanking(_ context.Context, query business.TrafficRankingQuery) (business.TrafficRanking, error) {
 	if f.trafficQueries != nil {
 		*f.trafficQueries = append(*f.trafficQueries, query)
@@ -1325,6 +1337,59 @@ func TestInitializationLoginSessionAndLogoutContract(t *testing.T) {
 	}
 	if username != nil {
 		t.Fatal("logout must revoke persisted session")
+	}
+}
+
+func TestInitializationSessionExpiresAfterThirtyDays(t *testing.T) {
+	router, store := testRouter(t, config.Config{}, fakeBusiness{mode: "完全模式"})
+	started := time.Now().UTC()
+	initialized := request(t, router, http.MethodPost, "/api/setup/initialize", map[string]any{
+		"username":          "admin",
+		"password":          "a secure password",
+		"local_export_only": true,
+	}, "")
+	finished := time.Now().UTC()
+	if initialized.Code != http.StatusOK {
+		t.Fatalf("initialization failed: %d %s", initialized.Code, initialized.Body.String())
+	}
+	cookie := responseCookie(t, initialized, sessionCookie)
+	if cookie.MaxAge != 30*24*60*60 {
+		t.Fatalf("initialization cookie Max-Age = %d, want 30 days", cookie.MaxAge)
+	}
+	user, err := store.SessionUser(context.Background(), cookie.Value, started.Add(30*24*time.Hour-time.Minute))
+	if err != nil || user == nil || *user != "admin" {
+		t.Fatalf("initialization session expired before 30 days: user=%v err=%v", user, err)
+	}
+	user, err = store.SessionUser(context.Background(), cookie.Value, finished.Add(30*24*time.Hour+time.Minute))
+	if err != nil || user != nil {
+		t.Fatalf("initialization session remained valid after 30 days: user=%v err=%v", user, err)
+	}
+}
+
+func TestLoginSessionExpiresAfterThirtyDays(t *testing.T) {
+	router, store := testRouter(t, config.Config{}, fakeBusiness{mode: "完全模式"})
+	if err := store.Initialize(context.Background(), "operator", "correct password", "https://sub2api.example", "key"); err != nil {
+		t.Fatal(err)
+	}
+	started := time.Now().UTC()
+	login := request(t, router, http.MethodPost, "/api/auth/login", map[string]any{
+		"username": "operator", "password": "correct password",
+	}, "")
+	finished := time.Now().UTC()
+	if login.Code != http.StatusOK {
+		t.Fatalf("login failed: %d %s", login.Code, login.Body.String())
+	}
+	cookie := responseCookie(t, login, sessionCookie)
+	if cookie.MaxAge != 30*24*60*60 {
+		t.Fatalf("login cookie Max-Age = %d, want 30 days", cookie.MaxAge)
+	}
+	user, err := store.SessionUser(context.Background(), cookie.Value, started.Add(30*24*time.Hour-time.Minute))
+	if err != nil || user == nil || *user != "operator" {
+		t.Fatalf("login session expired before 30 days: user=%v err=%v", user, err)
+	}
+	user, err = store.SessionUser(context.Background(), cookie.Value, finished.Add(30*24*time.Hour+time.Minute))
+	if err != nil || user != nil {
+		t.Fatalf("login session remained valid after 30 days: user=%v err=%v", user, err)
 	}
 }
 
@@ -3465,46 +3530,23 @@ func TestModelCheckRoutesExposeCapabilitiesAndForwardAccountMatrix(t *testing.T)
 	}
 }
 
-func TestModelCheckConfigurationRoutesForwardVersionGuardsAndActor(t *testing.T) {
+func TestRetiredModelCheckConfigurationRoutesCannotWrite(t *testing.T) {
 	calls := []string{}
-	configuration := modelcheck.ConfigurationView{Active: modelcheck.ConfigurationVersion{
-		ID: "profile-current", Status: "published", Fingerprint: "active-fingerprint",
-	}}
-	router, _ := testRouterWithDependencies(t, config.Config{AdminToken: "test-token"}, fakeBusiness{mode: "完全模式"}, Dependencies{
-		ModelChecks: fakeModelChecks{configuration: configuration, configurationCalls: &calls},
-	})
-	read := authenticatedRequest(t, router, http.MethodGet, "/api/model-checks/configuration", nil)
-	if read.Code != http.StatusOK || !strings.Contains(read.Body.String(), `"id":"profile-current"`) {
-		t.Fatalf("read=%d %s", read.Code, read.Body.String())
-	}
-	requests := []struct {
-		method string
-		path   string
-		body   map[string]any
-	}{
-		{http.MethodPut, "/api/model-checks/configuration/draft", map[string]any{
-			"expected_fingerprint": "active-fingerprint", "note": "new", "payload": map[string]any{},
-		}},
-		{http.MethodPost, "/api/model-checks/configuration/publish", map[string]any{"expected_fingerprint": "draft-fingerprint"}},
-		{http.MethodPost, "/api/model-checks/configuration/discard", map[string]any{"expected_fingerprint": "draft-fingerprint"}},
-		{http.MethodPost, "/api/model-checks/configuration/restore", map[string]any{
-			"version_id": "profile-old", "expected_fingerprint": "active-fingerprint", "note": "restore",
-		}},
-	}
-	for _, request := range requests {
-		response := authenticatedRequest(t, router, request.method, request.path, request.body)
-		if response.Code != http.StatusOK {
-			t.Fatalf("%s response=%d %s", request.path, response.Code, response.Body.String())
+	router, _ := testRouterWithDependencies(t, config.Config{AdminToken: "test-token"}, fakeBusiness{mode: "完全模式"}, Dependencies{ModelChecks: fakeModelChecks{configurationCalls: &calls}})
+	for _, request := range []struct{ method, path string }{
+		{http.MethodGet, "/api/model-checks/configuration"},
+		{http.MethodPut, "/api/model-checks/configuration/draft"},
+		{http.MethodPost, "/api/model-checks/configuration/publish"},
+		{http.MethodPost, "/api/model-checks/configuration/discard"},
+		{http.MethodPost, "/api/model-checks/configuration/restore"},
+	} {
+		response := authenticatedRequest(t, router, request.method, request.path, map[string]any{})
+		if response.Code != http.StatusNotFound {
+			t.Fatalf("retired route %s: %d", request.path, response.Code)
 		}
 	}
-	expected := []string{
-		"save:console:active-fingerprint:new",
-		"publish:console:draft-fingerprint",
-		"discard:console:draft-fingerprint",
-		"restore:console:profile-old:active-fingerprint",
-	}
-	if !reflect.DeepEqual(calls, expected) {
-		t.Fatalf("calls=%#v want=%#v", calls, expected)
+	if len(calls) != 0 {
+		t.Fatalf("retired configuration was written: %v", calls)
 	}
 }
 

@@ -83,6 +83,9 @@ it("账号管理跳转后按 ID 预选同名账号，选择模型后提交正确
       expect.anything(),
     ),
   );
+  expect(await screen.findByRole("dialog", { name: "模型检测结果" })).toBeVisible();
+  fireEvent.click(screen.getByRole("button", { name: "关闭" }));
+  await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
   await waitFor(() =>
     expect(within(table).getByRole("button", { name: "查看账号 41 检测统计" })).toHaveTextContent(
       "符合特征",

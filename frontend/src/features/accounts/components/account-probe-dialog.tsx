@@ -1,3 +1,5 @@
+import { AnimationPromptSelector } from "@/features/model-check/components/animation-prompt-selector";
+import { animationPromptQueryKey } from "@/features/model-check/lib/animation-prompt-query";
 import { QueryErrorToast } from "@/components/query-error-toast";
 import { notifyOperationError } from "@/lib/operation-feedback";
 import { useOnboardingProbeTask, probeTaskResultSchema } from "../hooks/use-onboarding-probe-task";
@@ -120,6 +122,18 @@ function AccountProbeSession(props: {
   const [modelsLoading, setModelsLoading] = useState(false);
   const [selectedModel, setSelectedModel] = useState(noModelSelected);
   const [selectedMode, setSelectedMode] = useState<OnboardingProbeMode>("default");
+  const [selectedPromptId, setSelectedPromptId] = useState("");
+  const promptSettings = useQuery({
+    queryKey: animationPromptQueryKey,
+    queryFn: ({ signal }) => api.animationPrompt(signal),
+    enabled: selectedMode === "animation",
+    staleTime: 0,
+    gcTime: 0,
+  });
+  const promptReady =
+    !!promptSettings.data &&
+    (selectedPromptId === "" ||
+      promptSettings.data.templates.some((item) => item.id === selectedPromptId));
   const [result, setResult] = useState<ProbeResult | null>(null);
   const progress = useOnboardingProbeTask(props.target.host, props.target.groupId);
   const [closing, setClosing] = useState(false);
@@ -168,12 +182,25 @@ function AccountProbeSession(props: {
     mutationFn: async () => {
       if (selectedModel === noModelSelected) throw new Error("请先获取并选择一个上游模型");
       modelSelectionEdited.current = true;
-      const task = await progress.run("probe", selectedModel.trim(), selectedMode);
+      if (selectedMode === "animation" && !promptReady)
+        throw new Error("请先读取并选择有效的动画提示词");
+      const task = await progress.run(
+        "probe",
+        selectedModel.trim(),
+        selectedMode,
+        selectedMode === "animation" ? selectedPromptId || undefined : undefined,
+      );
       const parsed = probeTaskResultSchema.safeParse(task.result.probe_result);
       if (!parsed.success) throw new Error(task.message);
+      const probeResult: ProbeResult = {
+        ...parsed.data,
+        animation: parsed.data.animation
+          ? { ...parsed.data.animation, source_task_id: task.id, source_task_status: task.status }
+          : undefined,
+      };
       if (task.status !== "succeeded")
-        return { ...parsed.data, status: "failed" as const, message: task.message };
-      return parsed.data;
+        return { ...probeResult, status: "failed" as const, message: task.message };
+      return probeResult;
     },
     onMutate: () => {
       setResult(null);
@@ -243,6 +270,7 @@ function AccountProbeSession(props: {
     Boolean(props.pending) || runProbe.isPending || closing || cancelProbe.isPending;
   const runDisabled =
     selectDisabled ||
+    (selectedMode === "animation" && !promptReady) ||
     modelsLoading ||
     selectedModel === noModelSelected ||
     !selectedModel.trim() ||
@@ -283,6 +311,17 @@ function AccountProbeSession(props: {
         </DialogHeader>
         <DialogBody className="grid min-w-0 content-start gap-3 px-4 py-3 sm:px-5 [scrollbar-gutter:stable]">
           <ProbeAccountCard target={props.target} />
+          {selectedMode === "animation" ? (
+            <AnimationPromptSelector
+              settings={promptSettings.data}
+              pending={promptSettings.isPending}
+              refreshing={promptSettings.isFetching}
+              onRetry={() => void promptSettings.refetch()}
+              value={selectedPromptId}
+              onChange={setSelectedPromptId}
+              disabled={selectDisabled}
+            />
+          ) : null}
           <div
             className={`grid min-w-0 grid-cols-1 gap-3 ${selectedMode === "animation" ? "sm:grid-cols-[minmax(0,1fr)_12rem]" : ""}`}
             role="group"

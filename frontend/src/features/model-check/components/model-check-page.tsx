@@ -1,9 +1,8 @@
-import { ArrowLeft, Database } from "lucide-react";
+import { ArrowLeft } from "lucide-react";
 import { useState, type ReactElement } from "react";
 import { PageLayout } from "@/components/page-layout";
 import { PageHeading } from "@/components/page-heading";
 import { Button } from "@/components/ui/button";
-import { ModelCheckConfigurationDialog } from "./model-check-configuration-dialog";
 import { RegularCheckPanel } from "./regular-check-panel";
 
 export { modelCheckDialogLayout } from "./regular-check-panel";
@@ -19,14 +18,13 @@ function ModelCheckContent(props: {
   accountID?: string;
   onBackToAccounts?: () => void;
 }): ReactElement {
-  const [configurationOpen, setConfigurationOpen] = useState(false);
   const [showAllAccounts, setShowAllAccounts] = useState(false);
   return (
     <PageLayout fixedContent>
       <PageHeading
         eyebrow="AUDIT / MODEL"
         title="模型检测"
-        description=""
+        description="自动检查真实性证据与推理能力，保留每项检测依据"
         action={
           <>
             {props.onBackToAccounts ? (
@@ -35,10 +33,6 @@ function ModelCheckContent(props: {
                 账号管理
               </Button>
             ) : null}
-            <Button type="button" variant="outline" onClick={() => setConfigurationOpen(true)}>
-              <Database aria-hidden="true" />
-              检测规则与题库
-            </Button>
           </>
         }
       />
@@ -55,7 +49,6 @@ function ModelCheckContent(props: {
           showAllAccounts={showAllAccounts}
         />
       </div>
-      <ModelCheckConfigurationDialog open={configurationOpen} onOpenChange={setConfigurationOpen} />
     </PageLayout>
   );
 }

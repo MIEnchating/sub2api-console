@@ -22,26 +22,28 @@ type ProbeCandidate struct {
 }
 
 type ProbeSample struct {
-	IgnoredPlaceholder      bool
-	AccountID               string
-	GroupName               string
-	Result                  string
-	LatencyP50              *string
-	LatencyP95              *string
-	LatencyP99              *string
-	SampleCount             int
-	Attempts                int
-	FailureReason           *string
-	ObservedAt              string
-	StatusCode              *int
-	RequestModel            string
-	ActualModel             string
-	AttemptStatusCodes      []int
-	RetryRecovered          bool
-	ProbeProtocol           string
-	ProbePromptFingerprint  string
-	ProbeRequestFingerprint string
-	MeasuredFirstToken      bool
+	IgnoredPlaceholder        bool
+	IgnoredPlaceholderPreview string
+	IgnoredPlaceholderAttempt int
+	AccountID                 string
+	GroupName                 string
+	Result                    string
+	LatencyP50                *string
+	LatencyP95                *string
+	LatencyP99                *string
+	SampleCount               int
+	Attempts                  int
+	FailureReason             *string
+	ObservedAt                string
+	StatusCode                *int
+	RequestModel              string
+	ActualModel               string
+	AttemptStatusCodes        []int
+	RetryRecovered            bool
+	ProbeProtocol             string
+	ProbePromptFingerprint    string
+	ProbeRequestFingerprint   string
+	MeasuredFirstToken        bool
 }
 
 func (s *Store) ControlPolicy(ctx context.Context) (map[string]any, error) {
@@ -159,20 +161,33 @@ func (s *Store) PersistProbeSamples(ctx context.Context, samples []ProbeSample) 
 			"latency_metric": "first_token", "latency_source": "upstream_direct.first_content", "latency_unit": "ms",
 			"probe_protocol": sample.ProbeProtocol, "probe_prompt_fingerprint": sample.ProbePromptFingerprint,
 			"probe_request_fingerprint": sample.ProbeRequestFingerprint, "measured_first_token": sample.MeasuredFirstToken,
-			"performance_eligible": probePerformanceEligible(sample),
-			"ignored_placeholder":  sample.IgnoredPlaceholder,
+			"performance_eligible":        probePerformanceEligible(sample),
+			"ignored_placeholder":         sample.IgnoredPlaceholder,
+			"ignored_placeholder_preview": sample.IgnoredPlaceholderPreview,
+			"ignored_placeholder_attempt": sample.IgnoredPlaceholderAttempt,
 		}
 		if sample.Attempts > 1 || len(sample.AttemptStatusCodes) > 1 {
 			payloadValue["attempt_status_codes"] = sample.AttemptStatusCodes
 			payloadValue["retry_recovered"] = sample.RetryRecovered
 		}
-		if sample.IgnoredPlaceholder {
+		if sample.IgnoredPlaceholder || sample.Result == "通过" {
+			placeholder, err := json.Marshal(ProbePlaceholder{
+				GroupName: sample.GroupName, RequestModel: sample.RequestModel, Result: sample.Result,
+				Attempt: sample.IgnoredPlaceholderAttempt, Preview: sample.IgnoredPlaceholderPreview,
+			})
+			if err != nil {
+				return 0, fmt.Errorf("探活异常首字无法序列化：%w", err)
+			}
+			// Keep the recovery timestamp to reject late older anomalies.
+			if !sample.IgnoredPlaceholder {
+				placeholder = []byte(`{"cleared":true}`)
+			}
 			if _, err := tx.ExecContext(ctx, tx.Dialect(`INSERT INTO operational_snapshots(namespace,state_key,value_json,observed_at,updated_at)
-    SELECT 'probe-placeholder',id,'{}',?,? FROM accounts WHERE id=?
-    ON CONFLICT(namespace,state_key) DO UPDATE SET observed_at=excluded.observed_at,updated_at=excluded.updated_at
-    WHERE excluded.observed_at>operational_snapshots.observed_at`, `INSERT INTO operational_snapshots(namespace,state_key,value_json,observed_at,updated_at)
- SELECT 'probe-placeholder',id,'{}',?,? FROM accounts WHERE id=?
- ON DUPLICATE KEY UPDATE updated_at=IF(VALUES(observed_at)>observed_at,VALUES(updated_at),updated_at),observed_at=IF(VALUES(observed_at)>observed_at,VALUES(observed_at),observed_at)`), sample.ObservedAt, sample.ObservedAt, sample.AccountID); err != nil {
+			    SELECT 'probe-placeholder',id,?,?,? FROM accounts WHERE id=?
+			    ON CONFLICT(namespace,state_key) DO UPDATE SET value_json=excluded.value_json,observed_at=excluded.observed_at,updated_at=excluded.updated_at
+			    WHERE excluded.observed_at>operational_snapshots.observed_at`, `INSERT INTO operational_snapshots(namespace,state_key,value_json,observed_at,updated_at)
+			 SELECT 'probe-placeholder',id,?,?,? FROM accounts WHERE id=?
+			 ON DUPLICATE KEY UPDATE value_json=IF(VALUES(observed_at)>observed_at,VALUES(value_json),value_json),updated_at=IF(VALUES(observed_at)>observed_at,VALUES(updated_at),updated_at),observed_at=IF(VALUES(observed_at)>observed_at,VALUES(observed_at),observed_at)`), string(placeholder), sample.ObservedAt, sample.ObservedAt, sample.AccountID); err != nil {
 				return 0, err
 			}
 		}

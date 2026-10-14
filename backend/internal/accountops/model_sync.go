@@ -320,7 +320,7 @@ func (s *Service) prepareModelSyncAccounts(ctx context.Context, accountIDs []str
 			}
 			return nil, err
 		}
-		_, account, err := s.localAccount(ctx, accountID)
+		_, account, err := s.controlAccount(ctx, accountID)
 		if err != nil {
 			return nil, err
 		}
@@ -431,7 +431,7 @@ func (s *Service) discoverAccountModels(ctx context.Context, accountID string) m
 		return item
 	}
 	defer release()
-	_, local, err := s.localAccount(guarded, accountID)
+	_, local, err := s.controlAccount(guarded, accountID)
 	if err != nil {
 		item.Error = err.Error()
 		return item
@@ -669,7 +669,7 @@ func (s *Service) applyAccountModels(ctx context.Context, catalog business.Accou
 		return item
 	}
 	defer release()
-	if mode, account, err := s.localAccount(guarded, catalog.AccountID); err != nil {
+	if mode, account, err := s.controlAccount(guarded, catalog.AccountID); err != nil {
 		item.Error = err.Error()
 		return item
 	} else if mode != runtimepolicy.Full {

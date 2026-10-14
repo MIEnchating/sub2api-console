@@ -60,8 +60,8 @@ func validateAnimationEndpoint(custom AnimationCustomEndpoint) (AnimationCustomE
 	if err != nil || strings.Contains(custom.BaseURL, custom.APIKey) || strings.Contains(decodedURL, custom.APIKey) {
 		return custom, errors.New("Base URL 不能包含 API Key，请检查填写内容")
 	}
-	if custom.Platform != "openai" && custom.Platform != "anthropic" {
-		return custom, errors.New("自定义接口类型必须是 OpenAI 或 Anthropic")
+	if custom.Platform != "openai" && custom.Platform != "anthropic" && custom.Platform != "gemini" {
+		return custom, errors.New("自定义接口类型必须是 OpenAI、Anthropic 或 Gemini")
 	}
 	return custom, nil
 }

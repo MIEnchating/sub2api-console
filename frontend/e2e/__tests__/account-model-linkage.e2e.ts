@@ -86,6 +86,10 @@ test("账号快捷入口预选正确账号，完成模型检测后返回账号�
   await page.getByRole("checkbox", { name: "联动账号 ID 41" }).click();
   await page.getByRole("checkbox", { name: /gpt-5.6-sol/ }).click();
   await page.getByRole("button", { name: /开始检测/ }).click();
+  const result = page.getByRole("dialog", { name: "模型检测结果", exact: true });
+  await expect(result).toBeVisible();
+  await result.getByRole("button", { name: "关闭", exact: true }).click();
+  await expect(result).toHaveCount(0);
   await expect(page.getByRole("button", { name: "查看账号 41 检测统计" })).toHaveText("符合特征");
   await page.getByRole("button", { name: "查看账号 41 检测统计" }).hover();
   await expect(page.getByLabel("置信度短期：20.7%")).toBeVisible();

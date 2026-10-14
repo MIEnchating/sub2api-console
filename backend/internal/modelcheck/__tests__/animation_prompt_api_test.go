@@ -1,9 +1,11 @@
 package modelcheck_test
 
 import (
+	"encoding/json"
 	"github.com/MIEnchating/sub2api-console/backend/internal/api"
 	"github.com/MIEnchating/sub2api-console/backend/internal/config"
 	"github.com/MIEnchating/sub2api-console/backend/internal/configstore"
+	"github.com/MIEnchating/sub2api-console/backend/internal/modelcheck"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -47,5 +49,33 @@ func TestAnimationPromptAPIAuthenticatesValidatesAndReadsSavedValue(t *testing.T
 				t.Fatalf("unexpected saved response: %s", response.Body.String())
 			}
 		})
+	}
+}
+
+func TestAnimationPromptAPIStoresMultipleTemplatesAndExposesSelectedDefault(t *testing.T) {
+	f := setup(t, 1, "openai", func(http.ResponseWriter, *http.Request) { t.Error("unexpected generation") })
+	private, err := configstore.Open(filepath.Join(t.TempDir(), "private.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = private.Close() })
+	router := api.New(config.Config{AdminToken: "isolated-token"}, private, nil, api.Dependencies{ModelChecks: f.service})
+	body := `{"version":0,"default_id":"whale","templates":[{"id":"bird","name":"鹈鹕","prompt":"鹈鹕动画"},{"id":"whale","name":"鲸鱼","prompt":"鲸鱼动画"}]}`
+	for _, method := range []string{"PUT", "GET"} {
+		request := httptest.NewRequest(method, "/api/model-checks/animation-prompt", strings.NewReader(body))
+		request.Header.Set("Content-Type", "application/json")
+		request.Header.Set("Authorization", "Bearer isolated-token")
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, request)
+		if response.Code != 200 {
+			t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+		}
+		var value modelcheck.AnimationPromptSettings
+		if err := json.Unmarshal(response.Body.Bytes(), &value); err != nil {
+			t.Fatal(err)
+		}
+		if value.DefaultID != "whale" || value.Prompt != "鲸鱼动画" || len(value.Templates) != 2 || value.Version != 1 {
+			t.Fatalf("response=%+v", value)
+		}
 	}
 }

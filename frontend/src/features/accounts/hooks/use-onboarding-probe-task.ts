@@ -73,6 +73,7 @@ export function useOnboardingProbeTask(host: string, groupId: string) {
     action: "models" | "probe" | "cleanup",
     model?: string,
     mode?: OnboardingProbeMode,
+    animationPromptId?: string,
   ): Promise<Task> {
     if (active.current) throw new Error("探活操作仍在进行，请等待完成");
     actionRef.current = action;
@@ -84,7 +85,9 @@ export function useOnboardingProbeTask(host: string, groupId: string) {
     setIsStarting(true);
     current.current = null;
     const promise = (async (): Promise<Task> => {
-      starting.current = api.startOnboardingProbeTask(action, host, groupId, model, mode);
+      starting.current = animationPromptId
+        ? api.startOnboardingProbeTask(action, host, groupId, model, mode, animationPromptId)
+        : api.startOnboardingProbeTask(action, host, groupId, model, mode);
       const task = await starting.current;
       current.current = task;
       if (!mounted.current) {

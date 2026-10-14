@@ -1,4 +1,5 @@
 import { fireEvent, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { useForm } from "react-hook-form";
 import { expect, it } from "vitest";
 import { render as renderWithDictionaries } from "@/test/dictionary";
@@ -19,12 +20,15 @@ function Form() {
 }
 
 it("平台字典逆序时自定义检测仅排序已支持协议且保留选中值", async () => {
+  const user = userEvent.setup();
   renderWithDictionaries(<Form />, {
     platform: [{ value: "gemini" }, { value: "anthropic" }, { value: "openai" }],
   });
   const control = screen.getByRole("combobox", { name: "接口类型" });
   fireEvent.click(control);
   const options = await screen.findAllByRole("option");
-  expect(options.map((option) => option.textContent)).toEqual(["Anthropic", "OpenAI"]);
-  expect(options[1]).toHaveAttribute("aria-selected", "true");
+  expect(options.map((option) => option.textContent)).toEqual(["Gemini", "Anthropic", "OpenAI"]);
+  expect(options[2]).toHaveAttribute("aria-selected", "true");
+  await user.click(options[0]);
+  expect(control).toHaveTextContent("Gemini");
 });

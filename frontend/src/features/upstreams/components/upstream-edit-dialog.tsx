@@ -94,6 +94,7 @@ const upstreamEditConnectionLabels = {
 const upstreamEditFormID = "upstream-edit-form";
 
 const emptyValues: UpstreamEditValues = {
+  name_mode: "auto",
   name: "",
   base_url: "",
   account_base_url: "",
@@ -114,6 +115,7 @@ const emptyValues: UpstreamEditValues = {
 
 function Field(props: {
   label: string;
+  labelAction?: ReactNode;
   htmlFor?: string;
   description?: string;
   error?: string;
@@ -133,7 +135,17 @@ function Field(props: {
   }
   return (
     <div className="grid min-w-0 gap-1.5 text-sm">
-      {label}
+      {props.labelAction ? (
+        <div
+          className="flex min-w-0 flex-nowrap items-center justify-between gap-2"
+          data-slot="field-label-row"
+        >
+          {label}
+          {props.labelAction}
+        </div>
+      ) : (
+        label
+      )}
       {props.children}
       {props.error ? (
         <FieldError
@@ -510,6 +522,7 @@ function UpstreamEditor(props: Props & { host: string }) {
     form.reset({
       ...emptyValues,
       name: configuration.data.name,
+      name_mode: configuration.data.name_mode ?? "auto",
       base_url: configuration.data.base_url,
       account_base_url: configuration.data.account_base_url,
       upstream_type: configuration.data.upstream_type,
@@ -566,6 +579,7 @@ function UpstreamEditor(props: Props & { host: string }) {
       form.reset({
         ...emptyValues,
         name: value.name,
+        name_mode: value.name_mode ?? "auto",
         base_url: value.base_url,
         account_base_url: value.account_base_url,
         upstream_type: value.upstream_type,
@@ -575,18 +589,22 @@ function UpstreamEditor(props: Props & { host: string }) {
       });
       setShowHeadersEditor(value.header_names.length > 0);
       setClearHeaders(false);
-      if (hostChanged) {
-        toast.success("上游地址已更新，相关账号绑定已同步");
-        props.onOpenChange(false);
-      } else if (value.rate_sync_error || value.base_url_sync_error) {
+      if (value.rate_sync_error || value.base_url_sync_error || value.name_sync_error) {
         toast.warning(
-          `上游配置已保存，但账号同步排队失败：${value.rate_sync_error ?? value.base_url_sync_error}`,
+          `上游配置已保存，但账号同步排队失败：${value.rate_sync_error ?? value.base_url_sync_error ?? value.name_sync_error}`,
         );
-      } else if (value.rate_sync_task_id || value.base_url_sync_task_id) {
+      } else if (
+        value.rate_sync_task_id ||
+        value.base_url_sync_task_id ||
+        value.name_sync_task_id
+      ) {
         toast.success("上游配置已保存，相关账号配置同步已排队");
+      } else if (hostChanged) {
+        toast.success("上游地址已更新，相关账号绑定已同步");
       } else {
         toast.success("上游配置已保存");
       }
+      if (hostChanged) props.onOpenChange(false);
       props.onSaved();
     },
     onError: (error) => {
@@ -609,12 +627,13 @@ function UpstreamEditor(props: Props & { host: string }) {
       return;
     form.clearErrors(["entry", "headers", "cookies"]);
     const payload: UpstreamConfigurationUpdate = {
-      name: values.name.trim(),
+      name_mode: values.name_mode ?? "auto",
       ...upstreamConnectionPayload(values),
       upstream_type: values.upstream_type,
       auth_mode: values.auth_mode,
       recharge_rate: values.recharge_rate,
     };
+    if (values.name_mode === "manual") payload.name = values.name.trim();
     if (values.access_token.trim()) payload.access_token = values.access_token.trim();
     if (values.refresh_token.trim()) payload.refresh_token = values.refresh_token.trim();
     if (values.admin_key.trim()) payload.admin_key = values.admin_key.trim();
@@ -707,7 +726,11 @@ function UpstreamEditor(props: Props & { host: string }) {
             <DialogTitle ref={titleRef} tabIndex={-1} className="outline-none">
               编辑上游
             </DialogTitle>
-            <DialogDescription className="text-xs wrap-anywhere">{props.host}</DialogDescription>
+            <DialogDescription className="text-xs wrap-anywhere">
+              {configuration.data
+                ? `${configuration.data.name} · ${configuration.data.base_url}`
+                : "正在读取上游配置"}
+            </DialogDescription>
           </div>
           <SegmentedControl role="tablist" aria-label="上游编辑分类" className="shrink-0">
             <SegmentedControlItem
@@ -807,11 +830,29 @@ function UpstreamEditor(props: Props & { host: string }) {
                       label="名称"
                       htmlFor="upstream-edit-name"
                       error={form.formState.errors.name?.message}
+                      labelAction={
+                        <label className="flex shrink-0 items-center gap-2 text-xs whitespace-nowrap">
+                          <Switch
+                            checked={form.watch("name_mode") !== "manual"}
+                            disabled={save.isPending}
+                            onCheckedChange={(checked) =>
+                              form.setValue("name_mode", checked ? "auto" : "manual", {
+                                shouldDirty: true,
+                              })
+                            }
+                          />
+                          跟随上游站点名称
+                        </label>
+                      }
                     >
                       <Input
                         disabled={save.isPending}
                         id="upstream-edit-name"
                         {...form.register("name")}
+                        onChange={(event) => {
+                          void form.register("name").onChange(event);
+                          form.setValue("name_mode", "manual", { shouldDirty: true });
+                        }}
                       />
                     </Field>
                     <Field

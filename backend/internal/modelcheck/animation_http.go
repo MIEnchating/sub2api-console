@@ -15,6 +15,9 @@ func sendAnimation(ctx context.Context, client *http.Client, credential directCr
 	if prompt == "" {
 		prompt = animationPrompt
 	}
+	if credential.Platform == "gemini" {
+		return sendGeminiGeneration(ctx, client, credential, model, prompt, requestID, 16384, usage, onFirstOutput)
+	}
 	path := "/v1/responses"
 	body := map[string]any{"model": model, "input": prompt, "max_output_tokens": 16384, "stream": true, "reasoning": map[string]string{"effort": "low"}}
 	if credential.Platform == "anthropic" {
@@ -44,7 +47,7 @@ func sendAnimation(ctx context.Context, client *http.Client, credential directCr
 	return text, responseModel, nil
 }
 
-func animationHTTP(ctx context.Context, client *http.Client, credential directCredential, path string, body map[string]any, requestID string, usage *AnimationUsage, onFirstOutput func()) (string, string, int, []byte, http.Header, error) {
+func animationHTTP(ctx context.Context, client *http.Client, credential directCredential, path string, body any, requestID string, usage *AnimationUsage, onFirstOutput func()) (string, string, int, []byte, http.Header, error) {
 	endpoint, err := directEndpoint(credential.BaseURL, path)
 	if err != nil {
 		return "", "", 0, nil, nil, errors.New("账号 Base URL 无效")
@@ -60,6 +63,8 @@ func animationHTTP(ctx context.Context, client *http.Client, credential directCr
 	if credential.Platform == "anthropic" {
 		request.Header.Set("x-api-key", credential.Secret)
 		request.Header.Set("anthropic-version", "2023-06-01")
+	} else if credential.Platform == "gemini" {
+		request.Header.Set("x-goog-api-key", credential.Secret)
 	} else {
 		request.Header.Set("Authorization", "Bearer "+credential.Secret)
 	}
@@ -95,7 +100,16 @@ func animationHTTP(ctx context.Context, client *http.Client, credential directCr
 			return "", "", response.StatusCode, nil, response.Header, errors.New("动画检测响应过大，请更换模型后重试")
 		}
 		var payload map[string]any
-		if json.Unmarshal(raw, &payload) != nil {
+		if isGeminiGenerationPath(path) {
+			var completed bool
+			text, model, completed, err = geminiGenerationEvent(raw, usage)
+			if err == nil && !completed {
+				err = errors.New("Gemini 生成响应缺少完成标记，请重试")
+			}
+			if err == nil && text != "" && onFirstOutput != nil {
+				onFirstOutput()
+			}
+		} else if json.Unmarshal(raw, &payload) != nil {
 			err = errors.New("上游返回的不是有效 JSON 或事件流")
 		} else {
 			usage.read(payload)
@@ -153,6 +167,25 @@ func animationStream(reader io.Reader, path string, usage *AnimationUsage, onFir
 				return errors.New("动画事件流缺少完成事件，请重试")
 			}
 			completed = true
+			return nil
+		}
+		if isGeminiGenerationPath(path) {
+			text, actual, done, err := geminiGenerationEvent([]byte(value), usage)
+			if err != nil {
+				return err
+			}
+			if actual != "" {
+				model = actual
+			}
+			output.WriteString(text)
+			if text != "" && firstOutput != nil {
+				firstOutput()
+				firstOutput = nil
+			}
+			if output.Len() > 128<<10 {
+				return errors.New("生成的动画文本过大，请更换模型后重试")
+			}
+			completed = done
 			return nil
 		}
 		var event map[string]any

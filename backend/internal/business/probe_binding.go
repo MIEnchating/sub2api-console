@@ -11,6 +11,9 @@ import (
 // verify a probe credential. Display scores, history and policy are unrelated.
 type ProbeAccountBinding struct {
 	ID              string
+	Name            string
+	Platform        *string
+	AccountType     *string
 	BaseURL         *string
 	UpstreamBaseURL *string
 	Bindings        []AccountBinding
@@ -24,17 +27,17 @@ func (s *Store) ProbeAccountBinding(ctx context.Context, accountID string) (*Pro
 	result := &ProbeAccountBinding{}
 	err := s.WithReadSnapshot(ctx, func(ctx context.Context) error {
 		var metadataRaw string
-		var upstreamBaseURL sql.NullString
+		var upstreamBaseURL, upstreamType sql.NullString
 		// Match Account's stable ownership resolution, but restrict the binding
 		// aggregation to this account instead of projecting the entire directory.
-		err := s.db.QueryRowContext(ctx, `SELECT a.id,a.metadata_json,u.base_url
+		err := s.db.QueryRowContext(ctx, `SELECT a.id,a.name,a.metadata_json,u.base_url,COALESCE(u.upstream_type,a.upstream_type)
 			FROM accounts a LEFT JOIN upstreams u ON u.host=COALESCE((
 				SELECT MIN(COALESCE(primary_host.host,b.upstream_host))
 				FROM bindings b JOIN binding_identities bi ON bi.binding_id=b.id
 				LEFT JOIN upstream_identity_hosts primary_host
 				 ON primary_host.upstream_id=bi.upstream_id AND primary_host.is_primary=1
 				WHERE b.local_account_id=a.id AND TRIM(b.upstream_host)<>''
-			),a.upstream_host) WHERE a.id=?`, accountID).Scan(&result.ID, &metadataRaw, &upstreamBaseURL)
+			),a.upstream_host) WHERE a.id=?`, accountID).Scan(&result.ID, &result.Name, &metadataRaw, &upstreamBaseURL, &upstreamType)
 		if err != nil {
 			return err
 		}
@@ -43,6 +46,11 @@ func (s *Store) ProbeAccountBinding(ctx context.Context, accountID string) (*Pro
 			return err
 		}
 		result.BaseURL = accountMetadataValueText(metadata, "base_url")
+		result.Platform = accountMetadataValueText(metadata, "platform")
+		result.AccountType = accountMetadataValueText(metadata, "account_type", "type")
+		if result.AccountType == nil {
+			result.AccountType = nullString(upstreamType)
+		}
 		result.UpstreamBaseURL = nullString(upstreamBaseURL)
 		result.Bindings, err = s.accountBindings(ctx, accountID)
 		return err

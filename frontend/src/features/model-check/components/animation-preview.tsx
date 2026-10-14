@@ -11,6 +11,8 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 
+import { AnimationQualityBadge } from "./animation-quality-badge";
+import { AnimationQualityReviewPanel } from "./animation-quality-review";
 import { AnimationCanvas } from "./animation-canvas";
 import { AnimationResultMetrics } from "./animation-result-metrics";
 
@@ -36,6 +38,9 @@ export const AnimationPreview = memo(function AnimationPreview(props: {
         )}
       >
         <AnimationCanvas result={props.result} thumbnail />
+        <span className="absolute top-2 left-2 max-w-[calc(100%-1rem)] rounded bg-background/95 px-2 py-1 text-xs shadow-sm">
+          <AnimationQualityBadge prediction={props.result.quality} />
+        </span>
         <span
           className="absolute right-2 bottom-2 grid size-6 place-items-center rounded-md bg-black/60 text-white transition-colors group-hover:bg-black/80 group-focus-visible:bg-black/80"
           aria-hidden="true"
@@ -59,13 +64,14 @@ export const AnimationPreview = memo(function AnimationPreview(props: {
           <Tabs.Root defaultValue="animation" className="flex min-h-0 flex-1 flex-col gap-3">
             <Tabs.List
               aria-label="动画结果视图"
-              className="flex shrink-0 gap-1 rounded-lg bg-muted p-1"
+              className="flex shrink-0 flex-wrap gap-1 rounded-lg bg-muted p-1"
             >
               {(
                 [
                   { value: "animation", label: "动画" },
                   { value: "code", label: "代码" },
                   { value: "prompt", label: "提示词" },
+                  { value: "quality", label: "质量标注" },
                 ] as const
               ).map((tab) => (
                 <Tabs.Tab
@@ -103,6 +109,12 @@ export const AnimationPreview = memo(function AnimationPreview(props: {
               <p className="whitespace-pre-wrap text-sm leading-7 wrap-anywhere">
                 {props.result.prompt ?? "该历史记录未保存提示词"}
               </p>
+            </Tabs.Panel>
+            <Tabs.Panel
+              value="quality"
+              className="h-[min(60svh,44rem)] min-h-0 overflow-y-auto overscroll-contain rounded-lg bg-muted/20 p-2 sm:p-4"
+            >
+              <AnimationQualityReviewPanel result={props.result} />
             </Tabs.Panel>
           </Tabs.Root>
           <AnimationResultMetrics result={props.result} showUsage={false} />

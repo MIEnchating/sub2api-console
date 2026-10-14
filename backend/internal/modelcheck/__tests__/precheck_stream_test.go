@@ -14,8 +14,10 @@ func TestPrecheckAcceptsStreamingOnlyEndpoints(t *testing.T) {
 	for _, path := range []string{"/v1/responses", "/v1/chat/completions", "/v1/messages"} {
 		t.Run(path, func(t *testing.T) {
 			platform := "openai"
+			answer := "21"
 			if path == "/v1/messages" {
 				platform = "anthropic"
+				answer = "**21**"
 			}
 			f := setup(t, 1, platform, func(w http.ResponseWriter, r *http.Request) {
 				if r.URL.Path != path {
@@ -63,7 +65,9 @@ data: [DONE]
 				default:
 					_, _ = fmt.Fprint(w, `data: {"type":"message_start","message":{"model":"returned-model","usage":{"input_tokens":10}}}
 
-data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"21"}}
+data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"**2"}}
+
+data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"1**"}}
 
 data: {"type":"message_delta","usage":{"output_tokens":2}}
 
@@ -78,7 +82,7 @@ data: {"type":"message_stop"}
 				t.Fatal(err)
 			}
 			row := finished(t, f).Result["animations"].([]modelcheck.AnimationResult)[0]
-			if row.Precheck.Verdict != "passed" || row.Precheck.Questions[0].Answer != "21" || row.ResponseModel != "returned-model" {
+			if row.Precheck.Verdict != "passed" || row.Precheck.Questions[0].Answer != answer || row.ResponseModel != "returned-model" {
 				t.Fatalf("unexpected result: %+v, question: %+v", row, row.Precheck.Questions[0])
 			}
 			if row.Usage.InputTokens == nil || *row.Usage.InputTokens != 10 || row.Usage.OutputTokens == nil || *row.Usage.OutputTokens != 2 {

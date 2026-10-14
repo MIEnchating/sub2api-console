@@ -1,7 +1,7 @@
 import { QueryErrorToast } from "@/components/query-error-toast";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, Database } from "lucide-react";
+import { ArrowLeft } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useForm } from "react-hook-form";
 import { toast } from "sonner";
@@ -11,7 +11,6 @@ import {
   api,
   type AccountStatus,
   type ModelCheckAccountStatus,
-  type ModelCheckCapabilities,
   type ModelCheckRequest,
   type Task,
 } from "@/api";
@@ -32,7 +31,6 @@ import { taskPollInterval } from "@/lib/task-state";
 import { modelCheckSchema, type ModelCheckForm } from "../lib/model-check-schema";
 import { createQueuedRead } from "../lib/queued-read";
 import { taskEventIsOlder, taskEventSchema } from "../lib/task-event-schema";
-import { ModelCheckConfigurationDialog } from "./model-check-configuration-dialog";
 import { ModelCheckResult } from "./model-check-result";
 import { ModelCheckSelection } from "./model-check-selection";
 
@@ -50,15 +48,6 @@ function searchableAccount(values: Array<string | null | undefined>, query: stri
   );
 }
 
-function hasDetectionProfile(model: string, capabilities?: ModelCheckCapabilities): boolean {
-  if (capabilities?.astra_models?.includes(model)) return true;
-  if (!capabilities) return false;
-  if (capabilities.sol_models.includes(model) || capabilities.claude_standards.includes(model))
-    return true;
-  const normalizedClaude = model.replace(/(\d)-(\d)/, "$1.$2");
-  return capabilities.claude_standards.includes(normalizedClaude);
-}
-
 function mergedAccountCheckStatus(
   status: ModelCheckAccountStatus | undefined,
   loading: boolean,
@@ -69,15 +58,11 @@ function mergedAccountCheckStatus(
   return status?.status ?? null;
 }
 
-function commonDetectableModels(
-  modelLists: string[][],
-  capabilities?: ModelCheckCapabilities,
-): string[] {
+function commonDetectableModels(modelLists: string[][]): string[] {
   if (modelLists.length === 0) return [];
   const remaining = modelLists.slice(1).map((models) => new Set(models));
   return [...new Set(modelLists[0])]
     .filter((model) => remaining.every((models) => models.has(model)))
-    .filter((model) => hasDetectionProfile(model, capabilities))
     .sort((left, right) => left.localeCompare(right));
 }
 
@@ -99,7 +84,6 @@ export function RegularCheckPanel(props: {
   const queryClient = useQueryClient();
   const [taskID, setTaskID] = useState<string | null>(null);
   const [resultOpen, setResultOpen] = useState(false);
-  const [configurationOpen, setConfigurationOpen] = useState(false);
   const [taskStreamConnected, setTaskStreamConnected] = useState(false);
   const [accountQuery, setAccountQuery] = useState("");
   const [accountGroup, setAccountGroup] = useState<string | null>(null);
@@ -125,11 +109,6 @@ export function RegularCheckPanel(props: {
       toast.info("所选账号已不存在，请重新选择");
     }
   }, [accounts.data, form, selectedAccountIDs]);
-  const capabilities = useQuery({
-    queryKey: ["model-check-capabilities"],
-    queryFn: ({ signal }) => api.modelCheckCapabilities(signal),
-    staleTime: Number.POSITIVE_INFINITY,
-  });
   const modelQueries = useQueries({
     queries: selectedAccountIDs.map((accountID) => ({
       queryKey: ["model-check-account-models", accountID],
@@ -150,16 +129,10 @@ export function RegularCheckPanel(props: {
       failedModelQuery.error instanceof Error ? failedModelQuery.error.message : "账号模型读取失败";
   }
   const detectableModels =
-    modelLists.length === selectedAccountIDs.length
-      ? commonDetectableModels(modelLists, capabilities.data)
-      : [];
+    modelLists.length === selectedAccountIDs.length ? commonDetectableModels(modelLists) : [];
   const detectableModelKey = detectableModels.join("\u0000");
   const modelsReady =
-    !!capabilities.data &&
-    !capabilities.isError &&
-    !modelsRefreshing &&
-    !modelsError &&
-    modelLists.length === selectedAccountIDs.length;
+    !modelsRefreshing && !modelsError && modelLists.length === selectedAccountIDs.length;
 
   useEffect(() => {
     if (selectedAccountIDs.length > 0 && !modelsReady) return;
@@ -216,7 +189,7 @@ export function RegularCheckPanel(props: {
       setTaskID(created.id);
       queryClient.setQueryData(["model-check-task", created.id], created);
       void queryClient.invalidateQueries({ queryKey: ["tasks"] });
-      setResultOpen(false);
+      setResultOpen(true);
     },
     onError: (error) => notifyOperationError(error, "模型检测启动失败"),
   });
@@ -314,18 +287,12 @@ export function RegularCheckPanel(props: {
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-3">
-      {!props.hidePageActions ? (
+      {!props.hidePageActions && props.onBackToAccounts ? (
         <PageActions>
           {!props.hidePageActions && props.onBackToAccounts ? (
             <Button type="button" variant="outline" onClick={props.onBackToAccounts}>
               <ArrowLeft aria-hidden="true" />
               账号管理
-            </Button>
-          ) : null}
-          {!props.hidePageActions ? (
-            <Button type="button" variant="outline" onClick={() => setConfigurationOpen(true)}>
-              <Database aria-hidden="true" />
-              检测规则与题库
             </Button>
           ) : null}
         </PageActions>
@@ -354,11 +321,9 @@ export function RegularCheckPanel(props: {
           selectedAccountIDs={selectedAccountIDs}
           models={detectableModels}
           selectedModels={selectedModels}
-          modelsLoading={modelsLoading || capabilities.isLoading}
-          modelsRefreshing={modelsRefreshing || capabilities.isFetching}
-          modelsError={
-            modelsError ?? (capabilities.error instanceof Error ? capabilities.error.message : null)
-          }
+          modelsLoading={modelsLoading}
+          modelsRefreshing={modelsRefreshing}
+          modelsError={modelsError}
           rounds={rounds}
           timeoutSeconds={Number.isFinite(timeoutSeconds) ? timeoutSeconds : null}
           combinationCount={combinationCount}
@@ -368,7 +333,6 @@ export function RegularCheckPanel(props: {
             !pending &&
             !modelsRefreshing &&
             !modelsError &&
-            !capabilities.isError &&
             combinationCount > 0 &&
             combinationCount <= 100
           }
@@ -401,10 +365,7 @@ export function RegularCheckPanel(props: {
             })
           }
           onRefreshModels={() =>
-            void Promise.all([
-              ...modelQueries.map((query) => query.refetch()),
-              ...(capabilities.isError ? [capabilities.refetch()] : []),
-            ])
+            void Promise.all([...modelQueries.map((query) => query.refetch())])
           }
           onRoundsChange={(value) =>
             form.setValue("rounds", Number.isFinite(value) ? value : 1, {
@@ -438,7 +399,6 @@ export function RegularCheckPanel(props: {
           </DialogBody>
         </DialogContent>
       </Dialog>
-      <ModelCheckConfigurationDialog open={configurationOpen} onOpenChange={setConfigurationOpen} />
     </div>
   );
 }

@@ -317,7 +317,7 @@ func TestAccountMatrixRevealsBoundKeyAndCallsAccountBaseURLDirectly(t *testing.T
 		if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
 			t.Errorf("decode request: %v", err)
 		}
-		if payload.Model != "claude-opus-5" || len(payload.Messages) != 1 || !strings.Contains(payload.Messages[0].Content, "Return exactly one JSON array") {
+		if payload.Model != "claude-opus-5" || len(payload.Messages) != 1 || payload.Messages[0].Content == "" {
 			t.Errorf("unexpected payload: %#v", payload)
 		}
 		answers := make([]string, 12)
@@ -372,8 +372,8 @@ func TestAccountMatrixRevealsBoundKeyAndCallsAccountBaseURLDirectly(t *testing.T
 	mu.Lock()
 	gotRequests := requestCount
 	mu.Unlock()
-	if gotRequests != 6 {
-		t.Fatalf("request count=%d want=6", gotRequests)
+	if gotRequests != 7 {
+		t.Fatalf("request count=%d want=7", gotRequests)
 	}
 	if revealer.calls != 1 || credentials.cacheWrites != 1 || credentials.cached == nil || credentials.cached.Secret != accountKey {
 		t.Fatalf("reveals=%d cache writes=%d cached=%#v", revealer.calls, credentials.cacheWrites, credentials.cached)

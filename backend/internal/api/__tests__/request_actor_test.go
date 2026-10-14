@@ -20,8 +20,8 @@ type actorSessionBoundary struct {
 	afterRead func() error
 }
 
-func (s *actorSessionBoundary) Account(ctx context.Context, id string) (*business.AccountDetail, error) {
-	account, err := s.Store.Account(ctx, id)
+func (s *actorSessionBoundary) AccountMutationSnapshot(ctx context.Context, id string) (*business.AccountMutationSnapshot, error) {
+	account, err := s.Store.AccountMutationSnapshot(ctx, id)
 	if err != nil {
 		return nil, err
 	}

@@ -1,8 +1,25 @@
 import type { AnimationResult, Task } from "@/api";
 import { compareTimestamps } from "@/lib/time-order";
 import { z } from "zod";
+import { animationPlatforms } from "../constants";
 
 export const animationResultSchema = z.object({
+  quality: z
+    .object({
+      source: z.literal("model_review").optional(),
+      explanation: z.string().optional(),
+      reviewer_account_id: z.string().optional(),
+      settings_version: z.number().optional(),
+      reviewed_at: z.string().optional(),
+      response_model: z.string().optional(),
+      status: z.enum(["normal", "suspicious", "unknown"]),
+      score: z.number().min(0).max(1).nullable(),
+      reason: z.string().optional(),
+      benchmark: z.string(),
+      model_version: z.string().optional(),
+      model_sha256: z.string().optional(),
+    })
+    .optional(),
   manual_verdict: z
     .object({
       verdict: z.enum(["passed", "not_passed", "unmarked"]),
@@ -30,12 +47,12 @@ export const animationResultSchema = z.object({
   account_id: z.string(),
   account_name: z.string(),
   endpoint: z.string().optional(),
-  platform: z.enum(["openai", "anthropic"]).optional(),
+  platform: z.enum(animationPlatforms).optional(),
   model: z.string(),
   response_model: z.string().optional(),
   request_id: z.string(),
   status: z.enum(["succeeded", "failed"]),
-  phase: z.enum(["queued", "running", "generating", "completed"]).optional(),
+  phase: z.enum(["queued", "running", "generating", "reviewing", "completed"]).optional(),
   html: z.string().optional(),
   source: z.string().optional(),
   source_truncated: z.boolean().optional(),
@@ -187,7 +204,7 @@ function animationTaskAccountIDs(
 
 export type AnimationActivity = {
   mode?: "precheck";
-  status: "starting" | "queued" | "running" | "generating" | "waiting_input";
+  status: "starting" | "queued" | "running" | "generating" | "reviewing" | "waiting_input";
   taskID?: string;
   batchSize?: number;
   completed?: number;
@@ -203,6 +220,8 @@ export function animationActivityLabel(status: AnimationActivity["status"]): str
       return "已开始请求，等待首字";
     case "generating":
       return "已收到首字，生成中";
+    case "reviewing":
+      return "动画已生成，正在自动标注质量";
     case "waiting_input":
       return "等待检测输入";
   }
@@ -213,6 +232,7 @@ function animationActivityStatus(
   taskStatus: Task["status"],
 ): AnimationActivity["status"] {
   if (phase === "queued") return "queued";
+  if (phase === "reviewing") return "reviewing";
   if (phase === "generating") return "generating";
   if (phase === "running") return "running";
   if (taskStatus === "waiting_input") return "waiting_input";

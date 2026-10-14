@@ -22,10 +22,15 @@ type AnimationQueries = {
   failedQueries: UseQueryResult<Task>["refetch"][];
 };
 
+type AccountDetectionMode = NonNullable<AnimationRequest["mode"]>;
+
 export function useAnimationTasks(active = true) {
   const client = useQueryClient();
   const [readTask] = useState(createAnimationTaskReader);
   const [createdIDs, setCreatedIDs] = useState<string[]>([]);
+  // History is shared with scheduled jobs, group tasks and other pages. Only
+  // tasks started by this mounted page belong to its bulk cancellation control.
+  const [startedTasks, setStartedTasks] = useState(new Map<string, AccountDetectionMode>());
   const displayedIDs = useRef(new Set<string>());
   const confidenceVersions = useRef(new Map<string, string>());
   const submittingRef = useRef(new Set<string>());
@@ -127,13 +132,23 @@ export function useAnimationTasks(active = true) {
     () => collectAnimationTasks(queries.tasks, submitting, precheckSubmitting),
     [queries.tasks, submitting, precheckSubmitting],
   );
+  const cancellableTaskIDs = useMemo(() => {
+    const ids: Record<AccountDetectionMode, string[]> = { animation: [], precheck: [] };
+    for (const [id, mode] of startedTasks) {
+      if (state.activeTaskIDs.has(id)) ids[mode].push(id);
+    }
+    return ids;
+  }, [startedTasks, state.activeTaskIDs]);
   const run = useMutation({
     mutationFn: api.runAnimation,
     gcTime: 0,
-    onSuccess: (created) => {
+    onSuccess: (created, request) => {
       registerBackgroundTask(client, created);
       client.setQueryData(["model-animation", "task", created.id], created);
       setCreatedIDs((current) => [...new Set([...current, created.id])]);
+      if (!request.custom) {
+        setStartedTasks((current) => new Map(current).set(created.id, request.mode ?? "animation"));
+      }
       void client.invalidateQueries({ queryKey: ["model-animation", "history"] });
     },
     onError: (error, request) =>
@@ -189,12 +204,19 @@ export function useAnimationTasks(active = true) {
     },
     [client, ids, mutateAsync, resetMutation],
   );
-  const cancelActive = useCallback(async (): Promise<void> => {
-    const taskIDs = [...state.activeTaskIDs];
-    await Promise.all(taskIDs.map((taskID) => cancel.mutateAsync(taskID).catch(() => undefined)));
-  }, [cancel, state.activeTaskIDs]);
+  const cancelActive = useCallback(
+    async (mode: AccountDetectionMode = "animation"): Promise<void> => {
+      const taskIDs = cancellableTaskIDs[mode].filter((id) => {
+        const latest = client.getQueryData<Task>(["model-animation", "task", id]);
+        return latest !== undefined && !taskIsTerminal(latest);
+      });
+      await Promise.all(taskIDs.map((taskID) => cancel.mutateAsync(taskID).catch(() => undefined)));
+    },
+    [cancel, cancellableTaskIDs, client],
+  );
   return {
     ...state,
+    cancellableTaskIDs,
     start,
     historyError: history.isError || queries.isError,
     historyLoading: history.isPending || queries.isLoading,

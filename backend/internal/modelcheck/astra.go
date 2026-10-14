@@ -62,6 +62,9 @@ var astraIntegerPattern = regexp.MustCompile(`^[0-9]+$`)
 
 func classifyAstraAnswer(id, text string) (string, *int) {
 	text = strings.TrimSpace(text)
+	if id == "candy" {
+		text = unwrapCandyAnswer(text)
+	}
 	if text == "" {
 		return "INCONCLUSIVE", nil
 	}
@@ -79,6 +82,21 @@ func classifyAstraAnswer(id, text string) (string, *int) {
 		return "MISMATCH", &number
 	}
 	return "PARSED", &number
+}
+
+// Accept presentation-only Markdown around a single integer without extracting
+// numbers from explanations, multiple answers, or incomplete formatting.
+func unwrapCandyAnswer(text string) string {
+	for _, marker := range []string{"***", "___", "**", "__", "*", "_", "`"} {
+		if len(text) <= 2*len(marker) || !strings.HasPrefix(text, marker) || !strings.HasSuffix(text, marker) {
+			continue
+		}
+		number := text[len(marker) : len(text)-len(marker)]
+		if astraIntegerPattern.MatchString(number) {
+			return number
+		}
+	}
+	return text
 }
 
 func runAstraCheck(ctx context.Context, sender reasoningSender, request targetRequest) (map[string]any, error) {

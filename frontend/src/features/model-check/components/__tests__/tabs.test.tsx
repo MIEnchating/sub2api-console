@@ -153,10 +153,10 @@ it("前置检测使用独立 Tab 并与账号检测共享超时和账号选择",
   dispose();
 });
 
-it("模型检测页保留规则入口且不再内嵌动画页", () => {
+it("模型检测页移除题库入口且不再内嵌动画页", () => {
   const dispose = setup("41", false);
   expect(screen.getByRole("heading", { name: "模型检测" })).toBeVisible();
-  expect(screen.getByRole("button", { name: "检测规则与题库" })).toBeVisible();
+  expect(screen.queryByRole("button", { name: "检测规则与题库" })).not.toBeInTheDocument();
   expect(screen.queryByRole("tab", { name: "动画检测" })).not.toBeInTheDocument();
   expect(screen.getByRole("checkbox", { name: /选择账号 人工账号/ })).toBeChecked();
   expect(screen.queryByRole("button", { name: /选择实时流量/ })).not.toBeInTheDocument();

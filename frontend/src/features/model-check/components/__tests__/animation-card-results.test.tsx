@@ -237,7 +237,7 @@ it("较旧任务补充其他账号结果，同一账号保留最新结果", () =
   dispose();
 });
 
-it.each([0, 50])("任务进度为 %s 时仅卡片显示检测状态，取消入口留在操作行", (progress) => {
+it.each([0, 50])("后台任务进度为 %s 时显示卡片状态但不提供本页取消入口", (progress) => {
   const { dispose } = setup({
     ...task,
     status: "running",
@@ -249,42 +249,66 @@ it.each([0, 50])("任务进度为 %s 时仅卡片显示检测状态，取消入�
   const operations = within(settings).getByRole("group", { name: "动画检测操作" });
   expect(within(settings).queryByText("正在生成鹈鹕骑自行车动画")).not.toBeInTheDocument();
   expect(within(settings).queryByRole("progressbar")).not.toBeInTheDocument();
-  expect(within(operations).getByRole("button", { name: "取消任务" })).toBeEnabled();
+  expect(within(operations).queryByRole("button", { name: /取消/ })).not.toBeInTheDocument();
   expect(
     within(screen.getByRole("article", { name: "账号 甲账号" })).getByText("已开始请求，等待首字"),
   ).toBeVisible();
   dispose();
 });
 
-it("在操作行取消动画任务后恢复开始检测入口", async () => {
-  const cancelled = {
+it("本页启动动画后切换前置页签不能取消动画，回到账号页取消时不影响分组任务", async () => {
+  const background: Task = {
     ...task,
-    status: "cancelled" as const,
-    result: { ...task.result, animations: [] },
+    id: "managed-task",
+    operation: "managed-model-detection",
+    status: "running",
+    result: { account_ids: ["42"], configuration: { animation: true }, animations: [] },
+  };
+  let current: Task = {
+    ...task,
+    id: "local-task",
+    status: "running",
+    result: { account_ids: ["43"], animations: [] },
   };
   const fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-    if (init?.method === "DELETE") return Response.json({ cancelled: true });
-    if (String(input).endsWith("/model-checks/animations")) return Response.json([cancelled]);
-    return Response.json(cancelled);
+    if (init?.method === "DELETE") {
+      current = { ...current, status: "cancelled" };
+      return Response.json({ cancelled: true });
+    }
+    if (init?.method === "POST") return Response.json(current);
+    if (String(input).endsWith("/model-checks/animations"))
+      return Response.json([current, background]);
+    if (String(input).endsWith("/api/tasks/local-task")) return Response.json(current);
+    return Response.json(background);
   });
   vi.stubGlobal("fetch", fetch);
-  const { dispose } = setup({
-    ...task,
-    status: "running",
-    progress: 0,
-    result: { ...task.result, animations: [] },
-  });
+  const { dispose } = setup(task, background);
+  fireEvent.click(screen.getByRole("checkbox", { name: /检测 丙账号/ }));
+  fireEvent.click(screen.getByRole("button", { name: "开始检测（1 个账号）" }));
+  expect(await screen.findByRole("button", { name: "取消本页动画检测" })).toBeEnabled();
+  fireEvent.click(screen.getByRole("tab", { name: "前置检测" }));
+  expect(screen.queryByRole("button", { name: /取消本页/ })).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("tab", { name: "账号检测" }));
   const operations = screen.getByRole("group", { name: "动画检测操作" });
-  fireEvent.click(within(operations).getByRole("button", { name: "取消任务" }));
+  fireEvent.click(within(operations).getByRole("button", { name: "取消本页动画检测" }));
   await waitFor(() =>
     expect(fetch).toHaveBeenCalledWith(
-      expect.stringContaining("/api/tasks/task-1"),
+      "/api/tasks/local-task",
       expect.objectContaining({ method: "DELETE", credentials: "include" }),
     ),
   );
-  expect(await within(operations).findByRole("button", { name: /开始检测/ })).toBeDisabled();
+  await waitFor(() =>
+    expect(within(operations).queryByRole("button", { name: /取消本页/ })).not.toBeInTheDocument(),
+  );
   expect(
-    within(screen.getByRole("article", { name: "账号 甲账号" })).getByText(
+    fetch.mock.calls.filter(([, init]) => init?.method === "DELETE").map(([url]) => url),
+  ).toEqual(["/api/tasks/local-task"]);
+  expect(screen.getByRole("checkbox", { name: /检测 乙账号/ })).toHaveAttribute(
+    "aria-disabled",
+    "true",
+  );
+  expect(
+    within(screen.getByRole("article", { name: "账号 丙账号" })).getByText(
       "检测已取消，未返回动画",
     ),
   ).toBeVisible();

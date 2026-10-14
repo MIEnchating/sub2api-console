@@ -1,6 +1,10 @@
 import { expect, it } from "vitest";
 import { account } from "@/features/accounts/__tests__/fixtures";
-import { defaultAnimationFilters, filterAnimationAccounts } from "../animation-filters";
+import {
+  defaultAnimationFilters,
+  filterAnimationAccounts,
+  selectableDetectionAccountIDs,
+} from "../animation-filters";
 
 const accounts = [
   {
@@ -29,6 +33,14 @@ const accounts = [
     manual_priority: 3,
   },
 ];
+
+it("Gemini 账号可加入批量检测，执行中的账号仍不可重复选择", () => {
+  const gemini = [
+    { ...account, id: "gemini-ready", platform: "gemini" },
+    { ...account, id: "gemini-busy", platform: "gemini" },
+  ];
+  expect(selectableDetectionAccountIDs(gemini, new Set(["gemini-busy"]))).toEqual(["gemini-ready"]);
+});
 
 it("组合筛选使用交集，手动控制值为零的账号也能匹配", () => {
   expect(

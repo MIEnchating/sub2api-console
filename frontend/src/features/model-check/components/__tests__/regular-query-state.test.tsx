@@ -12,6 +12,7 @@ afterEach(() => {
   clients.splice(0).forEach((client) => client.clear());
   toast.dismiss();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 function setup(accountsCached = true, capabilitiesCached = true) {
@@ -63,17 +64,20 @@ it("账号首次读取失败时提供重新读取入口并在恢复后展示账�
   view.client.clear();
 });
 
-it("检测能力首次读取失败后刷新模型会重新读取能力并恢复可检测模型", async () => {
+it("旧画像能力接口不可用时仍可选择账号支持的新模型", async () => {
+  vi.stubGlobal("PointerEvent", MouseEvent);
   const capabilities = vi
     .spyOn(api, "modelCheckCapabilities")
-    .mockRejectedValue(new Error("能力读取失败"));
-  vi.spyOn(api, "accountModels").mockResolvedValue({ models: ["gpt-5.6-sol"] });
+    .mockRejectedValue(new Error("旧接口不可用"));
+  vi.spyOn(api, "accountModels").mockResolvedValue({ models: ["new-model"] });
   const view = setup(true, false);
-  expect(await screen.findByText("能力读取失败")).toBeVisible();
   fireEvent.click(screen.getByRole("button", { name: "全选账号" }));
-  capabilities.mockResolvedValue({ claude_standards: [], sol_models: ["gpt-5.6-sol"] });
   fireEvent.click(screen.getByRole("button", { name: "刷新模型" }));
-  expect(await screen.findByRole("checkbox", { name: /gpt-5.6-sol/ })).toBeVisible();
+  const model = await screen.findByRole("checkbox", { name: /new-model/ });
+  fireEvent.click(model);
+  expect(model).toBeChecked();
+  expect(screen.getByRole("button", { name: /开始检测/ })).toBeEnabled();
+  expect(capabilities).not.toHaveBeenCalled();
+  expect(screen.getByText(/计划 7 项检测/)).toBeVisible();
   view.unmount();
-  view.client.clear();
 });

@@ -7,6 +7,7 @@ import (
 
 // Missing usage remains nil; a reported zero is different from an absent value.
 type AnimationUsage struct {
+	gemini          bool
 	InputTokens     *int64 `json:"input_tokens,omitempty"`
 	OutputTokens    *int64 `json:"output_tokens,omitempty"`
 	TotalTokens     *int64 `json:"total_tokens,omitempty"`
@@ -88,6 +89,14 @@ func animationTokenCount(value any) *int64 {
 func (usage *AnimationUsage) complete() {
 	if usage != nil && usage.TotalTokens == nil && usage.InputTokens != nil && usage.OutputTokens != nil {
 		total := *usage.InputTokens + *usage.OutputTokens
+		// Gemini candidatesTokenCount excludes thoughts. Without that count we
+		// cannot derive a reliable total; keep absent metadata absent.
+		if usage.gemini {
+			if usage.ReasoningTokens == nil {
+				return
+			}
+			total += *usage.ReasoningTokens
+		}
 		if total <= 1<<53-1 {
 			usage.TotalTokens = &total
 		}

@@ -16,6 +16,8 @@ import (
 var migratedProviders = []struct{ id, name, model, url, fixture string }{
 	{"kimi", "Kimi", "kimi-k3", pricing.KimiURL, "kimi-chat.md"},
 	{"minimax", "MiniMax", "MiniMax-M3", pricing.MiniMaxURL, "minimax.md"},
+	{"qwen", "Qwen", "qwen-turbo", pricing.QwenURL, "qwen.html"},
+	{"gemini", "Gemini", "gemini-4-argon", pricing.GeminiURL, "gemini.html"},
 }
 
 func setupOfficialRefresh(t *testing.T, address, model string, page *string) *newapimanagement.Service {
@@ -26,7 +28,7 @@ func setupOfficialRefresh(t *testing.T, address, model string, page *string) *ne
 		switch {
 		case r.URL.Host == "raw.githubusercontent.com":
 			body = `{"` + model + `":{"input_cost_per_token":1,"output_cost_per_token":2}}`
-		case r.URL.String() == address+".md":
+		case r.URL.String() == address || r.URL.String() == address+".md":
 			body = *page
 		default:
 			return nil, nil
