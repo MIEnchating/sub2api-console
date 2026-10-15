@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { setupKuma } from "../kuma-fixture";
+import { waitForLayoutAnimations } from "../layout-motion";
 import {
   statusOptions,
   statusPage,
@@ -35,7 +36,7 @@ test("状态页编辑立即在弹窗内加载，列表位置不变且取消后�
   });
   await page.goto("/uptime-kuma/status-pages");
   const table = page.locator('table[aria-label="状态页管理"]');
-  await expect(table).toBeVisible();
+  await waitForLayoutAnimations(table);
   const original = (await table.boundingBox())!;
   await page.getByRole("button", { name: "编辑", exact: true }).click();
   await requestStarted;
