@@ -51,12 +51,13 @@ it("启用自动标注后要求账号和模型，保存稳定账号及配置版�
   expect(account).toHaveAttribute("aria-invalid", "true");
   expect(writes).toEqual([]);
   await user.click(account);
-  await user.click(screen.getByRole("option", { name: "评审账号甲 · 41" }));
+  await user.click(await screen.findByRole("option", { name: "评审账号甲 · 41" }));
+  await waitFor(() => expect(account).toHaveFocus());
   await user.click(screen.getByRole("button", { name: "获取模型" }));
   const model = screen.getByRole("combobox", { name: "评审模型" });
   await waitFor(() => expect(model).toBeEnabled());
   await user.click(model);
-  await user.click(screen.getByRole("option", { name: "review-model" }));
+  await user.click(await screen.findByRole("option", { name: "review-model" }));
   await user.click(screen.getByRole("button", { name: "保存设置" }));
   await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
   expect(writes).toEqual([
@@ -105,7 +106,7 @@ it("单独保存评审超时保留账号模型草稿，随后保存设置使用�
   await user.click(screen.getByRole("button", { name: "获取模型" }));
   await waitFor(() => expect(model).toBeEnabled());
   await user.click(model);
-  await user.click(screen.getByRole("option", { name: "draft-model" }));
+  await user.click(await screen.findByRole("option", { name: "draft-model" }));
   const timeout = await screen.findByRole("spinbutton", { name: "评审超时（秒）" });
   await user.clear(timeout);
   await user.type(timeout, "90");
