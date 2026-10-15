@@ -165,11 +165,23 @@ func (m *CaptchaManager) PrepareCredential(ctx context.Context, record configsto
 	if credential.Username == nil || credential.Password == nil || strings.TrimSpace(*credential.Username) == "" || *credential.Password == "" {
 		return CaptchaChallenge{}, errors.New("图片验证码登录缺少完整用户名和密码")
 	}
+	if credential.ID == "" {
+		credential.ID = configstore.NewVaultEntryID()
+	} else if saveToVault {
+		existing, err := m.private.VaultEntry(ctx, credential.ID)
+		if err != nil {
+			return CaptchaChallenge{}, err
+		}
+		if existing == nil {
+			return CaptchaChallenge{}, configstore.ErrVaultEntryMissing
+		}
+		credential.Entry = existing.Entry
+	}
 	return m.prepareCredential(ctx, record, credential, saveToVault, parentTaskID)
 }
 
 func (m *CaptchaManager) prepareCredential(ctx context.Context, record configstore.AuthRecord, credential configstore.VaultEntry, saveToVault bool, parentTaskID *string) (CaptchaChallenge, error) {
-	host, entry := configstore.CanonicalHost(record.Host), strings.TrimSpace(credential.Entry)
+	host, entry := configstore.CanonicalHost(record.Host), strings.TrimSpace(credential.ID)
 	record.Host = host
 	if !strings.EqualFold(record.UpstreamType, "sub2api") {
 		return CaptchaChallenge{}, errors.New("普通图片验证码恢复当前只支持 Sub2API 上游")
@@ -186,7 +198,7 @@ func (m *CaptchaManager) prepareCredential(ctx context.Context, record configsto
 		expectedAuth = &snapshot
 	}
 	var expectedVault *configstore.VaultEntry
-	if saveToVault {
+	if credential.ID != "" {
 		expectedVault, err = m.private.VaultEntry(ctx, entry)
 		if err != nil {
 			return CaptchaChallenge{}, err
@@ -258,7 +270,7 @@ func (m *CaptchaManager) prepareCredential(ctx context.Context, record configsto
 	expires := m.now().UTC().Add(time.Duration(expiresSeconds) * time.Second)
 	public := CaptchaChallenge{
 		ChallengeID: id, Host: host, ImageData: image, ExpiresAt: expires.Format(time.RFC3339Nano),
-		Credential: map[string]string{"entry": entry}, InteractionKind: "image_captcha_ocr",
+		Credential: map[string]string{"entry_id": entry}, InteractionKind: "image_captcha_ocr",
 	}
 	stored := storedChallenge{
 		public: public, record: record, baseURL: strings.TrimRight(record.BaseURL, "/"), entry: entry, captchaID: captchaID,
@@ -358,12 +370,16 @@ func (m *CaptchaManager) Submit(ctx context.Context, challengeID, code string) (
 		return CaptchaResult{}, submitCtx.Err()
 	}
 	m.mu.Unlock()
-	vaultEntry := strings.TrimSpace(credential.Entry)
+	var vaultEntry *string
+	if challenge.saveToVault || challenge.expectedVault != nil {
+		id := credential.ID
+		vaultEntry = &id
+	}
 	return CaptchaResult{
 		Success: true, Host: challenge.public.Host, ProfileStatus: "verified", Balance: nil,
 		Concurrency: nil, Keys: len(catalog.Keys), Groups: len(catalog.Groups), Stored: true,
 		InteractionKind: "image_captcha_ocr", ParentTaskID: challenge.parentTaskID,
-		AuthMode: verified.AuthMode, VaultEntry: &vaultEntry,
+		AuthMode: verified.AuthMode, VaultEntry: vaultEntry,
 	}, nil
 }
 
@@ -375,8 +391,8 @@ func (m *CaptchaManager) commitVerified(
 ) error {
 	host := configstore.CanonicalHost(verified.Host)
 	resources := []string{mutationguard.Upstream(host)}
-	if challenge.saveToVault {
-		resources = append(resources, mutationguard.Vault(credential.Entry))
+	if challenge.saveToVault || challenge.expectedVault != nil {
+		resources = append(resources, mutationguard.Vault(credential.ID))
 	}
 	guarded, release, err := mutationguard.Acquire(ctx, m.mutationRepository, resources...)
 	if err != nil {
@@ -407,14 +423,18 @@ func (m *CaptchaManager) commitVerified(
 	if !reflect.DeepEqual(current, challenge.expectedAuth) {
 		return errors.New("验证码登录已复核，但鉴权配置已变更，请重新准备验证码")
 	}
-	if challenge.saveToVault {
-		currentVault, err := m.private.VaultEntry(guarded, credential.Entry)
+	if challenge.saveToVault || challenge.expectedVault != nil {
+		currentVault, err := m.private.VaultEntry(guarded, credential.ID)
 		if err != nil {
 			return err
 		}
 		if currentVault != nil {
 			normalized := cloneVaultEntry(*currentVault)
 			currentVault = &normalized
+		}
+		if currentVault != nil && challenge.expectedVault != nil {
+			credential.Entry = currentVault.Entry
+			currentVault.Entry = challenge.expectedVault.Entry
 		}
 		if !reflect.DeepEqual(currentVault, challenge.expectedVault) {
 			return errors.New("验证码登录已复核，但密码箱项已变更，请重新准备验证码")

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/MIEnchating/sub2api-console/backend/internal/modelrequest"
 	"io"
 	"net/http"
 	"strings"
@@ -114,7 +115,7 @@ func TestOAuthCheckSendsBoundTokenOnlyToOfficialEndpoint(t *testing.T) {
 		if input["role"] != "user" || !strings.Contains(input["content"].(string), "Return the number seven.") {
 			t.Error("active behavior profile was not used")
 		}
-		if _, ok := request.Context().Deadline(); !ok {
+		if _, ok := modelrequest.ExecutionDeadline(request.Context()); !ok {
 			t.Error("OAuth request has no timeout")
 		}
 		return oauthResponse(http.StatusOK, "text/event-stream", "data: {\"type\":\"response.output_text.delta\",\"delta\":\"[\\\"7\\\"]\"}\n\ndata: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"model\":\"fixture-sol\"}}\n\n"), nil

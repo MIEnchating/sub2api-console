@@ -2,10 +2,10 @@ package modelcheck
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/MIEnchating/sub2api-console/backend/internal/modelrequest"
 	"io"
 	"net/http"
 	"strings"
@@ -18,22 +18,17 @@ func sendAnimation(ctx context.Context, client *http.Client, credential directCr
 	if credential.Platform == "gemini" {
 		return sendGeminiGeneration(ctx, client, credential, model, prompt, requestID, 16384, usage, onFirstOutput)
 	}
-	path := "/v1/responses"
-	body := map[string]any{"model": model, "input": prompt, "max_output_tokens": 16384, "stream": true, "reasoning": map[string]string{"effort": "low"}}
+	protocol := modelrequest.Responses
 	if credential.Platform == "anthropic" {
-		path = "/v1/messages"
-		body = map[string]any{"model": model, "messages": []map[string]string{{"role": "user", "content": prompt}}, "max_tokens": 16384, "stream": true, "output_config": map[string]string{"effort": "low"}}
+		protocol = modelrequest.Anthropic
 	}
-	text, responseModel, status, raw, retryAfter, err := animationHTTP(ctx, client, credential, path, body, requestID, usage, onFirstOutput)
+	parameters := modelrequest.Parameters{Model: model, Prompt: prompt, MaxOutputTokens: 16384, Stream: true, ReasoningEffort: "low", IncludeUsage: true}
+	text, responseModel, status, raw, retryAfter, err := animationHTTP(ctx, client, credential, protocol, parameters, requestID, usage, onFirstOutput)
 	if err != nil {
 		return "", "", animationVisibleError(err, credential.Secret)
 	}
-	if credential.Platform != "anthropic" && responsesEndpointUnsupported(status, raw) {
-		path = "/v1/chat/completions"
-		body = map[string]any{"model": model, "messages": []map[string]string{{"role": "user", "content": prompt}}, "max_tokens": 16384, "stream": true}
-		body["reasoning_effort"] = "low"
-		body["stream_options"] = map[string]bool{"include_usage": true}
-		text, responseModel, status, raw, retryAfter, err = animationHTTP(ctx, client, credential, path, body, requestID, usage, onFirstOutput)
+	if protocol == modelrequest.Responses && responsesEndpointUnsupported(status, raw) {
+		text, responseModel, status, raw, retryAfter, err = animationHTTP(ctx, client, credential, modelrequest.Chat, parameters, requestID, usage, onFirstOutput)
 		if err != nil {
 			return "", "", animationVisibleError(err, credential.Secret)
 		}
@@ -47,28 +42,14 @@ func sendAnimation(ctx context.Context, client *http.Client, credential directCr
 	return text, responseModel, nil
 }
 
-func animationHTTP(ctx context.Context, client *http.Client, credential directCredential, path string, body any, requestID string, usage *AnimationUsage, onFirstOutput func()) (string, string, int, []byte, http.Header, error) {
-	endpoint, err := directEndpoint(credential.BaseURL, path)
+func animationHTTP(ctx context.Context, client *http.Client, credential directCredential, protocol modelrequest.Protocol, parameters modelrequest.Parameters, requestID string, usage *AnimationUsage, onFirstOutput func()) (string, string, int, []byte, http.Header, error) {
+	path, _, err := modelrequest.Build(protocol, parameters)
 	if err != nil {
-		return "", "", 0, nil, nil, errors.New("账号 Base URL 无效")
+		return "", "", 0, nil, nil, err
 	}
-	raw, _ := json.Marshal(body)
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(raw))
-	if err != nil {
-		return "", "", 0, nil, nil, errors.New("动画检测请求创建失败")
-	}
-	request.Header.Set("Content-Type", "application/json")
-	request.Header.Set("Accept", "text/event-stream, application/json")
-	request.Header.Set("X-Request-ID", requestID)
-	if credential.Platform == "anthropic" {
-		request.Header.Set("x-api-key", credential.Secret)
-		request.Header.Set("anthropic-version", "2023-06-01")
-	} else if credential.Platform == "gemini" {
-		request.Header.Set("x-goog-api-key", credential.Secret)
-	} else {
-		request.Header.Set("Authorization", "Bearer "+credential.Secret)
-	}
-	response, err := client.Do(request)
+	path, _, _ = strings.Cut(path, "?")
+	response, err := modelrequest.Open(ctx, client, modelrequest.Request{BaseURL: credential.BaseURL, Secret: credential.Secret, Protocol: protocol, Parameters: parameters, Headers: http.Header{"X-Request-Id": []string{requestID}}})
+	var raw []byte
 	if err != nil {
 		return "", "", 0, nil, nil, animationRetryableReadError(animationReadError(err))
 	}
@@ -89,7 +70,7 @@ func animationHTTP(ctx context.Context, client *http.Client, credential directCr
 		return "", "", response.StatusCode, nil, response.Header, animationRetryableReadError(animationReadError(err))
 	}
 	var text, model string
-	if !jsonResponse {
+	if !jsonResponse && parameters.Stream {
 		text, model, err = animationStream(reader, path, usage, onFirstOutput)
 	} else {
 		raw, err = io.ReadAll(io.LimitReader(reader, maximumDirectResponseBytes+1))

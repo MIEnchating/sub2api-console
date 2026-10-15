@@ -6,6 +6,20 @@ import { animationPlatforms } from "../constants";
 export const animationResultSchema = z.object({
   quality: z
     .object({
+      rubric_version: z.string().optional(),
+      basis: z
+        .array(z.object({ requirement: z.string(), evidence: z.string(), assessment: z.string() }))
+        .optional(),
+      issues: z
+        .array(
+          z.object({
+            severity: z.enum(["major", "minor"]),
+            scope: z.enum(["subject", "motion", "rendering", "secondary"]),
+            evidence: z.string(),
+            impact: z.string(),
+          }),
+        )
+        .optional(),
       source: z.literal("model_review").optional(),
       explanation: z.string().optional(),
       reviewer_account_id: z.string().optional(),
@@ -18,6 +32,19 @@ export const animationResultSchema = z.object({
       benchmark: z.string(),
       model_version: z.string().optional(),
       model_sha256: z.string().optional(),
+    })
+    .optional(),
+  quality_prediction_sha256: z.string().optional(),
+  quality_annotation: z
+    .object({
+      source: z.enum(["manual", "confirmed_auto"]).optional(),
+      prediction_sha256: z.string().optional(),
+      label: z.enum(["normal", "suspicious", "unknown"]),
+      reason: z.string(),
+      source_group: z.string(),
+      version: z.number(),
+      updated_at: z.string(),
+      updated_by: z.string(),
     })
     .optional(),
   manual_verdict: z
@@ -120,7 +147,16 @@ function animationTaskRows(
     if (result.phase && result.phase !== "completed") phases.set(result.account_id, result.phase);
     // Older managed tasks persisted their final rows with the last streaming
     // phase. A terminal task proves that the row is no longer in flight.
-    if (result.phase && result.phase !== "completed" && !terminalTaskStatuses.has(task.status))
+    const generated =
+      result.phase === "reviewing" &&
+      result.status === "succeeded" &&
+      Boolean(result.html || result.svg);
+    if (
+      result.phase &&
+      result.phase !== "completed" &&
+      !generated &&
+      !terminalTaskStatuses.has(task.status)
+    )
       continue;
     const isPrecheck =
       result.mode === "precheck" ||
@@ -209,6 +245,27 @@ export type AnimationActivity = {
   batchSize?: number;
   completed?: number;
 };
+
+export function animationQualityPending(result: AnimationResult): boolean {
+  return (
+    result.phase === "reviewing" &&
+    Boolean(result.source_task_status && !terminalTaskStatuses.has(result.source_task_status))
+  );
+}
+
+export function animationWaitingForGeneration(
+  result: AnimationResult,
+  activity?: AnimationActivity,
+): boolean {
+  if (!activity) return false;
+  // A different model may still be running in this task. Keep this model's
+  // generated result visible, but never present a previous task as the new run.
+  return (
+    !activity.taskID ||
+    result.source_task_id !== activity.taskID ||
+    (result.phase !== "completed" && result.phase !== "reviewing" && result.phase !== undefined)
+  );
+}
 
 export function animationActivityLabel(status: AnimationActivity["status"]): string {
   switch (status) {
@@ -303,13 +360,16 @@ export function collectAnimationTasks(
     if (task.status !== "queued" && task.status !== "running" && task.status !== "waiting_input")
       continue;
     activeTaskIDs.add(task.id);
+    const completedAccounts = [...taskResults.values()].filter(
+      (result) => result.phase !== "reviewing",
+    ).length;
     for (const id of ids) {
       // The backend reserves the batch's accounts until the entire task finishes.
       busyIDs.add(id);
       const expectedModels = targets.get(id)?.models;
       const finishedModels = [
         ...(modes.includes(false) ? rows.modelAnimations : rows.modelPrechecks).values(),
-      ].filter((result) => result.account_id === id).length;
+      ].filter((result) => result.account_id === id && result.phase !== "reviewing").length;
       if (
         modes.length > 0 &&
         (!taskResults.has(id) || finishedModels < (expectedModels?.length ?? 1))
@@ -321,7 +381,7 @@ export function collectAnimationTasks(
           status: animationActivityStatus(rows.phases.get(id), task.status),
           taskID: task.id,
           batchSize: ids.size,
-          completed: taskResults.size,
+          completed: completedAccounts,
         });
     }
   }

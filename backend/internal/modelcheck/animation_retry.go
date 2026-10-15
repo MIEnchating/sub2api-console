@@ -110,7 +110,7 @@ func (s *Service) runAnimationWithRetry(ctx context.Context, account selectedAcc
 		result.ReasoningEffort = "medium"
 		result.Prompt = ""
 		result.Usage = &AnimationUsage{}
-		started, err := s.runAnimationTarget(ctx, account, timeout, custom, questions, result, onPhase...)
+		started, err := s.runAnimationTarget(ctx, account, time.Duration(timeout)*time.Second, time.Duration(timeout)*time.Second, custom, questions, result, onPhase...)
 		result.DurationMS = started.Milliseconds()
 		result.GenerationDurationMS = result.DurationMS
 		result.Usage.complete()
@@ -118,10 +118,15 @@ func (s *Service) runAnimationWithRetry(ctx context.Context, account selectedAcc
 	}
 	requestID := result.RequestID
 	var elapsed time.Duration
+	budget := time.Duration(timeout) * time.Second
 	for attempt := 0; attempt < animationMaximumAttempts; attempt++ {
 		if err := ctx.Err(); err != nil {
 			result.DurationMS = elapsed.Milliseconds()
 			return err
+		}
+		if elapsed >= budget {
+			result.DurationMS = elapsed.Milliseconds()
+			return context.DeadlineExceeded
 		}
 		result.RetryCount = attempt
 		result.RequestID = requestID
@@ -135,12 +140,15 @@ func (s *Service) runAnimationWithRetry(ctx context.Context, account selectedAcc
 			}
 		}
 		result.Usage = &AnimationUsage{}
-		attemptDuration, err := s.runAnimationTarget(ctx, account, timeout, custom, questions, result, onPhase...)
+		attemptDuration, err := s.runAnimationTarget(ctx, account, budget-elapsed, budget, custom, questions, result, onPhase...)
 		elapsed += attemptDuration
 		result.DurationMS = elapsed.Milliseconds()
 		result.GenerationDurationMS = attemptDuration.Milliseconds()
 		result.Usage.complete()
 		if err == nil {
+			// Publish generation independently from the optional quality review.
+			result.Status = "succeeded"
+			result.CompletedAt = time.Now().UTC().Format(time.RFC3339Nano)
 			reviewStarted := time.Now()
 			quality := s.autoAnimationQuality(ctx, *result, func() {
 				result.Phase = "reviewing"
@@ -159,7 +167,7 @@ func (s *Service) runAnimationWithRetry(ctx context.Context, account selectedAcc
 		if !retry || attempt+1 == animationMaximumAttempts {
 			return err
 		}
-		timer := time.NewTimer(delay)
+		timer := time.NewTimer(min(delay, max(budget-elapsed, 0)))
 		waitStarted := time.Now()
 		select {
 		case <-ctx.Done():

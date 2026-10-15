@@ -33,6 +33,7 @@ type AccountRecentResult struct {
 }
 
 type AccountStatus struct {
+	UpstreamExcluded            bool                       `json:"upstream_excluded"`
 	ProbePlaceholderAt          *string                    `json:"probe_placeholder_at,omitempty"`
 	ProbePlaceholder            *ProbePlaceholder          `json:"probe_placeholder,omitempty"`
 	ManualFused                 bool                       `json:"manual_fused"`
@@ -353,7 +354,8 @@ func (s *Store) accountProjectionsWithOptions(ctx context.Context, options accou
 		ownership.upstream_host,ownership.upstream_id,COALESCE(ownership.identity_count,0),COALESCE(u.upstream_type,a.upstream_type),u.base_url,a.schedulable,a.priority,
 		a.load_factor,a.concurrency,a.multiplier,a.balance,a.paused,a.paused_reason,a.routing_state,a.health_status,
 		a.failure_streak,a.recovery_pass_streak,a.target_priority,a.target_load_factor,a.target_schedulable,
-		a.target_concurrency,a.metadata_json,m.priority,m.sync_balance_multiplier,placeholder.observed_at,placeholder.value_json FROM accounts a
+		a.target_concurrency,a.metadata_json,m.priority,m.sync_balance_multiplier,placeholder.observed_at,placeholder.value_json,CASE WHEN excluded_account.id IS NULL THEN 0 ELSE 1 END FROM accounts a
+		LEFT JOIN (` + excludedAccountIDsSQL + `) excluded_account ON excluded_account.id=a.id
 		LEFT JOIN (
 			SELECT b.local_account_id,MIN(COALESCE(primary_host.host,b.upstream_host)) AS upstream_host,
 				MIN(bi.upstream_id) AS upstream_id,
@@ -393,7 +395,7 @@ func (s *Store) accountProjectionsWithOptions(ctx context.Context, options accou
 			&upstreamType, &upstreamBaseURL, &schedulable, &priority,
 			&loadFactor, &concurrency, &multiplier, &balance, &paused, &pausedReason, &routingState,
 			&healthStatus, &failureStreak, &recoveryPassStreak, &targetPriority, &targetLoadFactor,
-			&targetSchedulable, &targetConcurrency, &item.metadataRaw, &manualPriority, &manualSyncBalanceMultiplier, &placeholderAt, &placeholderValue,
+			&targetSchedulable, &targetConcurrency, &item.metadataRaw, &manualPriority, &manualSyncBalanceMultiplier, &placeholderAt, &placeholderValue, &item.UpstreamExcluded,
 		); err != nil {
 			return nil, err
 		}

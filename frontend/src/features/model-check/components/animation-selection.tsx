@@ -101,7 +101,10 @@ export function AnimationSelection(props: {
     selectedResultModel && resultModels.includes(selectedResultModel)
       ? selectedResultModel
       : resultModels[0];
-  const accountIDs = useMemo(() => new Set(accounts.map((account) => account.id)), [accounts]);
+  const accountIDs = useMemo(
+    () => new Set(selectableDetectionAccountIDs(accounts, new Set())),
+    [accounts],
+  );
   const availableSelected = useMemo(
     () => selected.filter((id) => accountIDs.has(id) && !props.busyIDs.has(id)),
     [selected, accountIDs, props.busyIDs],
@@ -134,7 +137,10 @@ export function AnimationSelection(props: {
         scrollRegion.getBoundingClientRect().top - scrollForm.getBoundingClientRect().top;
     }
   }, [pagination.currentPage, pagination.pageSize, filters]);
-  const selectedIDs = useMemo(() => new Set(selected), [selected]);
+  const selectedIDs = useMemo(
+    () => new Set(selected.filter((id) => accountIDs.has(id))),
+    [selected, accountIDs],
+  );
   const schedules = useMemo(
     () =>
       new Map(
@@ -158,6 +164,7 @@ export function AnimationSelection(props: {
   if (precheckMode && !props.pending) startLabel = `前置检测（${availableSelected.length}）`;
   const toggle = useCallback(
     (id: string, checked: boolean): void => {
+      if (checked && !accountIDs.has(id)) return;
       const current = form.getValues("account_ids");
       form.setValue(
         "account_ids",
@@ -165,7 +172,7 @@ export function AnimationSelection(props: {
         { shouldValidate: true },
       );
     },
-    [form],
+    [form, accountIDs],
   );
   return (
     <form
@@ -206,7 +213,7 @@ export function AnimationSelection(props: {
         <div
           role="group"
           aria-label={precheckMode ? "前置检测操作" : "动画检测操作"}
-          className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2 border-t bg-muted/20 px-3 py-2 sm:px-4"
+          className="flex min-w-0 flex-wrap items-start gap-2 border-t bg-muted/20 px-3 py-2 sm:px-4"
         >
           <div className="flex shrink-0 items-center gap-2">
             <Tooltip>
@@ -249,14 +256,18 @@ export function AnimationSelection(props: {
           </div>
           {!precheckMode ? <AnimationPromptDialog disabled={props.pending} /> : null}
           {props.taskRetry}
-          <AnimationModelSettings form={props.form} pending={false} />
+          <AnimationModelSettings
+            form={props.form}
+            pending={props.pending}
+            mode={precheckMode ? "precheck" : "animation"}
+          />
           <div className="ml-auto flex min-w-0 flex-wrap items-center justify-end gap-2">
             {props.onBatchSchedule && (
               <Button
                 type="button"
                 variant="outline"
                 disabled={
-                  !props.schedules.isSuccess || selected.length === 0 || selected.length > 1000
+                  !props.schedules.isSuccess || selectedIDs.size === 0 || selectedIDs.size > 1000
                 }
                 onClick={() =>
                   props.onBatchSchedule?.(accounts.filter((account) => selectedIDs.has(account.id)))

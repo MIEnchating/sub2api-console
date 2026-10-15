@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/MIEnchating/sub2api-console/backend/internal/modelrequest"
 	"net/http"
 	"strings"
 )
@@ -16,12 +17,6 @@ type geminiPart struct {
 type geminiContent struct {
 	Role  string       `json:"role,omitempty"`
 	Parts []geminiPart `json:"parts"`
-}
-type geminiGenerationRequest struct {
-	Contents         []geminiContent `json:"contents"`
-	GenerationConfig struct {
-		MaxOutputTokens int `json:"maxOutputTokens"`
-	} `json:"generationConfig"`
 }
 type geminiGenerationResponse struct {
 	ModelVersion string `json:"modelVersion"`
@@ -50,19 +45,16 @@ func geminiModelID(model string) (string, error) {
 }
 
 func isGeminiGenerationPath(path string) bool {
-	return strings.HasPrefix(path, "/v1beta/models/") && strings.HasSuffix(path, ":streamGenerateContent")
+	return strings.HasPrefix(path, "/v1beta/models/") && (strings.HasSuffix(path, ":streamGenerateContent") || strings.HasSuffix(path, ":generateContent"))
 }
 
-func sendGeminiGeneration(ctx context.Context, client *http.Client, credential directCredential, model, prompt, requestID string, budget int, usage *AnimationUsage, onFirstOutput func()) (string, string, error) {
-	id, err := geminiModelID(model)
-	if err != nil {
-		return "", "", err
+func sendGeminiGeneration(ctx context.Context, client *http.Client, credential directCredential, model, prompt, requestID string, budget int, usage *AnimationUsage, onFirstOutput func(), streaming ...bool) (string, string, error) {
+	stream := true
+	if len(streaming) > 0 {
+		stream = streaming[0]
 	}
-	body := geminiGenerationRequest{Contents: []geminiContent{{Role: "user", Parts: []geminiPart{{Text: prompt}}}}}
-	// Gemini model families support different thinking controls. Use their native
-	// defaults instead of sending OpenAI effort fields or guessing model capability.
-	body.GenerationConfig.MaxOutputTokens = budget
-	text, actual, status, raw, header, err := animationHTTP(ctx, client, credential, "/v1beta/models/"+id+":streamGenerateContent", body, requestID, usage, onFirstOutput)
+	parameters := modelrequest.Parameters{Model: model, Prompt: prompt, MaxOutputTokens: budget, Stream: stream}
+	text, actual, status, raw, header, err := animationHTTP(ctx, client, credential, modelrequest.Gemini, parameters, requestID, usage, onFirstOutput)
 	if err != nil {
 		return "", "", animationVisibleError(err, credential.Secret)
 	}

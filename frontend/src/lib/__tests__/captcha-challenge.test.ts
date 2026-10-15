@@ -23,7 +23,7 @@ describe("captchaChallengeFromTask", () => {
       host: "api.example.test",
       image_data: "data:image/png;base64,AA==",
       expires_at: "2026-08-24T00:05:00Z",
-      credential: { entry: "primary" },
+      credential: { entry_id: "primary" },
       interaction_kind: "image_captcha_ocr",
     };
 

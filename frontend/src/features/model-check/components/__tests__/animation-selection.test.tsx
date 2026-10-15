@@ -21,6 +21,8 @@ function setup(): {
 } {
   const client = createConsoleQueryClient();
   seedDictionaries(client);
+  client.setQueryData(["detection-timeout", "animation"], { timeout_seconds: 120, version: 0 });
+  client.setQueryData(["detection-timeout", "precheck"], { timeout_seconds: 120, version: 0 });
   client.setDefaultOptions({ queries: { retry: false, staleTime: Infinity } });
   client.setQueryData(
     ["accounts"],
@@ -87,7 +89,7 @@ it("选择多个账号和统一模型后直接按稳定 ID 创建批量任务且
           { account_id: "41", model: "custom-model" },
           { account_id: "42", model: "custom-model" },
         ],
-        timeout_seconds: 120,
+        timeout_seconds: 0,
       },
     ]),
   );
@@ -151,7 +153,7 @@ it("仅选择账号即可提交默认模型，无需填写模型", async () => {
     expect(posts).toEqual([
       {
         targets: [{ account_id: "41", model: "gpt-6-astra" }],
-        timeout_seconds: 120,
+        timeout_seconds: 0,
       },
     ]),
   );
@@ -191,10 +193,10 @@ it("没有字段错误或模型读取提示时不渲染提示占位区", () => {
 it("默认模型无校验错误，超时字段错误不会覆盖主体", async () => {
   const view = setup();
   fireEvent.click(screen.getByRole("checkbox", { name: /检测 甲账号/ }));
-  fireEvent.change(screen.getByRole("spinbutton", { name: "请求超时（秒）" }), {
+  fireEvent.change(screen.getByRole("spinbutton", { name: "动画超时（秒）" }), {
     target: { value: "1" },
   });
-  fireEvent.click(screen.getByRole("button", { name: "开始检测（1 个账号）" }));
+  fireEvent.click(screen.getByRole("button", { name: "保存动画超时" }));
   expect(await screen.findByText("超时不能小于 5 秒")).toBeVisible();
   expect(
     document.querySelector('[data-slot="animation-settings-feedback"]'),

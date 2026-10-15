@@ -74,7 +74,7 @@ test("前置检测精简操作栏后支持手动选择生成动画及保存定�
             { account_id: "2", model: "gpt-6-astra" },
           ],
           precheck_questions: ["candy"],
-          timeout_seconds: 120,
+          timeout_seconds: 0,
         });
       created = true;
       await route.fulfill({ json: task });
@@ -93,6 +93,8 @@ test("前置检测精简操作栏后支持手动选择生成动画及保存定�
       "/api/model-checks/capabilities": { claude_standards: [], sol_models: [] },
       "/api/model-checks/account-statuses": [],
       "/api/model-checks/animation-schedules": [],
+      "/api/model-checks/timeouts/animation": { timeout_seconds: 120, version: 0 },
+      "/api/model-checks/timeouts/precheck": { timeout_seconds: 120, version: 0 },
       "/api/model-checks/animations": created ? [{ ...task, result: {} }] : [],
       "/api/tasks/precheck-e2e": task,
     };
@@ -104,6 +106,7 @@ test("前置检测精简操作栏后支持手动选择生成动画及保存定�
   await page.goto("/animation-check");
   await page.getByRole("tab", { name: "前置检测", exact: true }).click();
   const panel = page.getByRole("tabpanel", { name: "前置检测", exact: true });
+  await expect(panel.getByRole("spinbutton", { name: "前置检测超时（秒）" })).toHaveValue("120");
   await expect(panel.getByRole("combobox", { name: "检测模型" })).toHaveText("gpt-6-astra");
   await page.keyboard.press("Escape");
   await expect(panel.getByRole("button", { name: "选择前置检测题目" })).toHaveCount(0);

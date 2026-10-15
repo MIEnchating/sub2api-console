@@ -15,17 +15,19 @@ import (
 type vaultReservationVerifier struct {
 	repository *business.Store
 	concurrent bool
+	entryID    string
 }
 
 func (*vaultReservationVerifier) Verify(context.Context, configstore.AuthRecord) error { return nil }
 
 func (v *vaultReservationVerifier) Login(ctx context.Context, record configstore.AuthRecord, credential configstore.VaultEntry) (configstore.AuthRecord, error) {
-	resources := []string{mutationguard.Vault(credential.Entry)}
+	resources := []string{mutationguard.Vault(credential.ID)}
 	acquired, err := v.repository.AcquireMutationLease(ctx, "competing-vault-editor", resources, time.Now().UTC(), time.Minute)
 	if err != nil {
 		return record, err
 	}
 	v.concurrent = acquired
+	v.entryID = credential.ID
 	if acquired {
 		if err := v.repository.ReleaseMutationLease(ctx, "competing-vault-editor", resources); err != nil {
 			return record, err
@@ -67,6 +69,9 @@ func TestHostRenameReservesTheVaultEntryBeingWritten(t *testing.T) {
 			}
 			entry := "new.example"
 			if explicitEntry != "" {
+				if err := private.SaveVaultEntry(ctx, configstore.VaultEntry{ID: explicitEntry, Entry: "共享凭据"}, nil); err != nil {
+					t.Fatal(err)
+				}
 				input.Entry = &explicitEntry
 				entry = explicitEntry
 			}
@@ -76,7 +81,7 @@ func TestHostRenameReservesTheVaultEntryBeingWritten(t *testing.T) {
 			if verifier.concurrent {
 				t.Fatalf("renaming the Host left vault entry %q available to a concurrent editor", entry)
 			}
-			stored, err := private.VaultEntry(ctx, entry)
+			stored, err := private.VaultEntry(ctx, verifier.entryID)
 			if err != nil || stored == nil || stored.Username == nil || *stored.Username != username {
 				t.Fatalf("renamed upstream login was not saved in its reserved vault entry: entry=%q err=%v", entry, err)
 			}

@@ -115,6 +115,7 @@ test("动画检测错误显示在字段下方且无重叠，清除错误后恢�
       "/api/model-checks/account-statuses": [],
       "/api/model-checks/animation-schedules": [],
       "/api/model-checks/animations": [],
+      "/api/model-checks/timeouts/animation": { timeout_seconds: 120, version: 0 },
     };
     if (path.endsWith("/events"))
       await route.fulfill({ contentType: "text/event-stream", body: ": fixture\n\n" });
@@ -125,6 +126,8 @@ test("动画检测错误显示在字段下方且无重叠，清除错误后恢�
   const region = page.getByRole("region", { name: "动画账号卡片", exact: true });
   const first = page.getByRole("checkbox", { name: /^检测 布局账号 1\b/ });
   await expect(first).toBeVisible();
+  const timeoutInput = page.getByRole("spinbutton", { name: "动画超时（秒）" });
+  await expect(timeoutInput).toHaveValue("120");
   const start = page.getByRole("button", { name: /开始检测/ });
   const operations = page.getByRole("group", { name: "动画检测操作", exact: true });
   const settings = page.getByRole("group", { name: "动画检测设置", exact: true });
@@ -139,13 +142,13 @@ test("动画检测错误显示在字段下方且无重叠，清除错误后恢�
   expect(await region.boundingBox()).toEqual(regionBox);
   await first.check();
   await expect(page.getByRole("button", { name: /开始检测/ })).toBeEnabled();
-  const timeoutInput = page.getByRole("spinbutton", { name: "请求超时（秒）" });
   const modelInput = page.getByRole("combobox", { name: "检测模型" });
   await expect(modelInput).toHaveText("gpt-6-astra");
   await selectDetectionModels(page, []);
   await page.keyboard.press("Escape");
   await timeoutInput.fill("1");
   await start.click();
+  await page.getByRole("button", { name: "保存动画超时", exact: true }).click();
   await expect(page.getByRole("combobox", { name: "检测模型" })).toHaveAttribute(
     "aria-invalid",
     "true",

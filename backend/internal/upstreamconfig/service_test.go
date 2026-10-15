@@ -527,6 +527,9 @@ func TestConfigureAuthRecordSerializesSharedVaultEntryAcrossHosts(t *testing.T) 
 	verifier := &firstLoginBlocker{started: make(chan struct{}), release: make(chan struct{})}
 	service := New(businessStore, private, verifier)
 	entry := "shared-login"
+	if err := private.SaveVaultEntry(t.Context(), configstore.VaultEntry{ID: entry, Entry: "共享凭据"}, nil); err != nil {
+		t.Fatal(err)
+	}
 	input := func(host, username, password string) Input {
 		return Input{
 			Host: host, BaseURL: "https://" + host, UpstreamType: "sub2api", AuthMode: "sub2api_manual_login",
@@ -567,7 +570,7 @@ func TestPrivateCommitRollsBackVaultAfterRequestCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	private := &cancelingAuthSaveStore{cancel: cancel}
 	service := New(failingCreateBusiness{}, private, &passVerifier{})
-	entry := configstore.VaultEntry{Entry: "api.example"}
+	entry := configstore.VaultEntry{ID: "api.example", Entry: "api.example"}
 	_, err := service.commitPrivateAndPublic(ctx, configstore.AuthRecord{Host: "api.example"}, Input{}, &vaultChange{entry: &entry}, true)
 	if err == nil || !strings.Contains(err.Error(), "auth save failed") {
 		t.Fatalf("commit error = %v", err)
@@ -596,7 +599,7 @@ func TestConfigureAuthRecordKeepsVaultLeaseThroughCompensation(t *testing.T) {
 	go func() {
 		_, err := service.ConfigureAuthRecord(requestCtx, Input{
 			Host: "api.example", BaseURL: "https://api.example", UpstreamType: "sub2api", AuthMode: "sub2api_manual_login",
-			Username: &username, Password: &password, SaveToVault: true, Entry: &entry,
+			Username: &username, Password: &password, SaveToVault: true, newVaultID: entry,
 			Headers: map[string]string{}, Cookies: map[string]string{},
 			Present: map[string]bool{"username": true, "password": true, "save_to_vault": true, "entry": true},
 		})
@@ -988,7 +991,7 @@ func TestExplicitHeadersAreAppliedToSelectedVaultLoginCandidate(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := private.SaveVaultEntry(context.Background(), configstore.VaultEntry{
+	if err := private.SaveVaultEntry(context.Background(), configstore.VaultEntry{ID: "selected",
 		Entry: "selected", Username: &username, Password: &password, Hosts: []string{"api.example"}, Headers: map[string]string{},
 	}, nil); err != nil {
 		t.Fatal(err)

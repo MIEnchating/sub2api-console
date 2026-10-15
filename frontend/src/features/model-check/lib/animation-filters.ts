@@ -30,6 +30,7 @@ export function selectableDetectionAccountIDs(
   return accounts
     .filter(
       (account) =>
+        !account.upstream_excluded &&
         !busyIDs.has(account.id) &&
         (account.platform == null || supportsAnimationPlatform(account.platform)),
     )

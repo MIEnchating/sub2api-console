@@ -39,7 +39,7 @@ func TestAutoQualityGeneratesReasonAndPreservesGeneration(t *testing.T) {
 			if !strings.Contains(body.Input, "original_prompt") || !strings.Contains(body.Input, "source") {
 				t.Error("review missing original source or prompt")
 			}
-			output = `{"label":"suspicious","reason":"脚踏连接缺失，需要人工查看动画确认"}`
+			output = `{"label":"suspicious","reason":"脚踏连接缺失，需要人工查看动画确认","basis":[{"requirement":"踩踏动作","evidence":"<circle class=\"wheel\" r=\"20\" cx=\"100\" cy=\"100\"/>","assessment":"原文只有轮圈，未体现脚踏连接和踩踏联动。"}],"issues":[{"severity":"major","scope":"motion","evidence":"<circle class=\"wheel\" r=\"20\" cx=\"100\" cy=\"100\"/>","impact":"只有轮圈旋转，没有骑车主体和踩踏联动"}]}`
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"output_text": output, "model": body.Model})
 	})
@@ -54,7 +54,7 @@ func TestAutoQualityGeneratesReasonAndPreservesGeneration(t *testing.T) {
 	raw, _ := json.Marshal(row.Quality)
 	var q map[string]any
 	_ = json.Unmarshal(raw, &q)
-	if calls != 2 || row.Status != "succeeded" || row.Source != htmlAnimation || q["status"] != "suspicious" || q["explanation"] != "脚踏连接缺失，需要人工查看动画确认" || q["source"] != "model_review" {
+	if calls != 2 || row.Status != "succeeded" || row.Source != htmlAnimation || q["status"] != "suspicious" || !strings.Contains(row.Quality.Explanation, "脚踏连接缺失，需要人工查看动画确认") || len(row.Quality.Basis) != 1 || q["source"] != "model_review" {
 		t.Fatalf("calls=%d row=%+v quality=%s", calls, row, raw)
 	}
 	persisted, err := f.tasks.Get(t.Context(), task.ID)
@@ -163,7 +163,7 @@ func TestAutoQualitySettingsChangedDuringReviewDiscardsOldPrediction(t *testing.
 			case <-r.Context().Done():
 				return
 			}
-			output = `{"label":"normal","reason":"结构完整"}`
+			output = `{"label":"normal","reason":"结构完整","basis":[{"requirement":"车轮转动","evidence":"@keyframes spin{to{transform:rotate(360deg)}}","assessment":"CSS关键帧提供车轮转动实现。"}],"issues":[]}`
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"output_text": output})
 	})

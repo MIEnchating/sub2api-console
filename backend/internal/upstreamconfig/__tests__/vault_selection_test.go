@@ -38,7 +38,7 @@ func TestVaultSelectionConfiguration(t *testing.T) {
 			t.Cleanup(func() { _ = private.Close() })
 			name, entry, username, password := "测试上游", "共享登录资料", "operator@example.test", "private-password"
 			for _, key := range []string{entry, "备用资料"} {
-				if err := private.SaveVaultEntry(ctx, configstore.VaultEntry{Entry: key, Username: &username, Password: &password}, nil); err != nil {
+				if err := private.SaveVaultEntry(ctx, configstore.VaultEntry{ID: key, Entry: key, Username: &username, Password: &password}, nil); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -49,7 +49,7 @@ func TestVaultSelectionConfiguration(t *testing.T) {
 				t.Fatal(err)
 			}
 			if scenario != "create" {
-				if err := private.SaveAuthRecoveryPreference(ctx, configstore.AuthRecoveryPreference{Host: input.Host, AuthMode: input.AuthMode, RecoveryMethod: "vault", VaultEntry: &entry}); err != nil {
+				if err := private.SaveAuthRecoveryPreference(ctx, configstore.AuthRecoveryPreference{Host: input.Host, AuthMode: input.AuthMode, RecoveryMethod: "vault", VaultEntryID: &entry}); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -81,8 +81,8 @@ func TestVaultSelectionConfiguration(t *testing.T) {
 			if err := json.Unmarshal(encoded, &response); err != nil {
 				t.Fatal(err)
 			}
-			if response["entry"] != want {
-				t.Fatalf("selected entry = %v, want %s", response["entry"], want)
+			if response["entry_id"] != want {
+				t.Fatalf("selected entry = %v, want %s", response["entry_id"], want)
 			}
 			for _, key := range []string{"username", "password", "access_token"} {
 				if _, ok := response[key]; ok {

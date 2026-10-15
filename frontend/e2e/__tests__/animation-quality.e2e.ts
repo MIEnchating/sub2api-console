@@ -3,7 +3,7 @@ import type { AnimationQualityReview, AnimationResult, Task } from "../../src/ap
 import { account } from "../../src/features/accounts/__tests__/fixtures";
 import { pageFixtures } from "./fixtures/page-shell";
 
-test("动画质量标注在桌面和手机可填写保存，刷新后按原请求回显", async ({
+test("批次仍运行时已完成动画可在桌面和手机标注，刷新后按原请求回显", async ({
   page,
   colorScheme,
 }, testInfo) => {
@@ -30,6 +30,7 @@ test("动画质量标注在桌面和手机可填写保存，刷新后按原请�
     request_id: "request-1",
     model: "test-model",
     status: "succeeded",
+    phase: "completed",
     duration_ms: 1200,
     completed_at: "2026-10-14T00:01:00Z",
     html: '<html><body style="background:#e0f2fe"><svg viewBox="0 0 640 400"><circle cx="320" cy="200" r="75" fill="#059669"/></svg></body></html>',
@@ -41,12 +42,12 @@ test("动画质量标注在桌面和手机可填写保存，刷新后按原请�
     id: "quality-task",
     skill: "sub2api-model-animation",
     operation: "account-model-animation",
-    status: "succeeded",
-    progress: 100,
-    message: "完成",
+    status: "running",
+    progress: 50,
+    message: "已完成 1/2 个账号",
     created_at: "2026-10-14T00:00:00Z",
     updated_at: result.completed_at,
-    result: { account_ids: ["41"], animations: [result] },
+    result: { account_ids: ["41", "42"], animations: [result], completed: 1, total: 2 },
   };
   await page.route("**/api/**", async (route) => {
     const url = new URL(route.request().url());
@@ -103,14 +104,14 @@ test("动画质量标注在桌面和手机可填写保存，刷新后按原请�
   await preview.getByRole("tab", { name: "质量标注" }).click();
   await expect(preview.getByText("模型未配置，先积累人工标注样本")).toBeVisible();
   await preview.getByRole("button", { name: "人工纠正" }).click();
-  await preview.getByRole("radio", { name: "疑似低质量" }).check();
+  await preview.getByRole("radio", { name: "降智" }).check();
   await preview.getByLabel("判断理由（必填）").fill("脚踏与腿部脱节，循环时跳帧");
   await preview.getByLabel("样本分组（可选）").fill("骑车模板甲");
   const save = preview.getByRole("button", { name: "保存质量标注" });
   await save.scrollIntoViewIfNeeded();
   await expect(save).toBeInViewport();
   await save.click();
-  await expect(preview.getByText(/已标注：疑似低质量/)).toBeVisible();
+  await expect(preview.getByText(/已标注：降智/)).toBeVisible();
   expect(await preview.evaluate((node) => node.scrollWidth <= node.clientWidth)).toBe(true);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await page.screenshot({ path: testInfo.outputPath("quality-review.png"), fullPage: true });
@@ -118,24 +119,31 @@ test("动画质量标注在桌面和手机可填写保存，刷新后按原请�
   await card.getByRole("button", { name: "放大查看 质量标注测试账号 的动画" }).click();
   await preview.getByRole("tab", { name: "质量标注" }).click();
   await preview.getByRole("button", { name: "人工纠正" }).click();
-  await expect(preview.getByRole("radio", { name: "疑似低质量" })).toBeChecked();
+  await expect(preview.getByRole("radio", { name: "降智" })).toBeChecked();
   await expect(preview.getByLabel("判断理由（必填）")).toHaveValue("脚踏与腿部脱节，循环时跳帧");
   await expect(preview.getByLabel("自动质量：无法判定")).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(preview).not.toBeVisible();
 });
 
-test("统一自动标注设置在手机和桌面可保存账号、模型和开关", async ({ page }, testInfo) => {
+test("统一自动标注设置在手机和桌面可搜索账号并独立保存超时", async ({ page }, testInfo) => {
   let saved: unknown;
+  let timeout = { timeout_seconds: 120, version: 0 };
   await page.route("**/api/**", async (route) => {
     const path = new URL(route.request().url()).pathname;
+    if (path === "/api/model-checks/timeouts/review") {
+      if (route.request().method() === "PUT")
+        timeout = { ...route.request().postDataJSON(), version: timeout.version + 1 };
+      await route.fulfill({ json: timeout });
+      return;
+    }
     if (path === "/api/model-checks/animation-quality/settings") {
       if (route.request().method() === "PUT") {
         saved = route.request().postDataJSON();
         await route.fulfill({ json: { ...route.request().postDataJSON(), version: 1 } });
       } else
         await route.fulfill({
-          json: { enabled: false, account_id: "", model: "", timeout_seconds: 60, version: 0 },
+          json: { enabled: false, account_id: "", model: "", ...timeout },
         });
       return;
     }
@@ -143,7 +151,15 @@ test("统一自动标注设置在手机和桌面可保存账号、模型和开�
       ...pageFixtures,
       "/api/setup/status": { initialized: true, configuration_errors: [] },
       "/api/auth/session": { authenticated: true, username: "测试用户" },
-      "/api/accounts": [{ ...account, id: "41", name: "统一评审账号" }],
+      "/api/accounts": Array.from({ length: 40 }, (_, index) => ({
+        ...account,
+        id: String(index + 41),
+        name: index === 0 ? "统一评审账号" : `长名称评审账号用于检查下拉框边界 ${index}`,
+      })),
+      "/api/model-checks/timeouts/animation": { timeout_seconds: 120, version: 0 },
+      "/api/model-checks/animations/accounts/41/models": {
+        models: ["review-model", "review-model-alternative"],
+      },
       "/api/model-checks/animations": [],
       "/api/model-checks/animation-schedules": [],
       "/api/model-checks/account-statuses": [],
@@ -157,8 +173,21 @@ test("统一自动标注设置在手机和桌面可保存账号、模型和开�
   await page.getByRole("button", { name: "自动标注设置" }).click();
   const dialog = page.getByRole("dialog", { name: "自动质量标注设置" });
   await dialog.getByRole("checkbox", { name: "生成后自动标注质量" }).check();
-  await dialog.getByLabel("评审账号").selectOption("41");
-  await dialog.getByLabel("评审模型").fill("review-model");
+  await dialog.getByRole("combobox", { name: "评审账号" }).click();
+  await page.getByRole("textbox", { name: "搜索选项" }).fill("统一评审账号");
+  await page.getByRole("option", { name: "统一评审账号 · 41" }).click();
+  await dialog.getByRole("spinbutton", { name: "评审超时（秒）" }).fill("90");
+  await dialog.getByRole("button", { name: "保存评审超时" }).click();
+  await expect(dialog.getByRole("button", { name: "保存评审超时" })).toBeDisabled();
+  await dialog.getByRole("button", { name: "获取模型" }).click();
+  const model = dialog.getByRole("combobox", { name: "评审模型" });
+  await expect(model).toBeEnabled();
+  await model.click();
+  const option = page.getByRole("option", { name: "review-model", exact: true });
+  await expect(option).toBeInViewport();
+  await page.screenshot({ path: testInfo.outputPath("review-model-dropdown.png") });
+  await option.click();
+  await expect(model).toContainText("review-model");
   expect(await dialog.evaluate((node) => node.scrollWidth <= node.clientWidth)).toBe(true);
   await page.screenshot({ path: testInfo.outputPath("quality-settings.png"), fullPage: true });
   await dialog.getByRole("button", { name: "保存设置" }).click();
@@ -167,7 +196,10 @@ test("统一自动标注设置在手机和桌面可保存账号、模型和开�
     enabled: true,
     account_id: "41",
     model: "review-model",
-    timeout_seconds: 60,
-    version: 0,
+    timeout_seconds: 90,
+    version: 1,
   });
+  await page.reload();
+  await page.getByRole("button", { name: "自动标注设置" }).click();
+  await expect(page.getByRole("spinbutton", { name: "评审超时（秒）" })).toHaveValue("90");
 });

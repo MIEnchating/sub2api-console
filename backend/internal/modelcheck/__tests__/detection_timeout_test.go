@@ -2,6 +2,7 @@ package modelcheck_test
 
 import (
 	"context"
+	"github.com/MIEnchating/sub2api-console/backend/internal/modelrequest"
 	"net/http"
 	"strconv"
 	"sync"
@@ -14,34 +15,35 @@ import (
 
 type deadlineCredentials struct {
 	credentials
-	mu       sync.Mutex
-	deadline time.Time
-	cancel   context.CancelFunc
+	mu           sync.Mutex
+	deadline     time.Time
+	taskDeadline time.Time
+	cancel       context.CancelFunc
 }
 
 func (c *deadlineCredentials) UpstreamKeySecret(ctx context.Context, host, key, group string) (*configstore.UpstreamKeySecret, error) {
 	c.mu.Lock()
-	c.deadline, _ = ctx.Deadline()
+	c.deadline, _ = modelrequest.ExecutionDeadline(ctx)
+	c.taskDeadline, _ = ctx.Deadline()
 	c.mu.Unlock()
 	c.cancel()
 	return c.credentials.UpstreamKeySecret(ctx, host, key, group)
 }
 
-func TestDetectionTaskDeadlineCoversSelectedAccountsStagesAndRounds(t *testing.T) {
+func TestDetectionExecutionDeadlineUsesItemBudgetRegardlessOfBatchSize(t *testing.T) {
 	for _, tc := range []struct {
-		name             string
-		accounts         int
-		precheck         bool
-		terminal         bool
-		animation        bool
-		legacyAnimation  bool
-		rounds           int
-		minimumRemaining time.Duration
+		name            string
+		accounts        int
+		precheck        bool
+		terminal        bool
+		animation       bool
+		legacyAnimation bool
+		rounds          int
 	}{
-		{name: "200 prechecks budget 50 parallel batches", accounts: 200, precheck: true, minimumRemaining: 50 * 120 * time.Second},
-		{name: "small batch retains its minimum", accounts: 1, precheck: true, minimumRemaining: 29 * time.Minute},
-		{name: "combined stages include animation retries", accounts: 10, precheck: true, animation: true, minimumRemaining: 29 * time.Minute},
-		{name: "legacy configuration budgets animation", accounts: 10, legacyAnimation: true, minimumRemaining: 29 * time.Minute},
+		{name: "large precheck batch", accounts: 200, precheck: true},
+		{name: "single precheck", accounts: 1, precheck: true},
+		{name: "combined stages", accounts: 10, precheck: true, animation: true},
+		{name: "legacy animation configuration", accounts: 10, legacyAnimation: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := setup(t, tc.accounts, "openai", func(http.ResponseWriter, *http.Request) {
@@ -78,8 +80,8 @@ func TestDetectionTaskDeadlineCoversSelectedAccountsStagesAndRounds(t *testing.T
 			credential.mu.Lock()
 			remaining := time.Until(credential.deadline)
 			credential.mu.Unlock()
-			if remaining < tc.minimumRemaining {
-				t.Fatalf("batch remaining time = %s, want at least %s", remaining, tc.minimumRemaining)
+			if remaining < 119*time.Second || remaining > 120*time.Second {
+				t.Fatalf("execution remaining time = %s, want configured 120s budget", remaining)
 			}
 			if task := finished(t, f); task.Status != "cancelled" {
 				t.Fatalf("batch cancellation = %s, want cancelled", task.Status)

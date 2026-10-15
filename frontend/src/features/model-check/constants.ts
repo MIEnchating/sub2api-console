@@ -44,12 +44,6 @@ export const precheckVerdictLabels = {
 
 export type DetectionResultTone = "success" | "danger" | "warning" | "muted";
 
-export const animationManualVerdictLabels = {
-  passed: "不降智",
-  not_passed: "降智",
-  unmarked: "未标记",
-} as const;
-
 export const detectionMissingResultStates = {
   waiting: { label: "等待检测结果", tone: "muted" },
   timeout: {
@@ -115,19 +109,30 @@ export const animationAccountSortOptions = [
 ] as const satisfies ReadonlyArray<{ value: AccountSort; label: string }>;
 export type AnimationAccountSort = (typeof animationAccountSortOptions)[number]["value"];
 
+export const animationQualityVerdicts = {
+  normal: "不降智",
+  suspicious: "降智",
+  unknown: "未知",
+} as const;
+
 export const animationQualityLabels = {
-  normal: "正常特征",
-  suspicious: "疑似低质量",
+  normal: "正常",
+  suspicious: "降智",
   unknown: "无法判定",
 } as const;
 
 export const animationQualityReasons: Record<string, string> = {
-  review_failed: "评审请求失败，请检查评审账号和模型设置后重新检测。",
-  review_timeout: "评审等待或请求超时，请检查评审服务或调整超时后重新检测。",
+  review_failed: "评审请求失败，请检查评审账号和模型设置后重新评审，无需重新生成动画。",
+  review_timeout: "本次评审已超时；该历史记录未区分排队与请求。可重新评审，无需重新生成动画。",
+  review_request_timeout: "评审请求超时，请检查评审服务或调整评审超时后重新评审。",
+  review_queue_timeout: "排队期间所属任务已超时，尚未发送评审请求。可重新评审。",
+  review_task_timeout: "所属任务已超时，评审已中断。可重新评审。",
   review_cancelled: "评审已取消，动画生成结果已保留。",
-  review_invalid_response: "评审模型未返回有效标签和理由，请更换评审模型后重新检测。",
+  review_invalid_response: "评审模型返回格式无效，未获得有效结论。请重新评审或人工标注。",
+  review_insufficient_evidence:
+    "评审结论缺少可核对的题目或原文依据，或与证据矛盾，请重新评审或人工复核。",
   review_account_unavailable: "评审账号不可用或已被排除，请重新配置评审账号。",
-  review_settings_changed: "评审期间统一设置已变化，请重新检测以使用新设置。",
+  review_settings_changed: "评审期间统一设置已变化，请重新评审以使用新设置。",
   model_unavailable: "模型未配置，先积累人工标注样本",
   source_unavailable: "缺少完整有效的生成原文",
   prompt_unavailable: "该历史记录未保存提示词",
@@ -137,12 +142,61 @@ export const animationQualityReasons: Record<string, string> = {
   ambiguous_score: "模型得分位于拒判区间",
 };
 
+export const animationQualityFailureLabels: Record<string, string> = {
+  review_failed: "评审失败",
+  review_timeout: "评审失败",
+  review_request_timeout: "评审失败",
+  review_queue_timeout: "评审失败",
+  review_task_timeout: "评审失败",
+  review_invalid_response: "评审失败",
+  review_account_unavailable: "评审失败",
+  review_settings_changed: "评审失败",
+  review_cancelled: "评审已取消",
+};
+
 export const verificationCapabilityLabels: Record<string, string> = {
   passed: "能力通过",
   failed: "能力未通过",
   inconclusive: "能力待判定",
 };
+export const verificationIdentityLabels: Record<string, string> = {
+  observed: "接口检查完成",
+  official_source: "官方来源已确认",
+  reference_consistent: "对照未见差异",
+  evidence_mismatch: "存在待核对差异",
+  insufficient_evidence: "接口信息未记录",
+  inconclusive: "接口检测未完成",
+};
+export const verificationIdentityLegacyExplanation =
+  "历史报告未记录完整接口结论，可重新检测获取；现有答题结果继续保留，不据此判断模型真假。";
+export const verificationIdentityExplanation =
+  "能力、请求来源与指纹稳定性分别展示；答题通过和采样稳定不等于具体模型权重认证。";
+export const verificationReferenceLabels: Record<string, string> = {
+  not_run: "官方对照未进行",
+  matched: "官方对照相符",
+  mismatch: "官方对照存在差异",
+  incomplete: "官方对照未完成",
+  not_applicable: "官方来源已确认",
+};
+export const verificationFingerprintSampleLabels: Record<string, string> = {
+  stable: "稳定",
+  unstable: "不稳定",
+  incomplete: "未完成",
+  unavailable: "不可用",
+};
+
+export const verificationFingerprintLabels: Record<string, string> = {
+  stable: "指纹采集稳定",
+  unstable: "指纹采样不稳定",
+  incomplete: "指纹采集未完成",
+  unavailable: "指纹数据不可用",
+  not_run: "指纹未采集",
+};
 export const verificationProbeLabels: Record<string, string> = {
+  observed: "已采集",
+  running: "等待回复",
+  pending: "待执行",
+  skipped: "未执行",
   passed: "通过",
   failed: "未通过",
   error: "请求失败",
@@ -154,3 +208,11 @@ export const verificationProtocolLabels: Record<string, string> = {
   gemini_native: "Gemini 原生",
   other: "其他协议",
 };
+
+export const detectionTimeoutLabels = {
+  animation: "动画超时",
+  precheck: "前置检测超时",
+  review: "评审超时",
+} as const;
+
+export const animationQualityPendingLabel = "质量标注中";

@@ -55,6 +55,17 @@ func TestAccountAnimationModelsPreservesUpstreamFailureWithoutDefaultModels(t *t
 	}
 }
 
+func TestAccountAnimationModelsExplainsInsufficientBalance(t *testing.T) {
+	f := setup(t, 1, "openai", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`{"error":{"message":"Insufficient account balance"}}`))
+	})
+	models, err := f.service.AccountAnimationModels(t.Context(), "1")
+	if err == nil || err.Error() != "上游账号余额不足，无法获取模型；请充值或更换账号后重试" || len(models) != 0 {
+		t.Fatalf("balance rejection lost its actionable reason: models=%v err=%v", models, err)
+	}
+}
+
 func TestOAuthAnimationModelsUsesManagedCatalog(t *testing.T) {
 	for _, failed := range []bool{false, true} {
 		t.Run(map[bool]string{false: "live catalog", true: "discovery failure"}[failed], func(t *testing.T) {

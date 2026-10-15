@@ -42,6 +42,7 @@ test.beforeEach(async ({ page, colorScheme }) => {
         auth_records: [],
         vault_entries: [
           {
+            id: "巡检凭据",
             entry: "巡检凭据",
             hosts: ["test.example.test"],
             has_username: true,

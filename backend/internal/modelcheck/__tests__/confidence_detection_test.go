@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	q "github.com/MIEnchating/sub2api-console/backend/internal/animationquality"
 	"github.com/MIEnchating/sub2api-console/backend/internal/modelcheck"
 	"github.com/MIEnchating/sub2api-console/backend/internal/taskstore"
 )
@@ -30,7 +31,8 @@ func TestAccountConfidenceIncludesPrecheckAndMarkedAnimationWithoutChangingRegul
 		if item.mode == "precheck" {
 			row["precheck"] = map[string]any{"verdict": item.verdict}
 		} else if item.verdict != "" {
-			row["manual_verdict"] = map[string]any{"verdict": item.verdict}
+			row["quality"] = map[string]any{"status": "normal"}
+			row["manual_verdict"] = map[string]any{"verdict": "not_passed"}
 		}
 		task := taskstore.Task{ID: item.id, Skill: "sub2api-model-animation", Operation: "account-model-combined", Status: "succeeded", Message: "检测完成", CreatedAt: at, UpdatedAt: at, Result: map[string]any{"animations": []any{row}}}
 		if err := f.tasks.Store.Save(ctx, task); err != nil {
@@ -132,38 +134,57 @@ func TestDetectionConfidenceRetainsAllHistoryAndMergesRegularChecks(t *testing.T
 	}
 }
 
-func TestAnimationMarkChangesRecomputeConfidenceWithoutMovingCompletionWindow(t *testing.T) {
-	f := setup(t, 1, "openai", nil)
+func TestAnimationQualityRecheckAndCorrectionRecomputeConfidenceWithoutMovingWindow(t *testing.T) {
+	f, service, repo := qualityFixture(t)
 	at := time.Now().UTC().Add(-48 * time.Hour).Format(time.RFC3339Nano)
-	task := taskstore.Task{ID: "animation", Skill: "sub2api-model-animation", Operation: "account-model-animation", Status: "succeeded", Message: "完成", CreatedAt: at, UpdatedAt: at, Result: map[string]any{"animations": []any{map[string]any{"account_id": "1", "request_id": "request-1", "status": "succeeded", "completed_at": at}}}}
+	task := qualityTask()
+	task.CreatedAt = at
+	task.UpdatedAt = at
+	row := task.Result["animations"].([]any)[0].(map[string]any)
+	row["completed_at"] = at
+	row["quality"] = q.Prediction{Status: "suspicious", Source: "model_review", Explanation: "原结论"}
+	row["manual_verdict"] = map[string]any{"verdict": "passed"}
+	task.Result["animations"] = []any{row}
 	if err := f.tasks.Store.Save(t.Context(), task); err != nil {
 		t.Fatal(err)
 	}
-	for _, verdict := range []string{"passed", "not_passed", "unmarked"} {
-		if _, err := f.service.SetAnimationManualVerdict(t.Context(), task.ID, modelcheck.AnimationManualVerdictRequest{AccountID: "1", RequestID: "request-1", Verdict: verdict}, "console"); err != nil {
+	review, err := service.AnimationQuality(t.Context(), task.ID, "1", "request-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	version := 0
+	for _, label := range []string{"normal", "suspicious", "unknown"} {
+		state, err := repo.SaveAnimationQualityRecheck(t.Context(), review.SampleID, q.Recheck{TaskID: "recheck", SourceSHA256: review.SourceSHA256, PromptSHA256: review.PromptSHA256, Prediction: &q.Prediction{Status: label}}, version)
+		if err != nil {
 			t.Fatal(err)
 		}
-		statuses, err := f.service.AccountStatuses(t.Context())
+		version = state.Version
+		statuses, err := service.AccountStatuses(t.Context())
 		if err != nil || len(statuses) != 1 {
-			t.Fatalf("statuses=%+v err=%v", statuses, err)
+			t.Fatalf("%+v %v", statuses, err)
 		}
 		stats := statuses[0].Confidence
 		if stats.Short.Samples != 0 || stats.Long.Samples != 1 {
-			t.Fatalf("mark moved or duplicated sample: %+v", stats)
+			t.Fatalf("changed window: %+v", stats)
 		}
-		switch verdict {
-		case "passed":
-			if stats.Long.Passed != 1 {
-				t.Fatalf("mark not counted: %+v", stats)
-			}
-		case "not_passed":
-			if stats.Long.Failed != 1 {
-				t.Fatalf("mark not changed: %+v", stats)
-			}
-		case "unmarked":
-			if stats.Long.Inconclusive != 1 || stats.Long.Score != nil {
-				t.Fatalf("cleared mark retained score: %+v", stats)
-			}
+		if label == "normal" && stats.Long.Passed != 1 || label == "suspicious" && stats.Long.Failed != 1 || label == "unknown" && stats.Long.Inconclusive != 1 {
+			t.Fatalf("wrong quality: %+v", stats)
 		}
+	}
+	_, err = service.SaveAnimationQualityAnnotation(t.Context(), task.ID, modelcheck.AnimationQualityAnnotationRequest{AccountID: "1", RequestID: "request-1", Label: "normal", Reason: "人工质量纠正"}, "operator")
+	if err != nil {
+		t.Fatal(err)
+	}
+	statuses, err := service.AccountStatuses(t.Context())
+	if err != nil || statuses[0].Confidence.Long.Passed != 1 {
+		t.Fatalf("correction ignored: %+v %v", statuses, err)
+	}
+	displayed, err := service.AnimationQualityDisplay(t.Context(), task)
+	if err != nil {
+		t.Fatal(err)
+	}
+	marked := displayed.Result["animations"].([]any)[0].(map[string]any)["quality_annotation"].(q.Annotation)
+	if marked.Label != "normal" {
+		t.Fatalf("display ignored correction: %+v", marked)
 	}
 }

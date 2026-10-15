@@ -99,20 +99,23 @@ type Input struct {
 	Password             *string
 	SaveToVault          bool
 	AcceptLoginAgreement bool
-	Entry                *string
+	EntryName            *string
+	Entry                *string // Immutable vault entry ID.
+	newVaultID           string
 	Present              map[string]bool
 }
 
 type Configuration struct {
-	UpstreamID           string                   `json:"upstream_id"`
-	Host                 string                   `json:"host"`
-	Name                 string                   `json:"name"`
-	NameMode             string                   `json:"name_mode"`
-	BaseURL              string                   `json:"base_url"`
-	AccountBaseURL       string                   `json:"account_base_url"`
-	UpstreamType         string                   `json:"upstream_type"`
-	AuthMode             string                   `json:"auth_mode"`
-	Entry                *string                  `json:"entry"`
+	UpstreamID           string `json:"upstream_id"`
+	Host                 string `json:"host"`
+	Name                 string `json:"name"`
+	NameMode             string `json:"name_mode"`
+	BaseURL              string `json:"base_url"`
+	AccountBaseURL       string `json:"account_base_url"`
+	UpstreamType         string `json:"upstream_type"`
+	AuthMode             string `json:"auth_mode"`
+	EntryName            *string
+	Entry                *string                  `json:"entry_id"`
 	RechargeRate         string                   `json:"recharge_rate"`
 	RawBalance           *string                  `json:"raw_balance"`
 	Balance              *string                  `json:"balance"`
@@ -184,7 +187,7 @@ func (s *Service) Get(ctx context.Context, host string) (Configuration, error) {
 			return Configuration{}, err
 		}
 		if preference != nil {
-			result.Entry = preference.VaultEntry
+			result.Entry = preference.VaultEntryID
 		}
 	}
 	return result, nil
@@ -201,6 +204,9 @@ func (s *Service) Create(ctx context.Context, input Input, actor string) (Config
 	}
 	if err := validateAccountBaseURL(input); err != nil {
 		return Configuration{}, inputError(err)
+	}
+	if input.newVaultID == "" && input.SaveToVault && (input.Entry == nil || strings.TrimSpace(*input.Entry) == "") {
+		input.newVaultID = configstore.NewVaultEntryID()
 	}
 	resources := []string{mutationguard.UpstreamCatalog()}
 	if vault := vaultMutationResource(host, input, true); vault != "" {
@@ -236,7 +242,7 @@ func (s *Service) Create(ctx context.Context, input Input, actor string) (Config
 	if _, err := s.commitPrivateAndPublic(ctx, record, input, vaultChange, true); err != nil {
 		return Configuration{}, err
 	}
-	if err := s.saveVaultSelection(ctx, record, input); err != nil {
+	if err := s.saveVaultSelection(ctx, record, input, vaultChange); err != nil {
 		return Configuration{}, err
 	}
 	release()
@@ -272,6 +278,9 @@ func (s *Service) Update(ctx context.Context, host string, input Input, actor st
 	}
 	if targetHost == "" {
 		return Configuration{}, inputError(errors.New("上游 Host 无效"))
+	}
+	if input.newVaultID == "" && input.SaveToVault && (input.Entry == nil || strings.TrimSpace(*input.Entry) == "") {
+		input.newVaultID = configstore.NewVaultEntryID()
 	}
 	resources := []string{}
 	if targetHost != host {
@@ -349,7 +358,7 @@ func (s *Service) Update(ctx context.Context, host string, input Input, actor st
 		}
 		return Configuration{}, err
 	}
-	if err := s.saveVaultSelection(ctx, record, input); err != nil {
+	if err := s.saveVaultSelection(ctx, record, input, vaultChange); err != nil {
 		return Configuration{}, err
 	}
 	release()
@@ -445,6 +454,9 @@ func (s *Service) ConfigureAuthRecord(ctx context.Context, input Input) (string,
 	if host == "" {
 		return "", inputError(errors.New("上游 Host 不能为空"))
 	}
+	if input.newVaultID == "" && input.SaveToVault && (input.Entry == nil || strings.TrimSpace(*input.Entry) == "") {
+		input.newVaultID = configstore.NewVaultEntryID()
+	}
 	resources := []string{}
 	if vault := vaultMutationResource(host, input, true); vault != "" {
 		resources = append(resources, vault)
@@ -479,6 +491,9 @@ func (s *Service) ConfigureAuthRecord(ctx context.Context, input Input) (string,
 		rollbackCtx, cancelRollback := detachedOperationContext(ctx)
 		defer cancelRollback()
 		return "", errors.Join(err, rollbackFailure("密码箱", s.restoreVault(rollbackCtx, change)))
+	}
+	if err := s.saveVaultSelection(ctx, record, input, change); err != nil {
+		return "", err
 	}
 	return host, nil
 }
@@ -546,18 +561,14 @@ func (s *Service) acquireHostMutation(ctx context.Context, host string, addition
 	}, nil
 }
 
-func vaultMutationResource(host string, input Input, creating bool) string {
-	if !input.SaveToVault || !isManualLogin(strings.TrimSpace(input.AuthMode)) {
-		return ""
-	}
-	if !creating && !input.Present["username"] && !input.Present["password"] {
-		return ""
-	}
-	entry := strings.TrimSpace(host)
+func vaultMutationResource(_ string, input Input, _ bool) string {
 	if input.Entry != nil && strings.TrimSpace(*input.Entry) != "" {
-		entry = strings.TrimSpace(*input.Entry)
+		return mutationguard.Vault(*input.Entry)
 	}
-	return mutationguard.Vault(entry)
+	if input.newVaultID != "" {
+		return mutationguard.Vault(input.newVaultID)
+	}
+	return ""
 }
 
 type vaultChange struct {
@@ -593,15 +604,21 @@ func (s *Service) prepareVerified(ctx context.Context, host string, input Input,
 		if !nonblank(input.Username) || !nonblank(input.Password) {
 			return configstore.AuthRecord{}, nil, errors.New("自定义账号密码登录必须填写用户名和密码")
 		}
-		entryName := host
-		if input.Entry != nil && strings.TrimSpace(*input.Entry) != "" {
-			entryName = strings.TrimSpace(*input.Entry)
+		credential = &configstore.VaultEntry{ID: input.newVaultID, Entry: host, Username: input.Username, Password: input.Password, Hosts: []string{host}, Headers: cloneMap(record.Headers)}
+		if input.EntryName != nil && strings.TrimSpace(*input.EntryName) != "" {
+			credential.Entry = strings.TrimSpace(*input.EntryName)
 		}
-		credential = &configstore.VaultEntry{Entry: entryName, Username: input.Username, Password: input.Password, Hosts: []string{host}, Headers: cloneMap(record.Headers)}
 		if input.SaveToVault {
-			previous, err := s.private.VaultEntry(ctx, entryName)
-			if err != nil {
-				return configstore.AuthRecord{}, nil, err
+			var previous *configstore.VaultEntry
+			if input.Entry != nil && strings.TrimSpace(*input.Entry) != "" {
+				previous, err = s.private.VaultEntry(ctx, strings.TrimSpace(*input.Entry))
+				if err != nil {
+					return configstore.AuthRecord{}, nil, err
+				}
+				if previous == nil {
+					return configstore.AuthRecord{}, nil, configstore.ErrVaultEntryMissing
+				}
+				credential.ID, credential.Entry = previous.ID, previous.Entry
 			}
 			change = &vaultChange{entry: credential, previous: previous}
 		}
@@ -722,7 +739,7 @@ func (s *Service) restoreVault(ctx context.Context, change *vaultChange) error {
 		return nil
 	}
 	if change.previous == nil {
-		_, err := s.private.DeleteVaultEntry(ctx, change.entry.Entry)
+		_, err := s.private.DeleteVaultEntry(ctx, change.entry.ID)
 		return err
 	}
 	return s.private.SaveVaultEntry(ctx, *change.previous, allVaultFields())

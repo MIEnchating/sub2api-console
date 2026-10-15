@@ -1822,12 +1822,16 @@ export function UpstreamsPage() {
                       </div>
                     </TableCell>
                     <TableCell overflowTooltip={false}>
-                      <UpstreamConcurrency
-                        limit={host.concurrency_limit}
-                        status={host.concurrency_status}
-                        allocated={host.allocated_concurrency}
-                        target={host.target_concurrency}
-                      />
+                      {host.upstream_type === "newapi" ? (
+                        <span className="text-muted-foreground">—</span>
+                      ) : (
+                        <UpstreamConcurrency
+                          limit={host.concurrency_limit}
+                          status={host.concurrency_status}
+                          allocated={host.allocated_concurrency}
+                          target={host.target_concurrency}
+                        />
+                      )}
                     </TableCell>
                     <TableCell className="text-right" overflowTooltip={false}>
                       <div className="flex min-w-35 items-center justify-end gap-1">
@@ -2814,7 +2818,7 @@ export function ManualAuthForm(props: {
   );
   useEffect(() => {
     if (!usesVaultLogin) return;
-    if (entry && vaultOptions.some((item) => item.entry === entry)) return;
+    if (entry) return;
     setEntry(defaultVaultEntryForHost(vaultOptions, props.host));
   }, [entry, props.host, usesVaultLogin, vaultOptions]);
   const authRecord = authConfig.data?.auth_records.find(
@@ -2828,7 +2832,7 @@ export function ManualAuthForm(props: {
   if (usesManualLogin) {
     incomplete = !credentials.username.trim() || !credentials.password;
   } else if (usesVaultLogin) {
-    incomplete = !entry;
+    incomplete = !entry || !vaultOptions.some((item) => item.id === entry);
   } else if (
     !usesAdminKey &&
     !usesNewApiSession &&
@@ -2869,13 +2873,13 @@ export function ManualAuthForm(props: {
         } else if (usesUserToken) {
           if (credentials.accessToken.trim()) payload.access_token = credentials.accessToken.trim();
         } else if (usesVaultLogin) {
-          payload.entry = entry;
+          payload.entry_id = entry;
         } else if (usesManualLogin) {
           payload.username = credentials.username;
           payload.password = credentials.password;
           if (credentials.saveToVault) {
             payload.save_to_vault = true;
-            if (credentials.entry.trim()) payload.entry = credentials.entry.trim();
+            if (credentials.entry.trim()) payload.entry_name = credentials.entry.trim();
           }
         }
         if (showsLoginAgreement && acceptLoginAgreement) {
@@ -3021,7 +3025,7 @@ export function ManualAuthForm(props: {
             </SelectTrigger>
             <SelectContent className="min-w-[20rem]">
               {vaultOptions.map((item) => (
-                <SelectItem key={item.entry} value={item.entry}>
+                <SelectItem key={item.id} value={item.id}>
                   {vaultEntryLabel(item)}
                 </SelectItem>
               ))}
@@ -3367,11 +3371,14 @@ function AccountsPageContent() {
     pageRows.map((account) => account.id),
     modelSyncOpen,
   );
-  const pageAccountIds = pageRows.map((account) => account.id);
+  const pageAccountIds = pageRows
+    .filter((account) => !account.upstream_excluded)
+    .map((account) => account.id);
   const selectedAccountProjection = useMemo(() => {
     const selectedRows: AccountStatus[] = [];
     for (const account of rows) {
       if (
+        !account.upstream_excluded &&
         (showManualPriorityAccounts || account.manual_priority == null) &&
         selectedAccountIds.has(account.id)
       ) {
@@ -3386,7 +3393,7 @@ function AccountsPageContent() {
     const ids: string[] = [];
     const platforms = new Set<string>();
     for (const account of filteredRows) {
-      if (account.manual_priority != null) continue;
+      if (account.upstream_excluded || account.manual_priority != null) continue;
       ids.push(account.id);
       platforms.add(accountPlatformLabel(account.platform) ?? "未识别");
     }
@@ -3408,7 +3415,11 @@ function AccountsPageContent() {
       const next = pruneAccountSelection(
         current,
         rows
-          .filter((account) => showManualPriorityAccounts || account.manual_priority == null)
+          .filter(
+            (account) =>
+              !account.upstream_excluded &&
+              (showManualPriorityAccounts || account.manual_priority == null),
+          )
           .map((account) => account.id),
       );
       return sameAccountSelection(current, next) ? current : next;
@@ -4870,6 +4881,7 @@ const AccountRow = React.memo(function AccountRow(props: {
           <Checkbox
             checked={props.selected}
             aria-label={`选择账号 ${account.name}（#${account.id}）`}
+            disabled={account.upstream_excluded}
             onCheckedChange={(selected) => props.onSelectedChange(account.id, selected)}
           />
         </TableCell>
@@ -6161,12 +6173,12 @@ export function OnboardingPage() {
         if (!credentials.entry) {
           throw new Error("请选择密码箱项");
         }
-        payload.entry = credentials.entry;
+        payload.entry_id = credentials.entry;
       } else if (["sub2api_manual_login", "newapi_manual_login"].includes(authMode)) {
         payload.username = credentials.username.trim();
         payload.password = credentials.password;
         payload.save_to_vault = credentials.saveToVault;
-        if (credentials.entry.trim()) payload.entry = credentials.entry.trim();
+        if (credentials.entry.trim()) payload.entry_name = credentials.entry.trim();
       }
       if (authMode === "custom_headers") {
         payload.headers = customHeaders ?? parseStringMap(credentials.headers, "自定义 Headers");
@@ -6946,7 +6958,7 @@ export function OnboardingPage() {
                     </SelectTrigger>
                     <SelectContent className="min-w-[20rem]">
                       {vaultOptions.map((item) => (
-                        <SelectItem key={item.entry} value={item.entry}>
+                        <SelectItem key={item.id} value={item.id}>
                           {vaultEntryLabel(item)}
                         </SelectItem>
                       ))}
@@ -12084,10 +12096,11 @@ export function PolicyPage() {
           <DialogHeader>
             <DialogTitle>确认启用自动删除</DialogTitle>
             <DialogDescription>
-              已启用的自动删除规则达到条件后，将先摘除流量，再从 Sub2API
-              删除受管账号。人工保护仍生效；失效绑定删除仅处理稳定绑定已确认缺失的账号，
-              每轮按配置数量执行，允许删除分组最后一个失效账号；其他规则保留各自的分组保底。
-              不删除上游 Key；删除后无法由 Console 重建。
+              已启用的自动删除规则达到条件后，将先摘除流量。长期异常和失效绑定删除会同步删除上游
+              Key， 读回确认 Key 已删除或不存在后再删除 Sub2API 受管账号；Key
+              删除或读回失败时保留账号。
+              人工保护仍生效；失效绑定删除仅处理稳定绑定已确认缺失的账号，每轮按配置数量执行，
+              允许删除分组最后一个失效账号；其他规则保留各自的分组保底。删除后无法由 Console 重建。
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>

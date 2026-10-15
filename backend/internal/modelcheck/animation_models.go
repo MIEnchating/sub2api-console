@@ -21,6 +21,8 @@ type animationModelID struct {
 	ID string `json:"id"`
 }
 
+var ErrModelListInsufficientBalance = errors.New("上游账号余额不足，无法获取模型；请充值或更换账号后重试")
+
 type animationModelsPage struct {
 	Data   []animationModelID `json:"data"`
 	Models []struct {
@@ -148,6 +150,12 @@ func readAnimationModelsPage(ctx context.Context, client *http.Client, custom An
 			continue
 		}
 		if response.StatusCode < 200 || response.StatusCode >= 300 {
+			if response.StatusCode == http.StatusForbidden {
+				switch strings.ToLower(strings.TrimSpace(responseErrorDetail(raw))) {
+				case "insufficient account balance", "insufficient balance", "余额不足":
+					return animationModelsPage{}, ErrModelListInsufficientBalance
+				}
+			}
 			return animationModelsPage{}, directStatusError(response.StatusCode, raw, custom.APIKey)
 		}
 		var page animationModelsPage

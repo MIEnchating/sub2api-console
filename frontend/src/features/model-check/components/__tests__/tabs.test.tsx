@@ -28,6 +28,9 @@ afterEach(() => {
 function setup(accountID?: string, animation = true): () => void {
   const client = createConsoleQueryClient();
   client.setDefaultOptions({ queries: { retry: false, staleTime: Infinity } });
+  client.setQueryDefaults(["detection-timeout"], { staleTime: Infinity });
+  client.setQueryData(["detection-timeout", "animation"], { timeout_seconds: 120, version: 0 });
+  client.setQueryData(["detection-timeout", "precheck"], { timeout_seconds: 120, version: 0 });
   client.setQueryData(
     ["accounts"],
     [
@@ -115,14 +118,14 @@ it("独立动画页保留账号链接、超时设置和查看全部账号入口"
   dispose();
 });
 
-it("前置检测使用独立 Tab 并与账号检测共享超时和账号选择", async () => {
+it("前置检测使用独立超时，切换 Tab 保留共同账号选择", async () => {
   const user = userEvent.setup();
   const dispose = setup("41");
   const animationPanel = await screen.findByRole("tabpanel", { name: "账号检测" });
   expect(within(animationPanel).getByRole("combobox", { name: "检测模型" })).toHaveTextContent(
     "gpt-6-astra",
   );
-  fireEvent.change(within(animationPanel).getByRole("spinbutton", { name: "请求超时（秒）" }), {
+  fireEvent.change(within(animationPanel).getByRole("spinbutton", { name: "动画超时（秒）" }), {
     target: { value: "60" },
   });
 
@@ -139,7 +142,9 @@ it("前置检测使用独立 Tab 并与账号检测共享超时和账号选择",
     "gpt-6-astra",
   );
   expect(within(precheckPanel).getByRole("checkbox", { name: /检测 人工账号/ })).toBeChecked();
-  expect(within(precheckPanel).getByRole("spinbutton", { name: "请求超时（秒）" })).toHaveValue(60);
+  expect(within(precheckPanel).getByRole("spinbutton", { name: "前置检测超时（秒）" })).toHaveValue(
+    120,
+  );
   expect(within(precheckPanel).getByRole("button", { name: "前置检测（1）" })).toBeVisible();
   expect(within(precheckPanel).queryByRole("button", { name: /开始检测/ })).not.toBeInTheDocument();
   expect(within(precheckPanel).getByRole("region", { name: "前置检测结果" })).toBeVisible();

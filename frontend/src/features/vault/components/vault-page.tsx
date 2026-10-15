@@ -1,10 +1,18 @@
-import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
-import { FieldError } from "@/components/field-error";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { zodResolver } from "@hookform/resolvers/zod";
+import { useForm, useWatch } from "react-hook-form";
+import {
+  emptyVaultForm,
+  vaultSchema,
+  type VaultForm,
+  type MutableVaultField,
+} from "../lib/vault-schema";
+import { VaultEditorFields } from "./vault-editor-fields";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Eraser, KeyRound, Pencil, Plus, Search, Trash2 } from "lucide-react";
+import { KeyRound, Pencil, Plus, Search, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
-import { api, type VaultEntryIndex } from "@/api";
+import { api, ApiError, type VaultEntryIndex } from "@/api";
 import { TableFilterToolbar } from "@/components/data-table/filter-toolbar";
 import { FilterMenu } from "@/components/data-table/filter-menu";
 import { TableActionButton } from "@/components/data-table/table-action-button";
@@ -15,7 +23,6 @@ import { PageLayout } from "@/components/page-layout";
 import { RefreshButton } from "@/components/refresh-button";
 import { ContentRetry } from "@/components/content-retry";
 import { QueryErrorToast } from "@/components/query-error-toast";
-import { FieldLabel } from "@/components/field-help-tooltip";
 import { StatusBadge } from "@/components/status-badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
@@ -37,30 +44,10 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Textarea } from "@/components/ui/textarea";
 import { notifyOperationError, operationErrorMessage } from "@/lib/operation-feedback";
 import { parseJsonStringMap } from "@/lib/json-string-map";
-import { JsonEditor } from "@/components/json-editor";
-import { sensitiveFieldPlaceholder } from "@/lib/sensitive-field";
 
-type VaultForm = {
-  entry: string;
-  username: string;
-  password: string;
-  hosts: string;
-  headers: string;
-};
-
-type MutableVaultField = "username" | "password" | "hosts" | "headers";
 type VaultStatusFilter = "all" | "complete" | "incomplete";
-
-const emptyVaultForm: VaultForm = {
-  entry: "",
-  username: "",
-  password: "",
-  hosts: "",
-  headers: "",
-};
 
 function splitHosts(value: string): string[] {
   return Array.from(
@@ -107,17 +94,17 @@ function hostConflictEntries(entries: VaultEntryIndex[]): Set<string> {
     }
     for (const host of entry.hosts) {
       const current = matches.get(host) ?? [];
-      current.push(entry.entry);
+      current.push(entry.id);
       matches.set(host, current);
     }
   }
   if (wildcardEntries.length > 1) {
-    for (const entry of wildcardEntries) conflicts.add(entry.entry);
+    for (const entry of wildcardEntries) conflicts.add(entry.id);
   }
   for (const names of matches.values()) {
     if (names.length > 1 || wildcardEntries.length > 0) {
       for (const name of names) conflicts.add(name);
-      for (const entry of wildcardEntries) conflicts.add(entry.entry);
+      for (const entry of wildcardEntries) conflicts.add(entry.id);
     }
   }
   return conflicts;
@@ -179,7 +166,7 @@ export function VaultEntryTable(props: {
         {props.entries.map((entry) => {
           const status = vaultStatus(entry);
           return (
-            <TableRow key={entry.entry}>
+            <TableRow key={entry.id}>
               <TableCell className="font-medium">{entry.entry}</TableCell>
               <TableCell className="whitespace-normal">
                 <div className="grid gap-1">
@@ -188,7 +175,7 @@ export function VaultEntryTable(props: {
                     emptyLabel="全部 Host"
                     warning={entry.hosts.length === 0}
                   />
-                  {props.conflictEntries?.has(entry.entry) ? (
+                  {props.conflictEntries?.has(entry.id) ? (
                     <span className="text-xs text-warning">存在 Host 匹配冲突</span>
                   ) : null}
                 </div>
@@ -226,22 +213,6 @@ export function VaultEntryTable(props: {
   );
 }
 
-function VaultField(props: {
-  label: string;
-  htmlFor: string;
-  hint?: string;
-  error?: string;
-  children: ReactNode;
-}) {
-  return (
-    <div className="grid min-w-0 gap-1.5 text-sm">
-      <FieldLabel label={props.label} description={props.hint} htmlFor={props.htmlFor} />
-      {props.children}
-      <FieldError message={props.error} />
-    </div>
-  );
-}
-
 export function VaultPage() {
   const fieldId = useId();
   const queryClient = useQueryClient();
@@ -264,13 +235,13 @@ export function VaultPage() {
   const [editorOpen, setEditorOpen] = useState(false);
   const [editing, setEditing] = useState<VaultEntryIndex | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<VaultEntryIndex | null>(null);
-  const [form, setForm] = useState<VaultForm>(emptyVaultForm);
-  const [headersError, setHeadersError] = useState<string | null>(null);
+  const editorForm = useForm<VaultForm>({
+    resolver: zodResolver(vaultSchema),
+    defaultValues: emptyVaultForm,
+  });
+  const form = useWatch({ control: editorForm.control });
   const [touched, setTouched] = useState<Set<MutableVaultField>>(() => new Set());
   const [cleared, setCleared] = useState<Set<MutableVaultField>>(() => new Set());
-  const [overwritePayload, setOverwritePayload] = useState<
-    Parameters<typeof api.configureVaultEntry>[0] | null
-  >(null);
   const pendingSave = useRef<Parameters<typeof api.configureVaultEntry>[0] | null>(null);
 
   const entries = useMemo(() => {
@@ -302,15 +273,15 @@ export function VaultPage() {
   const conflictEntries = useMemo(() => hostConflictEntries(allEntries), [allEntries]);
 
   function markTouched(field: MutableVaultField) {
-    if (field === "headers") setHeadersError(null);
+    if (field === "headers") editorForm.clearErrors("headers");
     setTouched((current) => new Set(current).add(field));
   }
 
   function openCreate() {
     if (!configReady) return;
     setEditing(null);
-    setForm(emptyVaultForm);
-    setHeadersError(null);
+    editorForm.reset(emptyVaultForm);
+    editorForm.clearErrors("headers");
     setTouched(new Set());
     setCleared(new Set());
     setEditorOpen(true);
@@ -318,14 +289,14 @@ export function VaultPage() {
 
   function openEdit(entry: VaultEntryIndex) {
     setEditing(entry);
-    setForm({
+    editorForm.reset({
       entry: entry.entry,
       username: "",
       password: "",
       hosts: entry.hosts.join(", "),
       headers: "",
     });
-    setHeadersError(null);
+    editorForm.clearErrors("headers");
     setTouched(new Set());
     setCleared(new Set());
     setEditorOpen(true);
@@ -345,13 +316,18 @@ export function VaultPage() {
       void queryClient.invalidateQueries({ queryKey: ["auth-recovery-config"] });
       if (!mounted.current) return;
       setEditorOpen(false);
-      setForm(emptyVaultForm);
+      editorForm.reset(emptyVaultForm);
       setCleared(new Set());
-      setHeadersError(null);
+      editorForm.clearErrors("headers");
       toast.success(editing === null ? "凭据已添加" : "凭据已更新");
     },
     onError: (error) => {
-      if (mounted.current) notifyOperationError(error, "凭据保存失败");
+      if (!mounted.current) return;
+      if (error instanceof ApiError && error.code === "vault_entry_exists") {
+        editorForm.setError("entry", { message: error.message }, { shouldFocus: true });
+        return;
+      }
+      notifyOperationError(error, "凭据保存失败");
     },
     onSettled: () => {
       writing.current = false;
@@ -368,28 +344,37 @@ export function VaultPage() {
   function closeEditor(): void {
     if (save.isPending) return;
     setEditorOpen(false);
-    setForm(emptyVaultForm);
+    editorForm.reset(emptyVaultForm);
     setCleared(new Set());
     setTouched(new Set());
-    setOverwritePayload(null);
     pendingSave.current = null;
     save.reset();
   }
 
-  function submitSave() {
+  function submitSave(form: VaultForm) {
     if (!configReady) return;
     const identity = { entry: form.entry.trim() };
+    if (allEntries.some((item) => item.id !== editing?.id && item.entry === identity.entry)) {
+      editorForm.setError(
+        "entry",
+        { message: "凭据名称已存在，请使用其他名称" },
+        { shouldFocus: true },
+      );
+      return;
+    }
     if (!identity.entry) return;
     let headers: Record<string, string> | undefined;
     if (editing === null || form.headers.trim() !== "" || cleared.has("headers")) {
       try {
         headers = parseHeaders(form.headers);
       } catch (error) {
-        setHeadersError(operationErrorMessage(error, "Headers 格式无效"));
+        editorForm.setError("headers", {
+          message: operationErrorMessage(error, "Headers 格式无效"),
+        });
         return;
       }
     }
-    setHeadersError(null);
+    editorForm.clearErrors("headers");
     const payload =
       editing === null
         ? {
@@ -401,6 +386,7 @@ export function VaultPage() {
           }
         : {
             ...identity,
+            id: editing.id,
             ...(form.username !== "" || cleared.has("username")
               ? { username: cleared.has("username") ? null : form.username }
               : {}),
@@ -410,17 +396,13 @@ export function VaultPage() {
             ...(touched.has("hosts") ? { hosts: splitHosts(form.hosts) } : {}),
             ...(headers === undefined ? {} : { headers: cleared.has("headers") ? {} : headers }),
           };
-    if (editing === null && allEntries.some((entry) => entry.entry === identity.entry)) {
-      setOverwritePayload(payload);
-      return;
-    }
     savePayload(payload);
   }
 
   const remove = useMutation({
     retry: false,
     networkMode: "always",
-    mutationFn: (entry: VaultEntryIndex) => api.deleteVaultEntry(entry.entry),
+    mutationFn: (entry: VaultEntryIndex) => api.deleteVaultEntry(entry.id),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["auth-recovery-config"] });
       if (!mounted.current) return;
@@ -531,223 +513,53 @@ export function VaultPage() {
       >
         <DialogContent
           width="wide"
-          height="large"
-          className="grid grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden"
+          height="adaptive"
+          className="w-[min(48rem,calc(100vw-2rem))] grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden"
         >
           <DialogHeader>
             <DialogTitle>{editing ? "编辑凭据" : "添加凭据"}</DialogTitle>
             <DialogDescription>
-              敏感字段不会回显；已配置的字段留空则不修改，需要移除时使用对应的“清除”按钮。
+              账号密码和请求头不会回显，留空保留原值；清除操作在保存后生效。
             </DialogDescription>
           </DialogHeader>
-          <DialogBody className="grid gap-4 sm:grid-cols-2">
-            <div className="sm:col-span-2">
-              <VaultField label="凭据名称" htmlFor={`${fieldId}-entry`}>
-                <Input
-                  id={`${fieldId}-entry`}
-                  value={form.entry}
-                  disabled={editing !== null}
-                  onChange={(event) => setForm({ ...form, entry: event.target.value })}
-                  placeholder="例如 operator"
-                />
-              </VaultField>
-            </div>
-            <VaultField
-              label="用户名"
-              htmlFor={`${fieldId}-username`}
-              hint={editing?.has_username ? "已配置，留空则不修改" : undefined}
-            >
-              <div className="flex min-w-0 items-center gap-2">
-                <Input
-                  className="min-w-0 flex-1"
-                  id={`${fieldId}-username`}
-                  autoComplete="username"
-                  value={form.username}
-                  placeholder={sensitiveFieldPlaceholder(
-                    editing?.has_username === true,
-                    "输入用户名",
-                  )}
-                  onChange={(event) => {
-                    markTouched("username");
-                    setCleared((current) => {
-                      const next = new Set(current);
-                      next.delete("username");
-                      return next;
-                    });
-                    setForm({ ...form, username: event.target.value });
-                  }}
-                />
-                {editing?.has_username ? (
-                  <Button
-                    type="button"
-                    variant="outline"
-                    className="shrink-0"
-                    onClick={() => {
-                      markTouched("username");
-                      setCleared((current) => new Set(current).add("username"));
-                      setForm({ ...form, username: "" });
-                    }}
-                  >
-                    <Eraser />
-                    清除
-                  </Button>
-                ) : null}
-              </div>
-            </VaultField>
-            <VaultField
-              label="密码"
-              htmlFor={`${fieldId}-password`}
-              hint={editing?.has_password ? "已配置，留空则不修改" : undefined}
-            >
-              <div className="flex min-w-0 items-center gap-2">
-                <Input
-                  className="min-w-0 flex-1"
-                  type="password"
-                  autoComplete="new-password"
-                  id={`${fieldId}-password`}
-                  value={form.password}
-                  placeholder={sensitiveFieldPlaceholder(
-                    editing?.has_password === true,
-                    "输入密码",
-                  )}
-                  onChange={(event) => {
-                    markTouched("password");
-                    setCleared((current) => {
-                      const next = new Set(current);
-                      next.delete("password");
-                      return next;
-                    });
-                    setForm({ ...form, password: event.target.value });
-                  }}
-                />
-                {editing?.has_password ? (
-                  <Button
-                    type="button"
-                    variant="outline"
-                    className="shrink-0"
-                    onClick={() => {
-                      markTouched("password");
-                      setCleared((current) => new Set(current).add("password"));
-                      setForm({ ...form, password: "" });
-                    }}
-                  >
-                    <Eraser />
-                    清除
-                  </Button>
-                ) : null}
-              </div>
-            </VaultField>
-            <div className="sm:col-span-2">
-              <VaultField
-                label="匹配 Host"
-                htmlFor={`${fieldId}-hosts`}
-                hint="多个 Host 使用逗号或换行分隔"
-              >
-                <Textarea
-                  className="min-h-20"
-                  id={`${fieldId}-hosts`}
-                  value={form.hosts}
-                  onChange={(event) => {
-                    markTouched("hosts");
-                    setForm({ ...form, hosts: event.target.value });
-                  }}
-                  placeholder="api.example.com"
-                />
-              </VaultField>
-            </div>
-            <div className="sm:col-span-2">
-              <VaultField
-                label="Headers JSON"
-                htmlFor={`${fieldId}-headers`}
-                error={headersError ?? undefined}
-                hint={
-                  editing?.header_names.length
-                    ? `已配置：${editing.header_names.join("、")}；留空则不修改`
-                    : "仅在登录接口需要额外请求头时填写"
-                }
-              >
-                <JsonEditor
-                  aria-label="Headers JSON"
-                  id={`${fieldId}-headers`}
-                  aria-invalid={headersError !== null}
-                  value={form.headers}
-                  onChange={(value) => {
-                    markTouched("headers");
-                    setCleared((current) => {
-                      const next = new Set(current);
-                      next.delete("headers");
-                      return next;
-                    });
-                    setForm({ ...form, headers: value });
-                  }}
-                  placeholder={sensitiveFieldPlaceholder(
-                    Boolean(editing?.header_names.length),
-                    '{"X-Custom-Header":"value"}',
-                  )}
-                />
-                {editing?.header_names.length ? (
-                  <Button
-                    type="button"
-                    variant="outline"
-                    className="mt-1 w-fit"
-                    onClick={() => {
-                      markTouched("headers");
-                      setCleared((current) => new Set(current).add("headers"));
-                      setForm({ ...form, headers: "" });
-                    }}
-                  >
-                    <Eraser />
-                    清除 Headers
-                  </Button>
-                ) : null}
-              </VaultField>
-            </div>
+          <DialogBody>
+            <form id={`${fieldId}-form`} onSubmit={editorForm.handleSubmit(submitSave)}>
+              <VaultEditorFields
+                form={editorForm}
+                editing={editing}
+                cleared={cleared}
+                disabled={save.isPending}
+                onChange={(field) => {
+                  markTouched(field);
+                  setCleared((current) => {
+                    const next = new Set(current);
+                    next.delete(field);
+                    return next;
+                  });
+                }}
+                onToggleClear={(field) => {
+                  markTouched(field);
+                  editorForm.setValue(field, "");
+                  setCleared((current) => {
+                    const next = new Set(current);
+                    if (next.has(field)) next.delete(field);
+                    else next.add(field);
+                    return next;
+                  });
+                }}
+              />
+            </form>
           </DialogBody>
           <DialogFooter>
             <Button variant="outline" onClick={closeEditor} disabled={save.isPending}>
               取消
             </Button>
             <Button
-              onClick={submitSave}
-              disabled={!configReady || save.isPending || !form.entry.trim()}
+              type="submit"
+              form={`${fieldId}-form`}
+              disabled={!configReady || save.isPending || !form.entry?.trim()}
             >
               {saveButtonLabel}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      <Dialog
-        open={overwritePayload !== null}
-        onOpenChange={(open) => {
-          if (!open && !save.isPending) setOverwritePayload(null);
-        }}
-      >
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>覆盖已有凭据？</DialogTitle>
-            <DialogDescription>
-              凭据名称“{overwritePayload?.entry ?? ""}”已存在。继续后会覆盖其账号密码、Host 和
-              Headers 配置。
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button
-              variant="outline"
-              onClick={() => setOverwritePayload(null)}
-              disabled={save.isPending}
-            >
-              取消
-            </Button>
-            <Button
-              onClick={() => {
-                if (!overwritePayload) return;
-                savePayload(overwritePayload);
-                setOverwritePayload(null);
-              }}
-              disabled={!configReady || save.isPending || overwritePayload === null}
-            >
-              {save.isPending ? "保存中..." : "确认覆盖"}
             </Button>
           </DialogFooter>
         </DialogContent>

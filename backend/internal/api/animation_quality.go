@@ -32,13 +32,40 @@ func qualityError(c *gin.Context, err error) {
 	switch {
 	case errors.Is(err, taskstore.ErrNotFound):
 		writeError(c, http.StatusNotFound, err.Error())
-	case errors.Is(err, taskstore.ErrTaskStillActive), errors.Is(err, business.ErrQualityAnnotationConflict):
+	case errors.Is(err, taskstore.ErrTaskStillActive), errors.Is(err, business.ErrQualityAnnotationConflict), errors.Is(err, business.ErrQualityRecheckConflict), errors.Is(err, business.ErrQualityConfirmationConflict):
 		writeError(c, http.StatusConflict, err.Error())
-	case errors.Is(err, modelcheck.ErrQualityReview), errors.Is(err, modelcheck.ErrQualityAnnotation):
+	case errors.Is(err, modelcheck.ErrQualityReview), errors.Is(err, modelcheck.ErrQualityAnnotation), errors.Is(err, modelcheck.ErrQualitySettings), errors.Is(err, modelcheck.ErrQualityConfirmation):
 		writeError(c, http.StatusUnprocessableEntity, err.Error())
 	default:
 		writeError(c, http.StatusInternalServerError, "质量标注操作失败，请重试")
 	}
+}
+
+func (s *Server) confirmAnimationQuality(c *gin.Context) {
+	c.Header("Cache-Control", "no-store")
+	service, ok := s.modelChecks.(interface {
+		ConfirmAnimationQuality(context.Context, string, modelcheck.AnimationQualityConfirmationRequest, string) (modelcheck.AnimationQualityReview, error)
+	})
+	if !ok {
+		writeError(c, http.StatusServiceUnavailable, "质量标注服务尚未就绪")
+		return
+	}
+	var payload modelcheck.AnimationQualityConfirmationRequest
+	if bindRequestJSON(c, &payload) != nil {
+		writeError(c, http.StatusUnprocessableEntity, modelcheck.ErrQualityConfirmation.Error())
+		return
+	}
+	actor, err := s.requestActor(c)
+	if err != nil {
+		writeError(c, http.StatusInternalServerError, "控制台会话读取失败")
+		return
+	}
+	review, err := service.ConfirmAnimationQuality(c.Request.Context(), c.Param("task_id"), payload, actor)
+	if err != nil {
+		qualityError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, review)
 }
 func (s *Server) getAnimationQuality(c *gin.Context) {
 	service := s.animationQualityService(c)
@@ -90,4 +117,31 @@ func (s *Server) listAnimationQualitySamples(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, page)
+}
+
+func (s *Server) recheckAnimationQuality(c *gin.Context) {
+	c.Header("Cache-Control", "no-store")
+	service, ok := s.modelChecks.(interface {
+		EnqueueAnimationQualityRecheck(context.Context, string, modelcheck.AnimationQualityRecheckRequest, string) (taskstore.Task, error)
+	})
+	if !ok {
+		writeError(c, http.StatusServiceUnavailable, "质量复核服务尚未就绪")
+		return
+	}
+	var request modelcheck.AnimationQualityRecheckRequest
+	if bindRequestJSON(c, &request) != nil {
+		writeError(c, http.StatusUnprocessableEntity, "复核参数无效，请重新打开结果后重试")
+		return
+	}
+	actor, err := s.requestActor(c)
+	if err != nil {
+		writeError(c, http.StatusInternalServerError, "控制台会话读取失败")
+		return
+	}
+	task, err := service.EnqueueAnimationQualityRecheck(c.Request.Context(), c.Param("task_id"), request, actor)
+	if err != nil {
+		qualityError(c, err)
+		return
+	}
+	c.JSON(http.StatusAccepted, task)
 }

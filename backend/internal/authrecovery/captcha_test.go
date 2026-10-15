@@ -209,7 +209,7 @@ func TestCaptchaSubmitEncryptsPasswordAndCommitsOnlyAfterReadback(t *testing.T) 
 			Host: "api.example.test", BaseURL: server.URL, UpstreamType: "sub2api", AuthMode: "sub2api_user_token",
 			AccessToken: &expired, Headers: map[string]string{"Authorization": "Bearer expired-token", "X-Site": "custom"}, Cookies: map[string]string{"old": "cookie"},
 		},
-		entry: &configstore.VaultEntry{Entry: "selected", Username: &username, Password: &password, Headers: map[string]string{}},
+		entry: &configstore.VaultEntry{ID: "selected", Entry: "selected", Username: &username, Password: &password, Headers: map[string]string{}},
 	}
 	verifier, catalog := &captchaVerifier{}, &captchaCatalog{}
 	manager := NewCaptchaManager(store, verifier, catalog, server.Client())
@@ -264,7 +264,7 @@ func TestCaptchaSubmitDoesNotCommitWhenCatalogReadbackFails(t *testing.T) {
 	username, password := "operator@example.test", "secret"
 	store := &captchaStore{
 		record: &configstore.AuthRecord{Host: "api.example.test", BaseURL: server.URL, UpstreamType: "sub2api", AuthMode: "sub2api_user_token", Headers: map[string]string{}, Cookies: map[string]string{}},
-		entry:  &configstore.VaultEntry{Entry: "selected", Username: &username, Password: &password, Headers: map[string]string{}},
+		entry:  &configstore.VaultEntry{ID: "selected", Entry: "selected", Username: &username, Password: &password, Headers: map[string]string{}},
 	}
 	manager := NewCaptchaManager(store, &captchaVerifier{}, &captchaCatalog{err: errors.New("catalog unavailable")}, server.Client())
 	challenge, err := manager.Prepare(context.Background(), *store.record, "selected", nil)
@@ -299,7 +299,7 @@ func TestCaptchaCancelStopsInflightLoginBeforeCredentialCommit(t *testing.T) {
 	username, password := "operator@example.test", "secret"
 	store := &captchaStore{
 		record: &configstore.AuthRecord{Host: "api.example.test", BaseURL: server.URL, UpstreamType: "sub2api", Headers: map[string]string{}, Cookies: map[string]string{}},
-		entry:  &configstore.VaultEntry{Entry: "selected", Username: &username, Password: &password},
+		entry:  &configstore.VaultEntry{ID: "selected", Entry: "selected", Username: &username, Password: &password},
 	}
 	client := *server.Client()
 	client.Transport = &captchaBlockingTransport{
@@ -361,7 +361,7 @@ func TestCaptchaCancelDuringCredentialCommitReportsPersistenceUnknown(t *testing
 	username, password := "operator@example.test", "secret"
 	baseStore := &captchaStore{
 		record: &configstore.AuthRecord{Host: "api.example.test", BaseURL: server.URL, UpstreamType: "sub2api", AuthMode: "sub2api_user_token", Headers: map[string]string{}, Cookies: map[string]string{}},
-		entry:  &configstore.VaultEntry{Entry: "selected", Username: &username, Password: &password, Headers: map[string]string{}},
+		entry:  &configstore.VaultEntry{ID: "selected", Entry: "selected", Username: &username, Password: &password, Headers: map[string]string{}},
 	}
 	store := &captchaCommitBlockingStore{captchaStore: baseStore, started: make(chan struct{}), release: make(chan struct{})}
 	manager := NewCaptchaManager(store, &captchaVerifier{}, &captchaCatalog{}, server.Client())
@@ -454,7 +454,7 @@ func TestCaptchaCanCommitVerifiedCandidateWithoutPriorPrivateRecord(t *testing.T
 	}))
 	defer server.Close()
 	username, password := "operator@example.test", "secret"
-	store := &captchaStore{entry: &configstore.VaultEntry{Entry: "selected", Username: &username, Password: &password, Headers: map[string]string{}}}
+	store := &captchaStore{entry: &configstore.VaultEntry{ID: "selected", Entry: "selected", Username: &username, Password: &password, Headers: map[string]string{}}}
 	manager := NewCaptchaManager(store, &captchaVerifier{}, &captchaCatalog{}, server.Client())
 	candidate := configstore.AuthRecord{
 		Host: "api.example.test", BaseURL: server.URL, UpstreamType: "sub2api", AuthMode: "sub2api_user_login",
@@ -511,14 +511,14 @@ func TestManualCaptchaCredentialStaysInMemoryUntilSuccessfulSubmit(t *testing.T)
 		t.Fatalf("verified credentials were not committed: auth=%#v vault=%#v", store.saved, store.savedVault)
 	}
 	resources := <-repository.attempts
-	if len(resources) != 2 || resources[0] != "upstream/api.example.test" || resources[1] != "vault/operator-entry" {
+	if len(resources) != 2 || resources[0] != "upstream/api.example.test" || resources[1] != "vault/"+store.savedVault[0].ID {
 		t.Fatalf("captcha commit lease resources = %#v", resources)
 	}
 }
 
 func TestCaptchaPrepareRejectsNonEmailCredentialBeforeUpstreamRequest(t *testing.T) {
 	username, password := "not-an-email", "secret"
-	store := &captchaStore{entry: &configstore.VaultEntry{
+	store := &captchaStore{entry: &configstore.VaultEntry{ID: "wrong-entry",
 		Entry: "wrong-entry", Username: &username, Password: &password,
 	}}
 	manager := NewCaptchaManager(store, &captchaVerifier{}, &captchaCatalog{}, &http.Client{

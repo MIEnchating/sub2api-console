@@ -13,6 +13,7 @@ import (
 type verificationChallenge struct {
 	id, label, prompt, expected string
 	jsonOutput                  bool
+	measurement                 bool
 }
 
 func verificationChallenges() ([]verificationChallenge, error) {

@@ -20,7 +20,7 @@ function renderVaultEditor(options?: {
   writes: UpstreamConfigurationUpdate[];
 } {
   const configuration: UpstreamConfiguration = {
-    entry: options?.entry === undefined ? "测试登录资料" : options.entry,
+    entry_id: options?.entry === undefined ? "测试登录资料" : options.entry,
     upstream_id: "up_example",
     host: "api.example.test",
     name: "测试上游",
@@ -42,6 +42,7 @@ function renderVaultEditor(options?: {
   };
   const entries: VaultEntryIndex[] = [
     {
+      id: "测试登录资料",
       entry: "测试登录资料",
       hosts: [],
       has_username: true,
@@ -50,6 +51,7 @@ function renderVaultEditor(options?: {
       header_names: [],
     },
     {
+      id: "Host 默认资料",
       entry: "Host 默认资料",
       hosts: [configuration.host],
       has_username: true,
@@ -80,7 +82,7 @@ function renderVaultEditor(options?: {
       }
       const payload = JSON.parse(String(init.body)) as UpstreamConfigurationUpdate;
       writes.push(payload);
-      return Response.json({ ...configuration, entry: payload.entry });
+      return Response.json({ ...configuration, entry_id: payload.entry_id });
     }),
   );
   const client = new QueryClient({
@@ -164,6 +166,16 @@ it("键盘更换密码项后刷新配置不会覆盖选择，保存提交并回�
   expect(select).toHaveTextContent("Host 默认资料");
   await user.click(screen.getByRole("button", { name: "保存并重算" }));
   await waitFor(() => expect(state.writes).toHaveLength(1));
-  expect(state.writes[0].entry).toBe("Host 默认资料");
+  expect(state.writes[0].entry_id).toBe("Host 默认资料");
   expect(select).toHaveTextContent("Host 默认资料");
+});
+
+it("已绑定凭据被删除时不自动换绑 Host 默认项，保存要求重新选择", async () => {
+  const user = userEvent.setup();
+  const state = renderVaultEditor({ entry: "vault-deleted-id" });
+  const select = await screen.findByRole("combobox", { name: "密码箱密码项" });
+  await user.click(screen.getByRole("button", { name: "保存并重算" }));
+  expect(await screen.findByText("原凭据已不可用，请重新选择密码箱项")).toBeVisible();
+  expect(select).not.toHaveTextContent("Host 默认资料");
+  expect(state.writes).toHaveLength(0);
 });

@@ -1,19 +1,9 @@
-import {
-  AlertTriangle,
-  Check,
-  CheckCircle2,
-  Circle,
-  CircleHelp,
-  LoaderCircle,
-  Radio,
-  XCircle,
-} from "lucide-react";
+import { AlertTriangle, CheckCircle2, CircleHelp, XCircle } from "lucide-react";
 import { useEffect } from "react";
 
 import type { Task } from "@/api";
 import { DataTablePagination } from "@/components/data-table/pagination";
 import { DataTablePanel } from "@/components/data-table/table-panel";
-import { TaskCancelButton } from "@/components/task-startup-state";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -28,6 +18,8 @@ import {
 import { useClientPagination } from "@/hooks/use-client-pagination";
 import { astraSourceLabels } from "../constants";
 import { VerificationResult } from "./verification-result";
+import { VerificationReport } from "./verification-report";
+import { LiveModelCheckResult } from "./live-model-check-result";
 
 type ResultRecord = Record<string, unknown>;
 
@@ -78,13 +70,14 @@ function percent(value: number | null): string {
 }
 
 function verdictVariant(verdict: string): "success" | "destructive" | "warning" {
-  if (["MATCH", "GROUP_MATCH", "SOL_CONSISTENT"].includes(verdict)) return "success";
+  if (["NO_ANOMALIES", "MATCH", "GROUP_MATCH", "SOL_CONSISTENT"].includes(verdict))
+    return "success";
   if (["MISMATCH", "LUNA_LIKE", "TERRA_LIKE", "ERROR"].includes(verdict)) return "destructive";
   return "warning";
 }
 
 function verdictBadge(verdict: string) {
-  if (["MATCH", "GROUP_MATCH", "SOL_CONSISTENT"].includes(verdict)) {
+  if (["NO_ANOMALIES", "MATCH", "GROUP_MATCH", "SOL_CONSISTENT"].includes(verdict)) {
     return (
       <Badge variant="success">
         <CheckCircle2 aria-hidden="true" />
@@ -204,162 +197,6 @@ function ResultMetrics(props: { result: ResultRecord }) {
   );
 }
 
-function LiveModelCheckResult(props: { task: Task; rows: ResultRecord[] }) {
-  const completed = numberValue(props.task.result.completed) ?? props.rows.length;
-  const total = numberValue(props.task.result.total) ?? Math.max(completed, 1);
-  const phase = textValue(props.task.result.phase) ?? "queued";
-  let activeStep = 0;
-  if (completed >= total && total > 0) activeStep = 2;
-  else if (phase === "testing") activeStep = 1;
-  const steps = ["准备账号凭据", "并行执行检测", "汇总检测结果"];
-  const progress = Math.min(100, Math.max(0, numberValue(props.task.progress) ?? 0));
-  const active = objectValue(props.task.result.active);
-  const activeItems = Object.values(active).filter(
-    (item): item is ResultRecord => item !== null && typeof item === "object",
-  );
-
-  return (
-    <div
-      className="flex h-full min-h-0 flex-col gap-4"
-      role="status"
-      aria-live="polite"
-      data-testid="model-check-live-progress"
-    >
-      <div className="grid shrink-0 gap-3 rounded-md border p-4 sm:grid-cols-[1fr_auto] sm:items-center">
-        <div className="min-w-0">
-          <p className="flex items-center gap-2 font-medium">
-            <Radio className="text-primary size-4 animate-pulse" aria-hidden="true" />
-            实时检测过程
-          </p>
-          <p className="text-muted-foreground mt-1 truncate text-sm">{props.task.message}</p>
-        </div>
-        <div className="flex items-center gap-3 sm:justify-end">
-          <div className="text-left sm:text-right">
-            <strong className="text-lg tabular-nums">{progress.toFixed(0)}%</strong>
-            <span className="text-muted-foreground ml-1 text-xs">
-              {completed}/{total} 个组合
-            </span>
-          </div>
-          <TaskCancelButton taskId={props.task.id} />
-        </div>
-      </div>
-
-      <div className="grid shrink-0 gap-2 rounded-md border px-3 py-2.5">
-        <div className="flex items-center justify-between gap-3 text-xs">
-          <span className="text-muted-foreground">总体进度</span>
-          <span className="font-medium tabular-nums">{progress.toFixed(0)}%</span>
-        </div>
-        <Progress value={progress} aria-label={`检测进度 ${progress.toFixed(0)}%`} />
-        <div className="flex min-w-0 flex-wrap items-center gap-1.5 text-xs">
-          {activeItems.length > 0 ? (
-            activeItems.map((item, index) => (
-              <div
-                key={`${textValue(item.account_id) ?? index}-${textValue(item.claimed_model) ?? index}`}
-                className="bg-muted/30 flex min-w-0 items-center gap-2 rounded px-2 py-1.5"
-              >
-                <LoaderCircle
-                  className="text-primary size-3.5 shrink-0 animate-spin"
-                  aria-hidden="true"
-                />
-                <span className="truncate">{textValue(item.account_name) ?? "账号"}</span>
-                <span className="text-muted-foreground truncate">
-                  {textValue(item.claimed_model) ?? "模型"}
-                </span>
-                <Badge variant="outline" className="ml-auto shrink-0">
-                  {numberValue(item.completed_probes) ?? 0}/
-                  {numberValue(item.planned_probes) ?? "—"} 项
-                </Badge>
-              </div>
-            ))
-          ) : (
-            <span className="text-muted-foreground">等待检测任务开始…</span>
-          )}
-        </div>
-      </div>
-
-      <ol className="grid shrink-0 grid-cols-3 gap-2" aria-label="检测步骤">
-        {steps.map((label, index) => {
-          const done = index < activeStep;
-          const active = index === activeStep;
-          let stepIcon = (
-            <Circle className="text-muted-foreground size-4 shrink-0" aria-hidden="true" />
-          );
-          if (done) {
-            stepIcon = <Check className="text-primary size-4 shrink-0" aria-hidden="true" />;
-          } else if (active) {
-            stepIcon = (
-              <LoaderCircle
-                className="text-primary size-4 shrink-0 animate-spin"
-                aria-hidden="true"
-              />
-            );
-          }
-          return (
-            <li
-              key={label}
-              className={`flex min-w-0 items-center gap-2 rounded-md border px-3 py-2.5 ${
-                active ? "border-primary/40 bg-primary/5" : "bg-muted/20"
-              }`}
-            >
-              {stepIcon}
-              <span className="truncate text-xs font-medium sm:text-sm">{label}</span>
-            </li>
-          );
-        })}
-      </ol>
-
-      <DataTablePanel className="flex-1">
-        {props.rows.length === 0 ? (
-          <div className="text-muted-foreground grid h-full min-h-48 place-items-center text-sm">
-            <span className="flex items-center gap-2">
-              <LoaderCircle className="size-4 animate-spin" aria-hidden="true" />
-              {props.task.message}
-            </span>
-          </div>
-        ) : (
-          <Table containerClassName="h-full overflow-auto" className="min-w-[640px]">
-            <TableHeader>
-              <TableRow>
-                <TableHead className="w-[30%]">账号</TableHead>
-                <TableHead className="w-[30%]">模型</TableHead>
-                <TableHead className="w-[22%]">检测结果</TableHead>
-                <TableHead>成功请求</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {props.rows.map((result, index) => {
-                const verdict = displayVerdict(result);
-                const requests = objectValue(result.requests);
-                return (
-                  <TableRow
-                    key={`${textValue(result.account_id) ?? index}-${textValue(result.claimed_model) ?? index}`}
-                  >
-                    <TableCell>
-                      <span className="block truncate font-medium">
-                        {textValue(result.account_name) ?? "-"}
-                      </span>
-                      <span className="text-muted-foreground block text-xs">
-                        ID {textValue(result.account_id) ?? "-"}
-                      </span>
-                    </TableCell>
-                    <TableCell className="font-medium">
-                      {textValue(result.claimed_model) ?? "-"}
-                    </TableCell>
-                    <TableCell>{verdictBadge(verdict)}</TableCell>
-                    <TableCell className={verdict === "ERROR" ? "text-destructive" : undefined}>
-                      {numberValue(requests.successful) ?? 0}/{numberValue(requests.total) ?? 0}
-                    </TableCell>
-                  </TableRow>
-                );
-              })}
-            </TableBody>
-          </Table>
-        )}
-      </DataTablePanel>
-    </div>
-  );
-}
-
 export function ModelCheckResult(props: { task: Task }) {
   const rows = resultRows(props.task.result.tests);
   const pagination = useClientPagination(rows);
@@ -369,7 +206,10 @@ export function ModelCheckResult(props: { task: Task }) {
   }, [pagination.setCurrentPage, props.task.id]);
 
   if (["queued", "running", "waiting_input"].includes(props.task.status)) {
-    return <LiveModelCheckResult task={props.task} rows={rows} />;
+    return <LiveModelCheckResult key={props.task.id} task={props.task} rows={rows} />;
+  }
+  if (rows.length > 0 && rows.every((row) => row.checker === "verification")) {
+    return <VerificationReport task={props.task} results={rows} />;
   }
   if (props.task.status === "cancelled" && rows.length === 0) {
     return (

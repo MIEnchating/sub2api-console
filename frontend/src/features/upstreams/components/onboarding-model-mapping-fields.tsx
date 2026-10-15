@@ -29,9 +29,16 @@ export function OnboardingModelMappingFields(props: {
     <fieldset disabled={props.disabled} className="grid min-w-0 gap-2">
       <legend className="sr-only">模型映射（可选）</legend>
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <span aria-hidden="true" className="text-sm font-medium">
-          模型映射 <span className="text-muted-foreground font-normal">（可选）</span>
-        </span>
+        <div className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-1">
+          <span aria-hidden="true" className="text-sm font-medium">
+            模型映射
+          </span>
+          {rows.fields.length === 0 ? (
+            <span className="text-muted-foreground text-xs">使用默认映射</span>
+          ) : (
+            <span className="text-muted-foreground text-xs">{rows.fields.length} 条映射</span>
+          )}
+        </div>
         <Button
           type="button"
           variant="outline"
@@ -42,9 +49,11 @@ export function OnboardingModelMappingFields(props: {
           添加模型映射
         </Button>
       </div>
-      <p className="text-muted-foreground text-xs">
-        选择上游模型后自动回填，请求模型可改名；留空保留默认映射。
-      </p>
+      {rows.fields.length > 0 ? (
+        <p className="text-muted-foreground text-xs">
+          选择上游模型后自动回填，请求模型可改名；留空保留默认映射。
+        </p>
+      ) : null}
       {rows.fields.length > 0 ? (
         <div
           aria-hidden="true"

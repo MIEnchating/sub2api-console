@@ -3,6 +3,15 @@ import { describe, expect, it } from "vitest";
 import { terminalRefreshKeys } from "../task-refresh";
 
 describe("terminal task refresh contract", () => {
+  it.each(["succeeded", "failed", "cancelled"] as const)(
+    "开户任务%s后刷新分组绑定核对，包含部分成功的任务",
+    (status) => {
+      expect(terminalRefreshKeys("onboarding", { status } as never)).toContainEqual([
+        "upstream-group-binding-audit",
+      ]);
+    },
+  );
+
   it("refreshes affected data after a failed task as well as a successful task", () => {
     const failed = terminalRefreshKeys("management-sync", { status: "failed" } as never);
     const succeeded = terminalRefreshKeys("management-sync", { status: "succeeded" } as never);

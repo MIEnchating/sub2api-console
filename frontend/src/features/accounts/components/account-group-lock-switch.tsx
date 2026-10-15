@@ -6,7 +6,7 @@ import { Switch } from "@/components/ui/switch";
 import { notifyOperationError } from "@/lib/operation-feedback";
 
 type Props = {
-  account: Pick<AccountStatus, "id" | "name" | "groups" | "groups_locked">;
+  account: Pick<AccountStatus, "id" | "name" | "groups" | "groups_locked" | "upstream_excluded">;
   disabled?: boolean;
 };
 
@@ -50,7 +50,10 @@ export function AccountGroupLockSwitch(props: Props): ReactElement {
         aria-describedby={`${id}-description`}
         checked={locked}
         disabled={
-          props.disabled || mutation.isPending || (!locked && props.account.groups.length === 0)
+          props.account.upstream_excluded ||
+          props.disabled ||
+          mutation.isPending ||
+          (!locked && props.account.groups.length === 0)
         }
         onCheckedChange={(enabled) => mutation.mutate({ accountID: props.account.id, enabled })}
       />

@@ -6,12 +6,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/MIEnchating/sub2api-console/backend/internal/modelrequest"
 	"io"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
-	"unicode"
 	"unicode/utf8"
 
 	"github.com/MIEnchating/sub2api-console/backend/internal/adminclient"
@@ -19,6 +19,7 @@ import (
 )
 
 type attemptOutcome struct {
+	responseText         string
 	ignoredPlaceholder   bool
 	placeholderText      string
 	placeholderPreview   string
@@ -34,7 +35,7 @@ type attemptOutcome struct {
 }
 
 func probeAttempt(ctx context.Context, account *adminclient.AccountProbe, target Target, config Config, protocol string) attemptOutcome {
-	requestContext, cancel := context.WithTimeout(ctx, config.Timeout)
+	requestContext, cancel := modelrequest.Start(ctx, config.Timeout, true)
 	defer cancel()
 	response, err := account.Open(requestContext, *target.Model, config.Prompt)
 	if err != nil {
@@ -61,6 +62,10 @@ func probeAttempt(ctx context.Context, account *adminclient.AccountProbe, target
 	result.status = &status
 	if requestContext.Err() != nil && !result.content {
 		result.reason = "主动探测超时"
+	}
+	result.responseText = account.Redact(result.responseText)
+	if text := []rune(result.responseText); len(text) > 2000 {
+		result.responseText = string(text[:2000]) + "…（内容已截断）"
 	}
 	result.reason = limitedText(account.Redact(result.reason))
 	result.model = limitedText(account.Redact(result.model))
@@ -104,6 +109,7 @@ func readProbeResponse(body io.Reader, contentType, protocol string) attemptOutc
 	scanner := bufio.NewScanner(reader)
 	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
 	result := attemptOutcome{}
+	var output modelrequest.TextAccumulator
 	completed, chatStopped := false, false
 	eventType := ""
 	var data []string
@@ -139,6 +145,8 @@ func readProbeResponse(body io.Reader, contentType, protocol string) attemptOutc
 			object["type"] = eventType
 		}
 		eventType = ""
+		output.Add(payload)
+		result.responseText = output.String()
 		event := probeEventOutcome(payload)
 		if !result.receivedContent && event.ignoredPlaceholder {
 			result.ignoredPlaceholder = true
@@ -235,7 +243,7 @@ func probeEventOutcome(value any) attemptOutcome {
 	}
 	content := eventHasContent(value)
 	placeholder := eventPlaceholderText(value)
-	result := attemptOutcome{ignoredPlaceholder: placeholder != "", model: eventModel(value), reason: reason, receivedContent: content, content: reason == "" && content}
+	result := attemptOutcome{responseText: modelrequest.Text(value), ignoredPlaceholder: placeholder != "", model: eventModel(value), reason: reason, receivedContent: content, content: reason == "" && content}
 	appendPlaceholderText(&result, placeholder)
 	if reason != "" {
 		result.status = eventErrorStatus(value)
@@ -387,16 +395,7 @@ func hasTextBlocks(blocks []any, matches func(any) bool) bool {
 // Empty protocol deltas are metadata; nonempty whitespace is a placeholder.
 func meaningfulText(value any) bool {
 	text, ok := value.(string)
-	if !ok {
-		return false
-	}
-	if strings.ContainsFunc(text, func(r rune) bool {
-		return unicode.Is(unicode.Han, r) || r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || probeEmoji(r)
-	}) {
-		return true
-	}
-	return strings.Contains(text, "#\u20e3") || strings.Contains(text, "#\ufe0f\u20e3") ||
-		strings.Contains(text, "*\u20e3") || strings.Contains(text, "*\ufe0f\u20e3")
+	return ok && modelrequest.MeaningfulText(text)
 }
 
 func placeholderText(value any) bool {

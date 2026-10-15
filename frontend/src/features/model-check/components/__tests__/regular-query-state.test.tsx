@@ -78,6 +78,6 @@ it("旧画像能力接口不可用时仍可选择账号支持的新模型", asyn
   expect(model).toBeChecked();
   expect(screen.getByRole("button", { name: /开始检测/ })).toBeEnabled();
   expect(capabilities).not.toHaveBeenCalled();
-  expect(screen.getByText(/计划 7 项检测/)).toBeVisible();
+  expect(screen.getByText(/计划 17 项检测/)).toBeVisible();
   view.unmount();
 });

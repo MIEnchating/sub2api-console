@@ -73,7 +73,8 @@ func TestPolicyDeferralAuditFailureRemainsExecutionFailure(t *testing.T) {
 	repository := &failingAuthorizationStore{Store: fixture.store, failSkipAudit: true}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
 		if request.Method == http.MethodGet && request.URL.Path == "/api/v1/admin/accounts/41" {
-			if _, err := fixture.store.UpdatePolicy(request.Context(), map[string]any{"auto_apply": map[string]any{"concurrency": false}}, "operator"); err != nil {
+			// The operator edit is independent of the in-flight upstream request.
+			if _, err := fixture.store.UpdatePolicy(t.Context(), map[string]any{"auto_apply": map[string]any{"concurrency": false}}, "operator"); err != nil {
 				t.Error(err)
 				http.Error(w, "policy update failed", http.StatusInternalServerError)
 				return

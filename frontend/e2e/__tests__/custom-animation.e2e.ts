@@ -53,7 +53,7 @@ test("无账号时自定义接口可确认生成、查看动画并清除 Key，�
     if (path === "/api/model-checks/animations" && route.request().method() === "POST") {
       expect(route.request().postDataJSON()).toEqual({
         targets: [],
-        timeout_seconds: 120,
+        timeout_seconds: 0,
         custom: { base_url: baseURL, api_key: "isolated-custom-key", model, platform: "anthropic" },
       });
       created = true;
@@ -69,6 +69,7 @@ test("无账号时自定义接口可确认生成、查看动画并清除 Key，�
       "/api/model-checks/capabilities": { claude_standards: [], sol_models: [] },
       "/api/model-checks/account-statuses": [],
       "/api/model-checks/animation-schedules": [],
+      "/api/model-checks/timeouts/animation": { timeout_seconds: 120, version: 0 },
       "/api/model-checks/animations": created ? [{ ...task, result: {} }] : [],
       "/api/tasks/custom-e2e": task,
     };
@@ -81,6 +82,7 @@ test("无账号时自定义接口可确认生成、查看动画并清除 Key，�
   await page.goto("/animation-check");
   await page.getByRole("tab", { name: "自定义接口", exact: true }).click();
   const panel = page.getByRole("tabpanel", { name: "自定义接口", exact: true });
+  await expect(panel.getByRole("spinbutton", { name: "动画超时（秒）" })).toHaveValue("120");
   await panel.getByRole("combobox", { name: "接口类型" }).click();
   await page.getByRole("option", { name: "Anthropic" }).click();
   await panel.getByRole("textbox", { name: "Base URL" }).fill(baseURL);

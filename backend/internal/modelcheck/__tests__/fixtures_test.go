@@ -23,6 +23,7 @@ const fixtureSecret = "sk-isolated-animation-test-secret"
 const fixtureSVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 400"><circle cx="100" cy="200" r="40"><animateTransform attributeName="transform" type="rotate" from="0 100 200" to="360 100 200" dur="2s" repeatCount="indefinite"/></circle></svg>`
 
 type catalog struct {
+	timeoutRaw   []byte
 	mu           sync.Mutex
 	rows         []business.AccountStatus
 	details      map[string]*business.AccountDetail

@@ -13,12 +13,17 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { animationActivityLabel, type AnimationActivity } from "../lib/animation-task-results";
+import {
+  animationActivityLabel,
+  animationWaitingForGeneration,
+  type AnimationActivity,
+} from "../lib/animation-task-results";
 import { cn } from "@/lib/utils";
 import { schedulingMetric } from "@/lib/scheduling-display";
 import { PrecheckAccountResult } from "./precheck-account-result";
-import { AnimationManualVerdictControls } from "./animation-manual-verdict";
+import { AnimationCardQualityActions } from "./animation-card-quality-actions";
 import { DetectionAccountControls } from "./detection-account-controls";
+import { upstreamExcludedAccountHelp } from "@/features/accounts/constants";
 import { supportsAnimationPlatform } from "../constants";
 
 export const AnimationAccountCard = memo(function AnimationAccountCard(props: {
@@ -54,6 +59,7 @@ export const AnimationAccountCard = memo(function AnimationAccountCard(props: {
   const precheckResult = precheckMode ? current : props.precheckResult;
   const unavailable =
     props.account.platform != null && !supportsAnimationPlatform(props.account.platform);
+  const operationsDisabled = unavailable || props.account.upstream_excluded === true;
   const currentStatus = precheckMode ? props.precheckStatus : props.taskStatus;
   const activityMatchesMode = (props.activity?.mode === "precheck") === precheckMode;
   const currentActivity = activityMatchesMode ? props.activity : undefined;
@@ -66,7 +72,11 @@ export const AnimationAccountCard = memo(function AnimationAccountCard(props: {
   let scheduleLabel = props.schedule?.enabled
     ? `每 ${props.schedule.interval_minutes} 分钟自动检测`
     : "自动检测关闭";
-  if (running && (precheckMode ? precheckResult : result)) scheduleLabel = "正在重新检测";
+  if (running && (precheckMode ? precheckResult : result)) {
+    scheduleLabel = "正在重新检测";
+    if (!precheckMode && result && !animationWaitingForGeneration(result, currentActivity))
+      scheduleLabel = "动画已生成，等待任务结束";
+  }
   if (props.schedule?.enabled && props.schedule.mode === "precheck")
     scheduleLabel = `每 ${props.schedule.interval_minutes} 分钟前置检测`;
   if (props.schedule?.enabled && props.schedule.mode === "both")
@@ -81,6 +91,7 @@ export const AnimationAccountCard = memo(function AnimationAccountCard(props: {
     (currentStatus === "succeeded" || currentStatus === "failed")
   )
     scheduleLabel = "本项检测已结束，等待任务结束";
+  if (props.account.upstream_excluded) scheduleLabel = upstreamExcludedAccountHelp;
   return (
     <article
       aria-label={`账号 ${props.account.name}`}
@@ -98,7 +109,7 @@ export const AnimationAccountCard = memo(function AnimationAccountCard(props: {
           <label className="flex min-w-0 flex-1 items-center gap-2">
             <Checkbox
               checked={props.checked}
-              disabled={props.disabled || unavailable}
+              disabled={props.disabled || operationsDisabled}
               onCheckedChange={(checked) => props.onToggle(props.account.id, checked)}
               aria-label={`检测 ${props.account.name}`}
             />
@@ -185,9 +196,10 @@ export const AnimationAccountCard = memo(function AnimationAccountCard(props: {
           {result ? (
             <AnimationAccountResult
               layout="card"
+              showQualityActions={false}
               result={result}
               activity={currentActivity}
-              retryDisabled={props.retryDisabled || running || unavailable}
+              retryDisabled={props.retryDisabled || running || operationsDisabled}
               onRetry={props.onRetry}
             />
           ) : (
@@ -235,11 +247,7 @@ export const AnimationAccountCard = memo(function AnimationAccountCard(props: {
         </Tooltip>
         <div role="group" aria-label="账号操作" className="flex shrink-0 items-center gap-1">
           {!precheckMode && result && !currentActivity ? (
-            <AnimationManualVerdictControls
-              compact
-              result={result}
-              disabled={props.retryDisabled || running || unavailable}
-            />
+            <AnimationCardQualityActions result={result} />
           ) : null}
           <DetectionAccountControls account={props.account} />
           <Tooltip>
@@ -252,7 +260,7 @@ export const AnimationAccountCard = memo(function AnimationAccountCard(props: {
                   aria-label={
                     props.account.manual_priority == null ? "设置手动控制" : "调整手动控制"
                   }
-                  disabled={unavailable || !props.onManualPriority}
+                  disabled={operationsDisabled || !props.onManualPriority}
                   onClick={() => props.onManualPriority?.(props.account)}
                 />
               }
@@ -271,7 +279,7 @@ export const AnimationAccountCard = memo(function AnimationAccountCard(props: {
                   variant="ghost"
                   size="icon"
                   aria-label="自动检测设置"
-                  disabled={!props.schedulesReady || unavailable}
+                  disabled={!props.schedulesReady || operationsDisabled}
                   onClick={() => props.onSchedule(props.account)}
                 />
               }

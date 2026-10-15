@@ -47,7 +47,7 @@ export function CustomAnimationPanel(props: {
       const started = await props.tasks.start({
         ...(mode === "precheck" ? { mode, precheck_questions: questions } : {}),
         targets: [],
-        timeout_seconds: value.timeout_seconds,
+        timeout_seconds: 0,
         custom: {
           base_url: value.base_url,
           api_key: value.api_key,

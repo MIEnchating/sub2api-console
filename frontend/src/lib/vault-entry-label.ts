@@ -32,8 +32,8 @@ export function defaultVaultEntryForHost(
   if (!host) return "";
   const normalizedHost = normalizeHost(host);
   const exact = entries.find((item) => vaultEntryHostRank(item, normalizedHost) === 0);
-  if (exact) return exact.entry;
-  return entries.find((item) => vaultEntryHostRank(item, normalizedHost) === 1)?.entry ?? "";
+  if (exact) return exact.id;
+  return entries.find((item) => vaultEntryHostRank(item, normalizedHost) === 1)?.id ?? "";
 }
 
 /** List every usable entry, placing entries associated with the current Host first. */
@@ -44,7 +44,7 @@ export function vaultEntriesForHost(
 ): VaultEntryIndex[] {
   const unique = new Map<string, VaultEntryIndex>();
   for (const item of entries) {
-    const key = item.entry;
+    const key = item.id;
     if (
       item.has_username &&
       item.has_password &&

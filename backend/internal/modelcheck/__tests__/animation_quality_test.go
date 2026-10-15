@@ -17,7 +17,7 @@ import (
 
 func qualityFixture(t *testing.T) (*fixture, *modelcheck.Service, *business.Store) {
 	t.Helper()
-	f := manualVerdictFixture(t)
+	f := qualitySourceFixture(t)
 	store, err := business.Open(filepath.Join(t.TempDir(), "quality.sqlite3"))
 	if err != nil {
 		t.Fatal(err)
@@ -30,7 +30,7 @@ func qualityFixture(t *testing.T) (*fixture, *modelcheck.Service, *business.Stor
 	return f, service, store
 }
 func qualityTask() taskstore.Task {
-	task := manualVerdictTask("quality-task")
+	task := qualitySourceTask("quality-task")
 	row := task.Result["animations"].([]any)[0].(map[string]any)
 	row["source"] = htmlAnimation
 	row["html"] = "sanitized-preview"
@@ -83,7 +83,7 @@ func TestQualityAnnotationPreservesOriginalSourceAndOtherEvidence(t *testing.T) 
 }
 func TestQualityAnnotationRejectsIncompleteOrMismatchedResults(t *testing.T) {
 	f, service, _ := qualityFixture(t)
-	for _, name := range []string{"source absent", "source truncated", "prompt absent", "wrong request", "wrong account", "failed", "precheck", "duplicate", "active", "wrong skill", "missing reason", "invalid label", "missing completion"} {
+	for _, name := range []string{"source absent", "source truncated", "prompt absent", "wrong request", "wrong account", "failed", "precheck", "duplicate", "active result", "wrong skill", "missing reason", "invalid label", "missing completion"} {
 		t.Run(name, func(t *testing.T) {
 			task := qualityTask()
 			task.ID = q.Hash(name)
@@ -107,9 +107,9 @@ func TestQualityAnnotationRejectsIncompleteOrMismatchedResults(t *testing.T) {
 				row["mode"] = "precheck"
 			case "duplicate":
 				task.Result["animations"] = []any{row, row}
-			case "active":
+			case "active result":
 				task.Status = "running"
-				want = taskstore.ErrTaskStillActive
+				row["phase"] = "reviewing"
 			case "wrong skill":
 				task.Skill = "unrelated"
 			case "missing reason":
@@ -128,6 +128,38 @@ func TestQualityAnnotationRejectsIncompleteOrMismatchedResults(t *testing.T) {
 				t.Fatalf("got %v want %v", err, want)
 			}
 		})
+	}
+}
+
+func TestQualityAnnotationAcceptsCompletedResultWhileBatchRuns(t *testing.T) {
+	f, service, repo := qualityFixture(t)
+	task := qualityTask()
+	task.Status = "running"
+	row := task.Result["animations"].([]any)[0].(map[string]any)
+	row["phase"] = "completed"
+	task.Result["animations"] = append(task.Result["animations"].([]any), map[string]any{"account_id": "2", "request_id": "request-2", "phase": "streaming", "status": "failed"})
+	if err := f.tasks.Store.Save(t.Context(), task); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.AnimationQuality(t.Context(), task.ID, "1", "request-1"); err != nil {
+		t.Fatal(err)
+	}
+	saved, err := service.SaveAnimationQualityAnnotation(t.Context(), task.ID, modelcheck.AnimationQualityAnnotationRequest{AccountID: "1", RequestID: "request-1", Label: "normal", Reason: "主体完整且踩踏联动正常"}, "operator")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A later progress snapshot must not overwrite this independent annotation.
+	task.Progress = 90
+	if err := f.tasks.Store.Save(t.Context(), task); err != nil {
+		t.Fatal(err)
+	}
+	sample, err := repo.AnimationQualitySample(t.Context(), saved.SampleID)
+	if err != nil || sample.Annotation.Label != "normal" || sample.HTML != htmlAnimation {
+		t.Fatalf("annotation lost: %+v %v", sample, err)
+	}
+	stored, err := f.tasks.Get(t.Context(), task.ID)
+	if err != nil || stored.Status != "running" || stored.Progress != 90 {
+		t.Fatalf("batch modified: %+v %v", stored, err)
 	}
 }
 func TestQualityReviewAcceptsOnboardingWithActualCustomPrompt(t *testing.T) {

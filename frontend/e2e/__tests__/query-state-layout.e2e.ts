@@ -151,6 +151,7 @@ test("密码箱后台刷新失败保留索引并禁用修改入口", async ({ pa
         : {
             vault_entries: [
               {
+                id: "运营账号",
                 entry: "运营账号",
                 hosts: ["upstream.example.test"],
                 header_names: [],

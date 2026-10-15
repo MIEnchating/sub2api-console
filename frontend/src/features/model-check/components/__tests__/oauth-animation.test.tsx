@@ -71,7 +71,7 @@ it.each(["animation", "precheck"] as const)(
       expect(submitted).toEqual([
         {
           targets: [{ account_id: "41", model: "gpt-6-astra" }],
-          timeout_seconds: 120,
+          timeout_seconds: 0,
           ...(mode === "precheck" ? { mode: "precheck", precheck_questions: ["candy"] } : {}),
         },
       ]),

@@ -1,6 +1,7 @@
 import { lazy, Suspense, useState, type ReactElement } from "react";
 import { ArrowLeft } from "lucide-react";
 import { PageLayout } from "@/components/page-layout";
+import { AnimationQualityExport } from "./animation-quality-export";
 import { AnimationQualitySettingsDialog } from "./animation-quality-settings";
 import { PageHeading } from "@/components/page-heading";
 import { Button } from "@/components/ui/button";
@@ -28,6 +29,7 @@ export function AnimationCheckPage(props: {
                 查看全部账号
               </Button>
             ) : null}
+            <AnimationQualityExport />
             <AnimationQualitySettingsDialog />
             {props.onBackToAccounts ? (
               <Button variant="outline" onClick={props.onBackToAccounts}>

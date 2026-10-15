@@ -58,7 +58,7 @@ func TestRenameAuthRecordMovesRecoverySecretsAndVaultHost(t *testing.T) {
 	if err := store.SaveAuthRecord(ctx, AuthRecord{Host: host, BaseURL: "https://ai-pixel.online", UpstreamType: "sub2api", AuthMode: "sub2api_user_token", AccessToken: &token}, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.SaveVaultEntry(ctx, VaultEntry{Entry: "pixel", Hosts: []string{host}}, map[string]bool{"hosts": true}); err != nil {
+	if err := store.SaveVaultEntry(ctx, VaultEntry{ID: "pixel", Entry: "pixel", Hosts: []string{host}}, map[string]bool{"hosts": true}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.db.ExecContext(ctx, `INSERT INTO auth_recovery_preferences(host,auth_mode,recovery_method,succeeded_at)

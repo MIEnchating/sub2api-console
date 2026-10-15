@@ -524,7 +524,7 @@ type newAPIChannelModelsRequest struct {
 type newAPIChannelKeyRequest struct {
 	Sub2APIGroupID   string `json:"sub2api_group_id" binding:"required,min=1,max=128"`
 	CredentialSource string `json:"credential_source" binding:"required,oneof=vault custom"`
-	VaultEntry       string `json:"vault_entry" binding:"omitempty,min=1,max=255"`
+	VaultEntry       string `json:"vault_entry_id" binding:"omitempty,min=1,max=255"`
 	Username         string `json:"username" binding:"omitempty,max=65536"`
 	Password         string `json:"password" binding:"omitempty,max=65536"`
 }
@@ -547,6 +547,7 @@ type autoInspectionRequest struct {
 }
 
 type modelCheckRequest struct {
+	Fingerprint    bool     `json:"fingerprint"`
 	AccountIDs     []string `json:"account_ids" binding:"required,min=1,max=20,dive,required,max=64"`
 	Models         []string `json:"models" binding:"required,min=1,max=20,dive,required,max=256"`
 	Rounds         int      `json:"rounds" binding:"min=0,max=3"`
@@ -872,10 +873,15 @@ func New(cfg config.Config, private *configstore.Store, business Business, depen
 	authorized.PUT("/model-checks/animations/:task_id/manual-verdict", server.setAnimationManualVerdict)
 	authorized.GET("/model-checks/animations/:task_id/quality", server.getAnimationQuality)
 	authorized.PUT("/model-checks/animations/:task_id/quality", server.saveAnimationQuality)
+	authorized.POST("/model-checks/animations/:task_id/quality/recheck", server.recheckAnimationQuality)
+	authorized.POST("/model-checks/animations/:task_id/quality/confirm", server.confirmAnimationQuality)
 	authorized.GET("/model-checks/animation-quality/samples", server.listAnimationQualitySamples)
+	authorized.GET("/model-checks/timeouts/:mode", server.detectionTimeout)
+	authorized.PUT("/model-checks/timeouts/:mode", server.detectionTimeout)
 	authorized.GET("/model-checks/animation-quality/settings", server.animationQualitySettings)
 	authorized.PUT("/model-checks/animation-quality/settings", server.saveAnimationQualitySettings)
 	authorized.GET("/model-checks/terminal-continuity", server.terminalContinuityHistory)
+	authorized.GET("/model-checks/history", server.modelCheckHistory)
 	authorized.GET("/model-checks/detection-tasks", server.detectionTaskEndpoint)
 	authorized.PUT("/model-checks/detection-tasks", server.detectionTaskEndpoint)
 	authorized.DELETE("/model-checks/detection-tasks/:id", server.detectionTaskEndpoint)
@@ -2262,6 +2268,14 @@ func (s *Server) accountMutationPreflight(c *gin.Context, accountID string, requ
 		return "", false
 	} else if err != nil {
 		writeError(c, http.StatusInternalServerError, "账号详情读取失败")
+		return "", false
+	}
+	if err := business.CheckAccountUpstreamManaged(c.Request.Context(), s.business, accountID); err != nil {
+		if errors.Is(err, business.ErrUpstreamExcluded) {
+			writeError(c, http.StatusConflict, err.Error())
+		} else {
+			writeError(c, http.StatusInternalServerError, "上游排除状态读取失败，请重试")
+		}
 		return "", false
 	}
 	if requireTarget && !s.requireAdminTarget(c) {
@@ -3934,7 +3948,7 @@ func parseUpstreamInput(payload map[string]any, creating bool) (upstreamconfig.I
 	allowed := map[string]struct{}{
 		"host": {}, "name": {}, "name_mode": {}, "base_url": {}, "account_base_url": {}, "upstream_type": {}, "auth_mode": {}, "recharge_rate": {},
 		"access_token": {}, "refresh_token": {}, "admin_key": {}, "user_id": {}, "headers": {}, "cookies": {},
-		"username": {}, "password": {}, "save_to_vault": {}, "entry": {},
+		"username": {}, "password": {}, "save_to_vault": {}, "entry_id": {}, "entry_name": {},
 	}
 	for key := range payload {
 		if _, found := allowed[key]; !found {
@@ -4000,13 +4014,13 @@ func parseUpstreamInput(payload map[string]any, creating bool) (upstreamconfig.I
 			return upstreamconfig.Input{}, err
 		}
 	}
-	for _, field := range []string{"access_token", "refresh_token", "admin_key", "user_id", "username", "password", "entry"} {
+	for _, field := range []string{"access_token", "refresh_token", "admin_key", "user_id", "username", "password", "entry_id", "entry_name"} {
 		raw, present := payload[field]
 		if !present {
 			continue
 		}
 		maximum := 65536
-		if field == "user_id" || field == "entry" {
+		if field == "user_id" || field == "entry_id" || field == "entry_name" {
 			maximum = 255
 		}
 		value, fieldErr := nullableTextField(raw, field, 0, maximum)
@@ -4014,6 +4028,9 @@ func parseUpstreamInput(payload map[string]any, creating bool) (upstreamconfig.I
 			return upstreamconfig.Input{}, fieldErr
 		}
 		result.Present[field] = true
+		if field == "entry_id" {
+			result.Present["entry"] = true
+		}
 		switch field {
 		case "access_token":
 			result.AccessToken = value
@@ -4027,7 +4044,9 @@ func parseUpstreamInput(payload map[string]any, creating bool) (upstreamconfig.I
 			result.Username = value
 		case "password":
 			result.Password = value
-		case "entry":
+		case "entry_name":
+			result.EntryName = value
+		case "entry_id":
 			result.Entry = value
 		}
 	}
@@ -4041,6 +4060,9 @@ func parseUpstreamInput(payload map[string]any, creating bool) (upstreamconfig.I
 			return upstreamconfig.Input{}, fieldErr
 		}
 		result.Present[field] = true
+		if field == "entry_id" {
+			result.Present["entry"] = true
+		}
 		if field == "headers" {
 			result.Headers = value
 		} else {
@@ -4059,7 +4081,7 @@ func parseUpstreamInput(payload map[string]any, creating bool) (upstreamconfig.I
 }
 
 func parseVaultEntry(payload map[string]any) (configstore.VaultEntry, map[string]bool, error) {
-	allowed := map[string]struct{}{"entry": {}, "username": {}, "password": {}, "hosts": {}, "headers": {}}
+	allowed := map[string]struct{}{"id": {}, "entry": {}, "username": {}, "password": {}, "hosts": {}, "headers": {}}
 	for key := range payload {
 		if _, found := allowed[key]; !found {
 			return configstore.VaultEntry{}, nil, fmt.Errorf("密码箱参数包含未知字段：%s", key)
@@ -4070,6 +4092,13 @@ func parseVaultEntry(payload map[string]any) (configstore.VaultEntry, map[string
 		return configstore.VaultEntry{}, nil, err
 	}
 	result := configstore.VaultEntry{Entry: name, Hosts: []string{}, Headers: map[string]string{}}
+	if _, found := payload["id"]; found {
+		id, err := requiredText(payload, "id", 1, 64)
+		if err != nil || strings.TrimSpace(id) == "" {
+			return configstore.VaultEntry{}, nil, errors.New("凭据 ID 无效")
+		}
+		result.ID = strings.TrimSpace(id)
+	}
 	present := map[string]bool{}
 	for _, field := range []string{"username", "password"} {
 		raw, found := payload[field]
@@ -4202,23 +4231,40 @@ func (s *Server) configureVaultEntry(c *gin.Context) {
 		writeError(c, http.StatusUnprocessableEntity, err.Error())
 		return
 	}
-	guarded, release, err := s.acquireVaultMutation(c.Request.Context(), entry.Entry)
+	creating := entry.ID == ""
+	if creating {
+		entry.ID = configstore.NewVaultEntryID()
+	}
+	guarded, release, err := s.acquireVaultMutation(c.Request.Context(), entry.ID)
 	if err != nil {
 		writeError(c, http.StatusConflict, err.Error())
 		return
 	}
 	defer release()
-	if err := s.private.SaveVaultEntry(guarded, entry, present); err != nil {
+	if creating {
+		err = s.private.SaveVaultEntry(guarded, entry, present)
+	} else {
+		err = s.private.UpdateVaultEntry(guarded, entry.ID, entry, present)
+	}
+	if errors.Is(err, configstore.ErrVaultEntryExists) {
+		c.JSON(http.StatusConflict, gin.H{"code": "vault_entry_exists", "detail": err.Error()})
+		return
+	}
+	if errors.Is(err, configstore.ErrVaultEntryMissing) {
+		c.JSON(http.StatusConflict, gin.H{"code": "vault_entry_missing", "detail": err.Error()})
+		return
+	}
+	if err != nil {
 		writeError(c, http.StatusConflict, err.Error())
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"entry": strings.TrimSpace(entry.Entry), "configured": true})
+	c.JSON(http.StatusOK, gin.H{"id": entry.ID, "entry": entry.Entry, "configured": true})
 }
 
 func (s *Server) deleteVaultEntry(c *gin.Context) {
-	entry := strings.TrimSpace(c.Query("entry"))
-	if entry == "" || utf8.RuneCountInString(entry) > 255 {
-		writeError(c, http.StatusUnprocessableEntity, "凭据名称长度必须在 1 到 255 之间")
+	entry := strings.TrimSpace(c.Query("id"))
+	if entry == "" || utf8.RuneCountInString(entry) > 64 {
+		writeError(c, http.StatusUnprocessableEntity, "凭据 ID 长度必须在 1 到 64 之间")
 		return
 	}
 	guarded, release, err := s.acquireVaultMutation(c.Request.Context(), entry)
@@ -4232,11 +4278,11 @@ func (s *Server) deleteVaultEntry(c *gin.Context) {
 		writeError(c, http.StatusConflict, err.Error())
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"entry": entry, "deleted": deleted})
+	c.JSON(http.StatusOK, gin.H{"id": entry, "deleted": deleted})
 }
 
-func (s *Server) acquireVaultMutation(ctx context.Context, entry string) (context.Context, func(), error) {
-	guarded, release, err := mutationguard.Acquire(ctx, s.business, mutationguard.Vault(entry))
+func (s *Server) acquireVaultMutation(ctx context.Context, id string) (context.Context, func(), error) {
+	guarded, release, err := mutationguard.Acquire(ctx, s.business, mutationguard.Vault(id))
 	if err != nil {
 		return nil, nil, err
 	}
@@ -4247,7 +4293,7 @@ func (s *Server) acquireVaultMutation(ctx context.Context, entry string) (contex
 		}
 		released = true
 		if err := release(); err != nil {
-			slog.Error("密码箱变更租约释放失败", "entry", strings.TrimSpace(entry), "error", err)
+			slog.Error("密码箱变更租约释放失败", "vault_id", strings.TrimSpace(id), "error", err)
 		}
 	}, nil
 }
@@ -4291,7 +4337,7 @@ func (s *Server) runAuthRecovery(c *gin.Context) {
 		return
 	}
 	for key := range payload {
-		if key != "host" && key != "entry" && key != "accept_login_agreement" {
+		if key != "host" && key != "entry_id" && key != "accept_login_agreement" {
 			writeError(c, http.StatusUnprocessableEntity, "鉴权恢复参数包含未知字段："+key)
 			return
 		}
@@ -4302,7 +4348,7 @@ func (s *Server) runAuthRecovery(c *gin.Context) {
 		return
 	}
 	entry := ""
-	if raw, present := payload["entry"]; present {
+	if raw, present := payload["entry_id"]; present {
 		value, ok := raw.(string)
 		if !ok || utf8.RuneCountInString(strings.TrimSpace(value)) > 255 {
 			writeError(c, http.StatusUnprocessableEntity, "entry 必须是长度不超过 255 的字符串")
@@ -4452,7 +4498,7 @@ func (s *Server) cancelAuthCaptcha(c *gin.Context) {
 func parseManualAuthInput(payload map[string]any) (authrecovery.ManualInput, error) {
 	allowed := map[string]struct{}{
 		"host": {}, "auth_mode": {}, "access_token": {}, "refresh_token": {}, "admin_key": {}, "user_id": {},
-		"username": {}, "password": {}, "save_to_vault": {}, "accept_login_agreement": {}, "entry": {}, "headers": {}, "cookies": {},
+		"username": {}, "password": {}, "save_to_vault": {}, "accept_login_agreement": {}, "entry_id": {}, "entry_name": {}, "headers": {}, "cookies": {},
 	}
 	for key := range payload {
 		if _, present := allowed[key]; !present {
@@ -4464,7 +4510,7 @@ func parseManualAuthInput(payload map[string]any) (authrecovery.ManualInput, err
 		return authrecovery.ManualInput{}, err
 	}
 	result := authrecovery.ManualInput{Host: host, Present: map[string]bool{}}
-	for _, field := range []string{"auth_mode", "access_token", "refresh_token", "admin_key", "user_id", "username", "password", "entry"} {
+	for _, field := range []string{"auth_mode", "access_token", "refresh_token", "admin_key", "user_id", "username", "password", "entry_id", "entry_name"} {
 		raw, present := payload[field]
 		if !present {
 			continue
@@ -4472,7 +4518,7 @@ func parseManualAuthInput(payload map[string]any) (authrecovery.ManualInput, err
 		maximum := 65536
 		if field == "auth_mode" {
 			maximum = 80
-		} else if field == "user_id" || field == "entry" {
+		} else if field == "user_id" || field == "entry_id" || field == "entry_name" {
 			maximum = 255
 		}
 		value, fieldErr := nullableTextField(raw, field, 0, maximum)
@@ -4480,6 +4526,9 @@ func parseManualAuthInput(payload map[string]any) (authrecovery.ManualInput, err
 			return authrecovery.ManualInput{}, fieldErr
 		}
 		result.Present[field] = true
+		if field == "entry_id" {
+			result.Present["entry"] = true
+		}
 		switch field {
 		case "auth_mode":
 			result.AuthMode = value
@@ -4495,7 +4544,9 @@ func parseManualAuthInput(payload map[string]any) (authrecovery.ManualInput, err
 			result.Username = value
 		case "password":
 			result.Password = value
-		case "entry":
+		case "entry_name":
+			result.EntryName = value
+		case "entry_id":
 			result.Entry = value
 		}
 	}
@@ -4761,7 +4812,8 @@ func (s *Server) runModelCheck(c *gin.Context) {
 		return
 	}
 	task, err := s.modelChecks.Enqueue(c.Request.Context(), modelcheck.Request{
-		AccountIDs: payload.AccountIDs, Models: payload.Models,
+		Fingerprint: payload.Fingerprint,
+		AccountIDs:  payload.AccountIDs, Models: payload.Models,
 		Rounds: payload.Rounds, TimeoutSeconds: payload.TimeoutSeconds,
 	})
 	if err != nil {
@@ -5410,6 +5462,15 @@ func (s *Server) taskDetail(c *gin.Context) {
 	}
 	c.Header("Cache-Control", "no-store")
 	task = s.detectionTaskDisplayGroups(c.Request.Context(), task)
+	if display, ok := s.modelChecks.(interface {
+		AnimationQualityDisplay(context.Context, taskstore.Task) (taskstore.Task, error)
+	}); ok {
+		task, err = display.AnimationQualityDisplay(c.Request.Context(), task)
+		if err != nil {
+			writeError(c, http.StatusInternalServerError, "任务质量结果读取失败，请重试")
+			return
+		}
+	}
 	c.JSON(http.StatusOK, taskDetailResponse{
 		Task: task, DisplayAccountNames: s.taskDisplayAccountNames(c.Request.Context(), task),
 	})
@@ -6145,9 +6206,19 @@ func writeError(c *gin.Context, status int, detail string) {
 	c.JSON(status, gin.H{"code": code, "detail": detail})
 }
 
-// Only fixed OAuth diagnostics may bypass generic 5xx masking; other discovery
+// Only fixed model-list diagnostics may bypass generic 5xx masking; other discovery
 // failures can contain storage or upstream details and must remain hidden.
 func preserveModelListError(c *gin.Context, status int, detail string) bool {
+	if status == http.StatusBadGateway {
+		switch c.FullPath() {
+		case "/api/model-checks/animations/accounts/:account_id/models":
+			if detail == "动画模型列表读取失败："+modelcheck.ErrModelListInsufficientBalance.Error() {
+				return true
+			}
+		case "/api/model-checks/animations/models":
+			return detail == "模型列表读取失败："+modelcheck.ErrModelListInsufficientBalance.Error()
+		}
+	}
 	if status != http.StatusBadGateway || c.FullPath() != "/api/model-checks/animations/accounts/:account_id/models" {
 		return false
 	}

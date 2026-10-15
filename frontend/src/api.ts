@@ -215,7 +215,7 @@ export type NewAPIChannelKeyRequest =
   | {
       sub2api_group_id: string;
       credential_source: "vault";
-      vault_entry: string;
+      vault_entry_id: string;
     }
   | {
       sub2api_group_id: string;
@@ -374,6 +374,7 @@ type AuthRecordIndex = {
   has_headers: boolean;
 };
 export type VaultEntryIndex = {
+  id: string;
   entry: string;
   hosts: string[];
   has_username: boolean;
@@ -592,7 +593,8 @@ export type UpstreamConfiguration = {
   account_base_url: string;
   upstream_type: string;
   auth_mode: string;
-  entry?: string | null;
+  entry_id?: string | null;
+  entry_name?: string;
   recharge_rate: string;
   raw_balance: string | null;
   balance: string | null;
@@ -633,7 +635,8 @@ export type UpstreamConfigurationUpdate = {
   username?: string | null;
   password?: string | null;
   save_to_vault?: boolean;
-  entry?: string | null;
+  entry_id?: string | null;
+  entry_name?: string;
 };
 
 export type UpstreamCreatePayload = UpstreamConfigurationUpdate & {
@@ -1116,6 +1119,7 @@ export type AccountRecovery = {
 };
 
 export type AccountStatus = {
+  upstream_excluded?: boolean;
   probe_placeholder_at?: string | null;
   probe_placeholder?: {
     group_name?: string;
@@ -1233,6 +1237,7 @@ type AccountBinding = {
 
 export type AccountControlState = Pick<
   AccountStatus,
+  | "upstream_excluded"
   | "id"
   | "name"
   | "health"
@@ -1352,7 +1357,7 @@ export type CaptchaChallenge = {
   image_data: string;
   expires_at: string;
   credential: {
-    entry: string;
+    entry_id: string;
   };
   interaction_kind: "image_captcha_ocr";
 };
@@ -1413,6 +1418,8 @@ export type UsageRecord = {
 
 export type SystemLogSearchQuery = {
   requestId: string;
+  timeRange?: "5m" | "30m" | "1h" | "6h" | "24h" | "7d" | "30d";
+  level?: "" | "debug" | "info" | "warn" | "error";
   page: number;
   pageSize: number;
 };
@@ -1545,6 +1552,11 @@ export type Task = {
   updated_at: string;
 };
 
+export type ModelCheckHistory = {
+  items: Omit<Task, "result" | "display_account_names">[];
+  has_more: boolean;
+};
+
 export type TaskSummary = Omit<Task, "result" | "display_account_names"> & { system_info: true };
 
 export type SystemMetrics = {
@@ -1633,6 +1645,8 @@ export type AnimationRequest = {
   timeout_seconds: number;
   custom?: AnimationCustomEndpoint;
 };
+export type DetectionTimeoutMode = "animation" | "precheck" | "review";
+export type DetectionTimeout = { timeout_seconds: number; version: number };
 export type AnimationQualitySettings = {
   enabled: boolean;
   account_id: string;
@@ -1641,6 +1655,18 @@ export type AnimationQualitySettings = {
   version: number;
 };
 export type AnimationQualityPrediction = {
+  rubric_version?: string;
+  basis?: {
+    requirement: string;
+    evidence: string;
+    assessment: string;
+  }[];
+  issues?: {
+    severity: "major" | "minor";
+    scope: "subject" | "motion" | "rendering" | "secondary";
+    evidence: string;
+    impact: string;
+  }[];
   source?: "model_review";
   explanation?: string;
   reviewer_account_id?: string;
@@ -1655,6 +1681,10 @@ export type AnimationQualityPrediction = {
   model_sha256?: string;
 };
 type AnimationQualityAnnotation = {
+  source?: "manual" | "confirmed_auto";
+  prediction_sha256?: string;
+  confirmed_prediction?: AnimationQualityPrediction;
+  recheck_version?: number;
   label: AnimationQualityPrediction["status"];
   reason: string;
   source_group: string;
@@ -1663,6 +1693,9 @@ type AnimationQualityAnnotation = {
   updated_by: string;
 };
 export type AnimationQualityReview = {
+  prediction_sha256?: string;
+  recheck_version?: number;
+  recheck?: { task_id: string; status: Task["status"]; message: string };
   prediction: AnimationQualityPrediction;
   annotation?: AnimationQualityAnnotation;
   sample_id: string;
@@ -1685,6 +1718,8 @@ export type AnimationQualitySample = {
   created_at: string;
 };
 export type AnimationResult = {
+  quality_annotation?: AnimationQualityAnnotation;
+  quality_prediction_sha256?: string;
   quality?: AnimationQualityPrediction;
   source_task_id?: string;
   source_task_status?: Task["status"];
@@ -1729,7 +1764,7 @@ export type AnimationResult = {
   duration_ms: number;
   completed_at: string;
 };
-export type AnimationManualVerdict = {
+type AnimationManualVerdict = {
   verdict: "passed" | "not_passed" | "unmarked";
   updated_at: string;
   updated_by: string;
@@ -1783,6 +1818,7 @@ export type AccountQualityStatistics = {
 };
 
 export type ModelCheckRequest = {
+  fingerprint?: boolean;
   account_ids: string[];
   models: string[];
   rounds: number;
@@ -3141,8 +3177,17 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload ?? {}),
     }),
+  modelCheckHistory: (page: number, signal?: AbortSignal) =>
+    request<ModelCheckHistory>(`/api/model-checks/history?page=${page}`, { signal }),
   animationHistory: (signal?: AbortSignal) =>
     request<Task[]>("/api/model-checks/animations", { signal }),
+  detectionTimeout: (mode: DetectionTimeoutMode, signal?: AbortSignal) =>
+    request<DetectionTimeout>(`/api/model-checks/timeouts/${mode}`, { signal }),
+  saveDetectionTimeout: (mode: DetectionTimeoutMode, value: DetectionTimeout) =>
+    request<DetectionTimeout>(`/api/model-checks/timeouts/${mode}`, {
+      method: "PUT",
+      body: JSON.stringify(value),
+    }),
   animationQualitySettings: (signal?: AbortSignal) =>
     request<AnimationQualitySettings>("/api/model-checks/animation-quality/settings", { signal }),
   saveAnimationQualitySettings: (payload: AnimationQualitySettings) =>
@@ -3154,6 +3199,31 @@ export const api = {
     request<AnimationQualityReview>(
       `/api/model-checks/animations/${encodeURIComponent(taskId)}/quality?${new URLSearchParams({ account_id: accountId, request_id: requestId })}`,
       { signal },
+    ),
+  recheckAnimationQuality: (
+    taskID: string,
+    payload: { account_id: string; request_id: string; version: number },
+  ) =>
+    request<Task>(`/api/model-checks/animations/${encodeURIComponent(taskID)}/quality/recheck`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  confirmAnimationQuality: (
+    taskID: string,
+    payload: {
+      account_id: string;
+      request_id: string;
+      version: number;
+      recheck_version: number;
+      prediction_sha256: string;
+    },
+  ) =>
+    request<AnimationQualityReview>(
+      `/api/model-checks/animations/${encodeURIComponent(taskID)}/quality/confirm`,
+      {
+        method: "POST",
+        body: JSON.stringify(payload),
+      },
     ),
   saveAnimationQuality: (
     taskId: string,
@@ -3175,14 +3245,6 @@ export const api = {
       `/api/model-checks/animation-quality/samples?${new URLSearchParams({ after, limit: "50" })}`,
       { signal },
     ),
-  setAnimationManualVerdict: (
-    taskId: string,
-    payload: { account_id: string; request_id: string; verdict: AnimationManualVerdict["verdict"] },
-  ) =>
-    request<Task>(`/api/model-checks/animations/${encodeURIComponent(taskId)}/manual-verdict`, {
-      method: "PUT",
-      body: JSON.stringify(payload),
-    }),
   accountAnimationModels: (accountId: string, signal?: AbortSignal) =>
     request<{ models: string[] }>(
       `/api/model-checks/animations/accounts/${encodeURIComponent(accountId)}/models`,
@@ -3260,7 +3322,8 @@ export const api = {
     password?: string;
     save_to_vault?: boolean;
     accept_login_agreement?: boolean;
-    entry?: string;
+    entry_id?: string;
+    entry_name?: string;
     headers?: Record<string, string>;
     cookies?: Record<string, string>;
   }) =>
@@ -3270,28 +3333,29 @@ export const api = {
     }),
   configureVaultEntry: (payload: {
     entry: string;
+    id?: string;
     username?: string | null;
     password?: string | null;
     hosts?: string[];
     headers?: Record<string, string>;
   }) =>
-    request<{ entry: string; configured: boolean }>("/api/auth-recovery/vault-entry", {
+    request<{ id: string; entry: string; configured: boolean }>("/api/auth-recovery/vault-entry", {
       method: "POST",
       body: JSON.stringify(payload),
     }),
-  deleteVaultEntry: (entry: string) => {
-    const query = new URLSearchParams({ entry });
-    return request<{ entry: string; deleted: boolean }>(
+  deleteVaultEntry: (id: string) => {
+    const query = new URLSearchParams({ id });
+    return request<{ id: string; deleted: boolean }>(
       `/api/auth-recovery/vault-entry?${query.toString()}`,
       { method: "DELETE" },
     );
   },
-  runAuthRecovery: (host: string, entry: string, acceptLoginAgreement?: boolean) =>
+  runAuthRecovery: (host: string, entryId: string, acceptLoginAgreement?: boolean) =>
     request<Task>("/api/auth-recovery/run", {
       method: "POST",
       body: JSON.stringify({
         host,
-        entry,
+        entry_id: entryId,
         ...(acceptLoginAgreement ? { accept_login_agreement: true } : {}),
       }),
     }),
@@ -3333,6 +3397,8 @@ export const api = {
       page: String(params.page),
       page_size: String(params.pageSize),
     });
+    if (params.timeRange) query.set("time_range", params.timeRange);
+    if (params.level) query.set("level", params.level);
     return request<SystemLogPage>(`/api/ops/system-logs?${query.toString()}`, { signal });
   },
   // Keep the alert view bounded; an unbounded incident table can block the

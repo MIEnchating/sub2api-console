@@ -30,14 +30,15 @@ func (s *Store) serverDetectionConfidenceHistory(ctx context.Context, since time
 		taskMode = "COALESCE(t.result_json::jsonb->>'mode','')"
 	}
 	mode := field("mode")
-	verdict := "CASE WHEN " + mode + "='precheck' OR (" + mode + "='' AND (" + precheckObject + " OR t.operation='account-model-precheck' OR " + taskMode + "='precheck')) THEN " + field("precheck.verdict") + " ELSE " + field("manual_verdict.verdict") + " END"
+	precheck := mode + "='precheck' OR (" + mode + "='' AND (" + precheckObject + " OR t.operation='account-model-precheck' OR " + taskMode + "='precheck'))"
+	verdict := "CASE WHEN " + precheck + " THEN " + field("precheck.verdict") + " ELSE CASE " + field("quality.status") + " WHEN 'normal' THEN 'passed' WHEN 'suspicious' THEN 'not_passed' ELSE 'inconclusive' END END"
 	query := `WITH eligible AS (
  SELECT * FROM tasks WHERE skill='sub2api-model-animation'
  AND status IN ('succeeded','partial','failed','cancelled')
  AND operation IN ('account-model-animation','account-model-precheck','account-model-combined','managed-model-detection')
  AND ` + s.validResultSQL() + `
  AND EXISTS (SELECT 1 FROM task_animation_history h WHERE h.task_id=tasks.id AND h.entry_kind='result' AND h.completed_seconds>=?)
- ) SELECT ` + field("account_id") + "," + field("completed_at") + "," + field("status") + "," + verdict + " FROM eligible t " + expand + " WHERE " + accountType + " AND " + mode + " IN ('','animation','precheck') AND " + field("status") + " IN ('succeeded','failed')"
+ ) SELECT t.id,` + field("request_id") + ",CASE WHEN " + precheck + " THEN FALSE ELSE TRUE END," + field("account_id") + "," + field("completed_at") + "," + field("status") + "," + verdict + " FROM eligible t " + expand + " WHERE " + accountType + " AND " + mode + " IN ('','animation','precheck') AND " + field("status") + " IN ('succeeded','failed')"
 	rows, err := s.db.QueryContext(ctx, query, since.Unix())
 	if err != nil {
 		return nil, err
@@ -46,7 +47,7 @@ func (s *Store) serverDetectionConfidenceHistory(ctx context.Context, since time
 	result := []DetectionConfidenceResult{}
 	for rows.Next() {
 		var row DetectionConfidenceResult
-		if err := rows.Scan(&row.AccountID, &row.CompletedAt, &row.Status, &row.Verdict); err != nil {
+		if err := rows.Scan(&row.TaskID, &row.RequestID, &row.Animation, &row.AccountID, &row.CompletedAt, &row.Status, &row.Verdict); err != nil {
 			return nil, err
 		}
 		at, err := time.Parse(time.RFC3339Nano, row.CompletedAt)

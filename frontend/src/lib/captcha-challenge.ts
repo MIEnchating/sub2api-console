@@ -21,13 +21,13 @@ export function captchaChallengeFromTask(task: Task | undefined): CaptchaChallen
   )
     return null;
   const credential = value.credential as Record<string, unknown>;
-  if (typeof credential.entry !== "string") return null;
+  if (typeof credential.entry_id !== "string") return null;
   return {
     challenge_id: value.challenge_id,
     host: value.host,
     image_data: value.image_data,
     expires_at: value.expires_at,
-    credential: { entry: credential.entry },
+    credential: { entry_id: credential.entry_id },
     interaction_kind: "image_captcha_ocr",
   };
 }

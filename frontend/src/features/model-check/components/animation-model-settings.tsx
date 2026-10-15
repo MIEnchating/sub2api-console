@@ -5,7 +5,7 @@ import { Controller, useFormState, useWatch, type UseFormReturn } from "react-ho
 import { api } from "@/api";
 import { FieldError } from "@/components/field-error";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import { SavedDetectionTimeout } from "./saved-detection-timeout";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { toast } from "sonner";
 import { LoaderCircle, RefreshCw } from "lucide-react";
@@ -15,16 +15,16 @@ import { createQueuedRead } from "../lib/queued-read";
 export function AnimationModelSettings(props: {
   form: UseFormReturn<AnimationForm>;
   pending: boolean;
+  mode?: "animation" | "precheck";
 }): ReactElement {
   const id = useId();
   const modelID = id + "-model";
   const modelErrorID = id + "-model-error";
-  const timeoutID = id + "-timeout";
-  const timeoutErrorID = id + "-timeout-error";
+
   const selected = useWatch({ control: props.form.control, name: "account_ids", exact: true });
   const state = useFormState({
     control: props.form.control,
-    name: ["account_ids", "unified_model", "timeout_seconds"],
+    name: ["account_ids", "unified_model"],
     exact: true,
   });
   const [requested, setRequested] = useState(false);
@@ -56,7 +56,7 @@ export function AnimationModelSettings(props: {
     <div
       role="group"
       aria-label="动画模型参数"
-      className="grid w-full max-w-full min-w-0 shrink-0 grid-cols-1 items-start gap-3 sm:w-[36rem] sm:grid-cols-[minmax(0,1fr)_12rem]"
+      className="grid w-full max-w-full min-w-0 shrink-0 grid-cols-1 items-start gap-3 sm:w-[37rem] sm:grid-cols-[minmax(0,1fr)_16rem]"
     >
       <div
         role="group"
@@ -135,31 +135,7 @@ export function AnimationModelSettings(props: {
           />
         ) : null}
       </div>
-      <div
-        role="group"
-        aria-label="请求超时设置"
-        className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)] items-center gap-x-2 gap-y-1.5"
-      >
-        <label htmlFor={timeoutID} className="shrink-0 whitespace-nowrap text-xs font-medium">
-          请求超时（秒）
-        </label>
-        <Input
-          className="w-full"
-          id={timeoutID}
-          type="number"
-          min={5}
-          max={120}
-          {...props.form.register("timeout_seconds", { valueAsNumber: true })}
-          disabled={props.pending}
-          aria-invalid={!!state.errors.timeout_seconds}
-          aria-describedby={state.errors.timeout_seconds ? timeoutErrorID : undefined}
-        />
-        <FieldError
-          className="col-start-2"
-          id={timeoutErrorID}
-          message={state.errors.timeout_seconds?.message}
-        />
-      </div>
+      <SavedDetectionTimeout mode={props.mode ?? "animation"} disabled={props.pending} />
     </div>
   );
 }

@@ -34,6 +34,7 @@ type bundleSender interface {
 }
 
 type targetRequest struct {
+	Fingerprint    bool
 	Challenges     [][]verificationChallenge
 	Progress       func(VerificationReport)
 	AccountID      string

@@ -2265,7 +2265,7 @@ func TestAuthRecoveryRoutesUseTypedManualCredentialsAndSelectedVaultEntry(t *tes
 	if manual.Code != http.StatusOK || len(manualCalls) != 1 || manualCalls[0].UserID == nil || *manualCalls[0].UserID != "7" || !manualCalls[0].AcceptLoginAgreement || !manualCalls[0].Present["cookies"] || manualCalls[0].Cookies["session"] != "browser-session" || !manualCalls[0].Present["headers"] || manualCalls[0].Headers["X-CF-Access"] != "signed-header" {
 		t.Fatalf("manual=%d %s calls=%#v", manual.Code, manual.Body.String(), manualCalls)
 	}
-	run := authenticatedRequest(t, router, http.MethodPost, "/api/auth-recovery/run", map[string]any{"host": "api.example", "entry": "Selected", "accept_login_agreement": true})
+	run := authenticatedRequest(t, router, http.MethodPost, "/api/auth-recovery/run", map[string]any{"host": "api.example", "entry_id": "Selected", "accept_login_agreement": true})
 	if run.Code != http.StatusOK || len(runCalls) != 1 || runCalls[0].host != "api.example" || runCalls[0].operation != "Selected" || len(agreementCalls) != 1 || !agreementCalls[0] {
 		t.Fatalf("run=%d %s calls=%#v", run.Code, run.Body.String(), runCalls)
 	}
@@ -3117,7 +3117,11 @@ func TestVaultConfigurationReturnsOnlyRedactedIndex(t *testing.T) {
 	if index.Code != http.StatusOK || !strings.Contains(index.Body.String(), `"has_password":true`) || strings.Contains(index.Body.String(), "operator") || strings.Contains(index.Body.String(), "private-value") {
 		t.Fatalf("private values leaked: %d %s", index.Code, index.Body.String())
 	}
-	deleted := authenticatedRequest(t, router, http.MethodDelete, "/api/auth-recovery/vault-entry?entry=Primary", nil)
+	var created map[string]any
+	if err := json.Unmarshal(configured.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+	deleted := authenticatedRequest(t, router, http.MethodDelete, "/api/auth-recovery/vault-entry?id="+created["id"].(string), nil)
 	if deleted.Code != http.StatusOK || !strings.Contains(deleted.Body.String(), `"deleted":true`) {
 		t.Fatalf("vault delete failed: %d %s", deleted.Code, deleted.Body.String())
 	}
@@ -3131,7 +3135,7 @@ func TestVaultMutationsSerializePartialUpdatesAndDelete(t *testing.T) {
 	}
 	router, private := testRouter(t, config.Config{AdminToken: "test-token"}, businessStore)
 	oldUsername, oldPassword := "old-user", "old-password"
-	if err := private.SaveVaultEntry(context.Background(), configstore.VaultEntry{
+	if err := private.SaveVaultEntry(context.Background(), configstore.VaultEntry{ID: "Primary",
 		Entry: "Primary", Username: &oldUsername, Password: &oldPassword,
 		Hosts: []string{"api.example"}, Headers: map[string]string{"X-Site": "old"},
 	}, nil); err != nil {
@@ -3174,8 +3178,8 @@ func TestVaultMutationsSerializePartialUpdatesAndDelete(t *testing.T) {
 		}
 	}
 
-	usernameDone := startRequest(http.MethodPost, "/api/auth-recovery/vault-entry", map[string]any{"entry": "Primary", "username": "new-user"})
-	passwordDone := startRequest(http.MethodPost, "/api/auth-recovery/vault-entry", map[string]any{"entry": "Primary", "password": "new-password"})
+	usernameDone := startRequest(http.MethodPost, "/api/auth-recovery/vault-entry", map[string]any{"id": "Primary", "entry": "Primary", "username": "new-user"})
+	passwordDone := startRequest(http.MethodPost, "/api/auth-recovery/vault-entry", map[string]any{"id": "Primary", "entry": "Primary", "password": "new-password"})
 	waitAttempt()
 	waitAttempt()
 	stored, err := private.VaultEntry(context.Background(), "Primary")
@@ -3195,7 +3199,7 @@ func TestVaultMutationsSerializePartialUpdatesAndDelete(t *testing.T) {
 	}
 
 	businessStore.lease <- struct{}{}
-	deleteDone := startRequest(http.MethodDelete, "/api/auth-recovery/vault-entry?entry=Primary", nil)
+	deleteDone := startRequest(http.MethodDelete, "/api/auth-recovery/vault-entry?id=Primary", nil)
 	waitAttempt()
 	if stored, err := private.VaultEntry(context.Background(), "Primary"); err != nil || stored == nil {
 		t.Fatalf("blocked delete changed the vault: entry=%#v err=%v", stored, err)
@@ -3511,12 +3515,12 @@ func TestModelCheckRoutesExposeCapabilitiesAndForwardAccountMatrix(t *testing.T)
 	}
 	response := authenticatedRequest(t, router, http.MethodPost, "/api/model-checks", map[string]any{
 		"account_ids": []string{"41", "42"}, "models": []string{"claude-opus-5", "gpt-5.6-sol"},
-		"rounds": 3, "timeout_seconds": 40,
+		"rounds": 3, "timeout_seconds": 40, "fingerprint": true,
 	})
 	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"id":"model-check-1"`) || len(requests) != 1 {
 		t.Fatalf("response=%d %s requests=%#v", response.Code, response.Body.String(), requests)
 	}
-	if len(requests[0].AccountIDs) != 2 || len(requests[0].Models) != 2 || requests[0].Rounds != 3 {
+	if len(requests[0].AccountIDs) != 2 || len(requests[0].Models) != 2 || requests[0].Rounds != 3 || !requests[0].Fingerprint {
 		t.Fatalf("request fields not preserved: %#v", requests[0])
 	}
 	invalidBodies := []map[string]any{

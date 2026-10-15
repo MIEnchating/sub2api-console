@@ -358,6 +358,9 @@ it("自动评审完成后历史读取保留理由和评审来源", () => {
     benchmark: "custom",
     source: "model_review" as const,
     explanation: "结构完整",
+    basis: [
+      { requirement: "车轮转动", evidence: "rotate(360deg)", assessment: "轮圈绑定了旋转关键帧。" },
+    ],
     reviewer_account_id: "42",
     settings_version: 2,
     model_version: "review-model",
@@ -365,4 +368,45 @@ it("自动评审完成后历史读取保留理由和评审来源", () => {
   expect(
     collectAnimationTasks([task([{ ...result, quality }])], new Set()).results.get("41")?.quality,
   ).toEqual(quality);
+});
+
+it("生成成功正在评审时立即返回动画，同时保持评审活动和账号占用", () => {
+  const reviewing = { ...result, phase: "reviewing", html: "<html>完整动画</html>" };
+  const running = { ...task([reviewing]), status: "running" as const };
+  const state = collectAnimationTasks([running], new Set());
+  expect(state.results.get("41")).toMatchObject(reviewing);
+  expect(state.activities.get("41")).toMatchObject({ status: "reviewing", completed: 0 });
+  expect(state.busyIDs.has("41")).toBe(true);
+});
+
+it("流式生成阶段即使已有部分内容也不作为可预览结果", () => {
+  const running = { ...task([{ ...result, phase: "generating" }]), status: "running" as const };
+  expect(collectAnimationTasks([running], new Set()).results.has("41")).toBe(false);
+});
+
+it("评审阶段缺少动画内容时仍等待有效生成结果", () => {
+  const running = {
+    ...task([{ ...result, phase: "reviewing", svg: undefined }]),
+    status: "running" as const,
+  };
+  expect(collectAnimationTasks([running], new Set()).results.has("41")).toBe(false);
+});
+
+it("同账号多模型只有一个完成、一个评审中时保留两份动画且继续显示评审活动", () => {
+  const running = {
+    ...task([
+      { ...result, phase: "completed" },
+      { ...result, model: "model-b", request_id: "r-b", phase: "reviewing" },
+    ]),
+    status: "running" as const,
+  };
+  running.result.targets = [
+    { account_id: "41", model: "test-model", models: ["test-model", "model-b"] },
+  ];
+  const state = collectAnimationTasks([running], new Set());
+  expect(state.modelResults.get("41")?.map((item) => item.model)).toEqual([
+    "test-model",
+    "model-b",
+  ]);
+  expect(state.activities.get("41")?.status).toBe("reviewing");
 });

@@ -23,7 +23,7 @@ func TestUpdateToKnownAliasReservesCanonicalVaultEntryForManualLogin(t *testing.
 	if verifier.concurrent {
 		t.Fatal("saving the alias address allowed a competing editor to acquire the canonical login entry")
 	}
-	stored, err := fixture.private.VaultEntry(t.Context(), addressSourceHost)
+	stored, err := fixture.private.VaultEntry(t.Context(), verifier.entryID)
 	if err != nil || stored == nil || stored.Username == nil || *stored.Username != username || !slices.Contains(stored.Hosts, addressSourceHost) {
 		t.Fatalf("manual login was not saved in its reserved canonical entry: err=%v", err)
 	}

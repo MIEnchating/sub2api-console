@@ -25,25 +25,28 @@ export function OnboardingAccountModelFields(props: {
     return () => props.onPendingChange(props.item.id, false);
   }, [props.item.id, props.onPendingChange, source.pending]);
   return (
-    <>
+    <div className="grid min-w-0 gap-3 border-t p-3 sm:px-4">
       <div className="grid min-w-0 gap-2">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <p className="text-muted-foreground text-xs">
-            {source.loaded
-              ? `已获取 ${source.models.length} 个上游模型`
-              : "获取模型后，可用于下方映射和探活选择。"}
-          </p>
-          {!source.loaded ? (
-            <Button
-              type="button"
-              variant="outline"
-              disabled={props.disabled || source.pending}
-              onClick={source.load}
-            >
-              <RefreshCw aria-hidden="true" />
-              获取模型
-            </Button>
-          ) : null}
+          <span className="text-muted-foreground text-xs font-medium">模型配置</span>
+          <div className="flex min-w-0 flex-wrap items-center gap-2">
+            <p className="text-muted-foreground text-xs">
+              {source.loaded
+                ? `已获取 ${source.models.length} 个上游模型`
+                : "映射与探活共用模型列表"}
+            </p>
+            {!source.loaded ? (
+              <Button
+                type="button"
+                variant="outline"
+                disabled={props.disabled || source.pending}
+                onClick={source.load}
+              >
+                <RefreshCw aria-hidden="true" />
+                获取模型
+              </Button>
+            ) : null}
+          </div>
         </div>
         {source.pending ? <ContentLoading compact label="正在获取上游模型" /> : null}
         {source.failed && !source.loaded ? (
@@ -78,6 +81,6 @@ export function OnboardingAccountModelFields(props: {
           />
         )}
       />
-    </>
+    </div>
   );
 }

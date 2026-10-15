@@ -20,3 +20,9 @@ func TestLongAbnormalPausePreservesReasonWhenAlreadyUnschedulable(t *testing.T) 
 		t.Fatalf("wrong visible pause reason: %+v %v", account, err)
 	}
 }
+
+func TestLongAbnormalDeletionConfirmsUpstreamKeyBeforeDeletingAccount(t *testing.T) {
+	for _, scenario := range []string{"delete", "key-present", "key-failure", "key-denied", "key-readback-failure", "remote-failure", "service-unavailable", "policy-changed", "rebound-before-delete"} {
+		t.Run(scenario, func(t *testing.T) { runCleanupKeyScenario(t, "长期异常", scenario) })
+	}
+}

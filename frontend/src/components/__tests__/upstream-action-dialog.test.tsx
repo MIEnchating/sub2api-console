@@ -82,6 +82,7 @@ async function renderUpstreams(): Promise<{ startTask: () => void; completeTask:
     auth_records: [],
     vault_entries: [
       {
+        id: "测试凭据",
         entry: "测试凭据",
         hosts: [host],
         has_username: true,

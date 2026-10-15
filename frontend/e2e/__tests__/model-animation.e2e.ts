@@ -60,7 +60,7 @@ test("独立动画检测页在窄屏可滚动选择、直接开始并展示隔�
     if (path === "/api/model-checks/animations" && route.request().method() === "POST") {
       expect(route.request().postDataJSON()).toEqual({
         targets: [{ account_id: "41", model: "gpt-6-astra" }],
-        timeout_seconds: 120,
+        timeout_seconds: 0,
       });
       created = true;
       await route.fulfill({ json: currentTask });
@@ -74,6 +74,7 @@ test("独立动画检测页在窄屏可滚动选择、直接开始并展示隔�
       "/api/model-checks/capabilities": { claude_standards: [], sol_models: [] },
       "/api/model-checks/account-statuses": [],
       "/api/model-checks/animation-schedules": [],
+      "/api/model-checks/timeouts/animation": { timeout_seconds: 120, version: 0 },
       "/api/model-checks/animations": created ? [{ ...currentTask, result: {} }] : [],
       "/api/tasks/animation-e2e": currentTask,
     };
@@ -86,6 +87,9 @@ test("独立动画检测页在窄屏可滚动选择、直接开始并展示隔�
   await page.goto("/animation-check");
   const dialog = page.getByRole("tabpanel", { name: "账号检测", exact: true });
   await expect(dialog).toBeVisible();
+  await expect(dialog.getByRole("spinbutton", { name: "动画超时（秒）", exact: true })).toHaveValue(
+    "120",
+  );
   const start = dialog.getByRole("button", { name: /开始检测/ });
   await expect(start).toBeInViewport({ ratio: 1 });
   await expect(start).toHaveCSS("height", "32px");

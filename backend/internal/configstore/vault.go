@@ -2,6 +2,7 @@ package configstore
 
 import (
 	"context"
+	"crypto/rand"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -13,6 +14,7 @@ import (
 )
 
 type VaultEntry struct {
+	ID       string
 	Entry    string
 	Username *string
 	Password *string
@@ -21,6 +23,7 @@ type VaultEntry struct {
 }
 
 type VaultEntrySummary struct {
+	ID              string   `json:"id"`
 	Entry           string   `json:"entry"`
 	Hosts           []string `json:"hosts"`
 	HasUsername     bool     `json:"has_username"`
@@ -36,14 +39,14 @@ func (s *Store) VaultEntry(ctx context.Context, entry string) (*VaultEntry, erro
 func readVaultEntry(ctx context.Context, reader privateRowReader, entry string) (*VaultEntry, error) {
 	entry = strings.TrimSpace(entry)
 	if entry == "" {
-		return nil, errors.New("凭据名称不能为空")
+		return nil, errors.New("凭据 ID 不能为空")
 	}
 	var result VaultEntry
 	var username, password sql.NullString
 	var rawHosts, rawHeaders string
-	err := reader.QueryRowContext(ctx, `SELECT entry,username,password,hosts_json,headers_json
-		FROM vault_entries WHERE entry=?`, entry).Scan(
-		&result.Entry, &username, &password, &rawHosts, &rawHeaders,
+	err := reader.QueryRowContext(ctx, `SELECT id,entry,username,password,hosts_json,headers_json
+		FROM vault_entries WHERE id=?`, entry).Scan(
+		&result.ID, &result.Entry, &username, &password, &rawHosts, &rawHeaders,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
@@ -63,19 +66,55 @@ func readVaultEntry(ctx context.Context, reader privateRowReader, entry string) 
 	return &result, nil
 }
 
+var ErrVaultEntryExists = errors.New("凭据名称已存在，请使用其他名称")
+var ErrVaultEntryMissing = errors.New("原凭据已不存在，请刷新密码箱后重试")
+
 func (s *Store) SaveVaultEntry(ctx context.Context, entry VaultEntry, present map[string]bool) error {
+	return s.saveVaultEntry(ctx, false, entry, present)
+}
+
+// NewVaultEntryID creates an opaque identity independent from the display name.
+func NewVaultEntryID() string { return "vault_" + rand.Text() }
+
+// UpdateVaultEntry never recreates a deleted credential, even if its name is reused.
+func (s *Store) UpdateVaultEntry(ctx context.Context, id string, entry VaultEntry, present map[string]bool) error {
+	entry.ID = strings.TrimSpace(id)
+	if entry.ID == "" {
+		return errors.New("凭据 ID 不能为空")
+	}
+	return s.saveVaultEntry(ctx, true, entry, present)
+}
+
+func (s *Store) saveVaultEntry(ctx context.Context, requireExisting bool, entry VaultEntry, present map[string]bool) error {
 	entry.Entry = strings.TrimSpace(entry.Entry)
 	if entry.Entry == "" || textLength(entry.Entry) > 255 {
 		return errors.New("凭据名称长度必须在 1 到 255 之间")
+	}
+	if entry.ID == "" {
+		entry.ID = NewVaultEntryID()
+	}
+	if textLength(entry.ID) > 64 {
+		return errors.New("凭据 ID 无效")
 	}
 	tx, err := s.beginSettingsTx(ctx, "private.credentials")
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
-	current, err := readVaultEntry(ctx, tx, entry.Entry)
+	current, err := readVaultEntry(ctx, tx, entry.ID)
 	if err != nil {
 		return err
+	}
+	if requireExisting && current == nil {
+		return ErrVaultEntryMissing
+	}
+	var sameNameID string
+	err = tx.QueryRowContext(ctx, `SELECT id FROM vault_entries WHERE entry=?`, entry.Entry).Scan(&sameNameID)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+	if err == nil && sameNameID != entry.ID {
+		return ErrVaultEntryExists
 	}
 	if current != nil && present != nil {
 		if !present["username"] {
@@ -116,12 +155,11 @@ func (s *Store) SaveVaultEntry(ctx context.Context, entry VaultEntry, present ma
 	}
 	rawHosts, _ := json.Marshal(hosts)
 	rawHeaders, _ := json.Marshal(headers)
-	_, err = tx.ExecContext(ctx, s.dialect(`INSERT INTO vault_entries(entry,username,password,hosts_json,headers_json,updated_at)
-		VALUES(?,?,?,?,?,?) ON CONFLICT(entry) DO UPDATE SET username=excluded.username,password=excluded.password,
-		hosts_json=excluded.hosts_json,headers_json=excluded.headers_json,updated_at=excluded.updated_at`, `INSERT INTO vault_entries(entry,username,password,hosts_json,headers_json,updated_at)
-		VALUES(?,?,?,?,?,?) ON DUPLICATE KEY UPDATE username=VALUES(username),password=VALUES(password),
-		hosts_json=VALUES(hosts_json),headers_json=VALUES(headers_json),updated_at=VALUES(updated_at)`),
-		entry.Entry, entry.Username, entry.Password, string(rawHosts), string(rawHeaders), time.Now().UTC().Format(time.RFC3339Nano))
+	if current == nil {
+		_, err = tx.ExecContext(ctx, `INSERT INTO vault_entries(id,entry,username,password,hosts_json,headers_json,updated_at) VALUES(?,?,?,?,?,?,?)`, entry.ID, entry.Entry, entry.Username, entry.Password, string(rawHosts), string(rawHeaders), time.Now().UTC().Format(time.RFC3339Nano))
+	} else {
+		_, err = tx.ExecContext(ctx, `UPDATE vault_entries SET entry=?,username=?,password=?,hosts_json=?,headers_json=?,updated_at=? WHERE id=?`, entry.Entry, entry.Username, entry.Password, string(rawHosts), string(rawHeaders), time.Now().UTC().Format(time.RFC3339Nano), entry.ID)
+	}
 	if err != nil {
 		return err
 	}
@@ -131,14 +169,14 @@ func (s *Store) SaveVaultEntry(ctx context.Context, entry VaultEntry, present ma
 func (s *Store) DeleteVaultEntry(ctx context.Context, entry string) (bool, error) {
 	entry = strings.TrimSpace(entry)
 	if entry == "" {
-		return false, errors.New("凭据名称不能为空")
+		return false, errors.New("凭据 ID 不能为空")
 	}
 	tx, err := s.beginSettingsTx(ctx, "private.credentials")
 	if err != nil {
 		return false, err
 	}
 	defer tx.Rollback()
-	result, err := tx.ExecContext(ctx, `DELETE FROM vault_entries WHERE entry=?`, entry)
+	result, err := tx.ExecContext(ctx, `DELETE FROM vault_entries WHERE id=?`, entry)
 	if err != nil {
 		return false, err
 	}
@@ -150,7 +188,7 @@ func (s *Store) DeleteVaultEntry(ctx context.Context, entry string) (bool, error
 }
 
 func (s *Store) VaultEntryIndex(ctx context.Context) ([]VaultEntrySummary, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT entry,username,password,hosts_json,headers_json FROM vault_entries ORDER BY entry`)
+	rows, err := s.db.QueryContext(ctx, `SELECT id,entry,username,password,hosts_json,headers_json FROM vault_entries ORDER BY entry`)
 	if err != nil {
 		return nil, err
 	}
@@ -160,7 +198,7 @@ func (s *Store) VaultEntryIndex(ctx context.Context) ([]VaultEntrySummary, error
 		var item VaultEntrySummary
 		var username, password sql.NullString
 		var rawHosts, rawHeaders string
-		if err := rows.Scan(&item.Entry, &username, &password, &rawHosts, &rawHeaders); err != nil {
+		if err := rows.Scan(&item.ID, &item.Entry, &username, &password, &rawHosts, &rawHeaders); err != nil {
 			return nil, err
 		}
 		item.Hosts, err = decodeStringList(rawHosts)

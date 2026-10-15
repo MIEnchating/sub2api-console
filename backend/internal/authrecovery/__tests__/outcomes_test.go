@@ -54,7 +54,7 @@ func TestInvalidRefreshFollowedByBrowserChallengeReturnsFinalHostOutcome(t *test
 	if err := private.SaveAuthRecord(t.Context(), record, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := private.SaveVaultEntry(t.Context(), configstore.VaultEntry{
+	if err := private.SaveVaultEntry(t.Context(), configstore.VaultEntry{ID: "challenge-test",
 		Entry: "challenge-test", Username: &username, Password: &password, Hosts: []string{record.Host},
 	}, nil); err != nil {
 		t.Fatal(err)

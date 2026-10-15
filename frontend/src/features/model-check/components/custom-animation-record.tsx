@@ -76,7 +76,7 @@ export function CustomAnimationRecord(props: {
         {result ? (
           <AnimationAccountResult
             layout="record"
-            showManualVerdict={false}
+            showQualityActions={false}
             showRequestID={false}
             result={result}
             retryDisabled={props.retryDisabled || props.tasks.busyIDs.has(props.id)}

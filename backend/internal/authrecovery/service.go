@@ -122,6 +122,7 @@ type ManualInput struct {
 	Password             *string
 	SaveToVault          bool
 	AcceptLoginAgreement bool
+	EntryName            *string
 	Entry                *string
 	Headers              map[string]string
 	Cookies              map[string]string
@@ -220,7 +221,7 @@ func (s *Service) VerifyManual(ctx context.Context, input ManualInput, actor str
 	configuration := upstreamconfig.Input{
 		Host: host, BaseURL: current.BaseURL, UpstreamType: current.UpstreamType, AuthMode: mode, RechargeRate: "1",
 		AccessToken: input.AccessToken, RefreshToken: input.RefreshToken, AdminKey: input.AdminKey, UserID: input.UserID,
-		Username: input.Username, Password: input.Password, SaveToVault: input.SaveToVault, Entry: input.Entry,
+		Username: input.Username, Password: input.Password, SaveToVault: input.SaveToVault, Entry: input.Entry, EntryName: input.EntryName,
 		AcceptLoginAgreement: input.AcceptLoginAgreement,
 		Headers:              headers, Cookies: cookies, Present: map[string]bool{},
 	}
@@ -241,15 +242,18 @@ func (s *Service) VerifyManual(ctx context.Context, input ManualInput, actor str
 			if input.Username == nil || strings.TrimSpace(*input.Username) == "" || input.Password == nil || *input.Password == "" {
 				return ManualResult{}, errors.New("图片验证码登录必须填写用户名和密码")
 			}
-			entry := host
+			entry := ""
 			if input.Entry != nil && strings.TrimSpace(*input.Entry) != "" {
 				entry = strings.TrimSpace(*input.Entry)
 			}
 			candidate := cloneAuthRecord(*current)
 			candidate.Host, candidate.AuthMode, candidate.Headers = host, mode, cloneMap(headers)
 			credential := configstore.VaultEntry{
-				Entry: entry, Username: input.Username, Password: input.Password,
+				ID: entry, Entry: host, Username: input.Username, Password: input.Password,
 				Hosts: []string{host}, Headers: cloneMap(headers),
+			}
+			if input.EntryName != nil && strings.TrimSpace(*input.EntryName) != "" {
+				credential.Entry = strings.TrimSpace(*input.EntryName)
 			}
 			challenge, prepareErr := s.captcha.PrepareCredential(ctx, candidate, credential, input.SaveToVault, nil)
 			if prepareErr != nil {
@@ -383,7 +387,7 @@ func (s *Service) ResolveAuth(ctx context.Context, host, actor string) (*configs
 	if mode == "" {
 		return nil, fmt.Errorf("密码箱匹配到的上游类型 %q 不支持账号密码恢复", seed.UpstreamType)
 	}
-	entry := matches[0].Entry
+	entry := matches[0].ID
 	name := host
 	input := upstreamconfig.Input{
 		Host: host, Name: &name, BaseURL: seed.BaseURL, UpstreamType: seed.UpstreamType, AuthMode: mode,
@@ -868,8 +872,8 @@ func (s *Service) recoveryEntry(ctx context.Context, host string) (string, error
 		if err != nil {
 			return "", fmt.Errorf("最近成功方式读取失败：%w", err)
 		}
-		if preference != nil && preference.VaultEntry != nil {
-			entry := strings.TrimSpace(*preference.VaultEntry)
+		if preference != nil && preference.VaultEntryID != nil {
+			entry := strings.TrimSpace(*preference.VaultEntryID)
 			credential, err := s.private.VaultEntry(ctx, entry)
 			if err != nil {
 				return "", fmt.Errorf("最近成功密码箱项读取失败：%w", err)
@@ -877,6 +881,7 @@ func (s *Service) recoveryEntry(ctx context.Context, host string) (string, error
 			if credential != nil {
 				return entry, nil
 			}
+			return "", errors.New("最近成功使用的密码箱凭据已删除，请重新选择凭据")
 		}
 	}
 	entries, err := s.private.VaultEntryIndex(ctx)
@@ -885,7 +890,7 @@ func (s *Service) recoveryEntry(ctx context.Context, host string) (string, error
 	}
 	matches := matchingVaultEntries(entries, configstore.CanonicalHost(host))
 	if len(matches) == 1 {
-		return matches[0].Entry, nil
+		return matches[0].ID, nil
 	}
 	if len(matches) > 1 {
 		return "", fmt.Errorf("Host %q 匹配到多个密码箱项（%s），请先手动恢复一次以记录最近成功方式", host, strings.Join(vaultEntryNames(matches), "、"))
@@ -899,7 +904,7 @@ func (s *Service) saveRecoveryPreference(ctx context.Context, host, authMode, re
 		return nil
 	}
 	return preferences.SaveAuthRecoveryPreference(ctx, configstore.AuthRecoveryPreference{
-		Host: host, AuthMode: authMode, RecoveryMethod: recoveryMethod, VaultEntry: vaultEntry,
+		Host: host, AuthMode: authMode, RecoveryMethod: recoveryMethod, VaultEntryID: vaultEntry,
 	})
 }
 

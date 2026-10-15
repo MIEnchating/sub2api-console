@@ -51,6 +51,7 @@ const refreshKeys: Record<TaskRefreshScope, string[]> = {
     "groups",
     "upstreams",
     "upstream-groups",
+    "upstream-group-binding-audit",
     "logs",
     "overview",
     "overview-events",

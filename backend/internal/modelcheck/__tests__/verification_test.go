@@ -40,7 +40,7 @@ func TestVerificationAcceptsNewModelAndDoesNotTreatFixedAnswerAsIdentityProof(t 
 	if err := json.Unmarshal(raw, &report); err != nil {
 		t.Fatal(err)
 	}
-	if report.Checker != "verification" || report.Authenticity.Status != "unverified" || report.Capability.Status != "failed" {
+	if report.Checker != "verification" || report.Authenticity.Status != "observed" || report.Capability.Status != "failed" {
 		t.Fatalf("fixed response must not verify identity or reasoning: %s", raw)
 	}
 }
@@ -270,7 +270,7 @@ func TestVerificationOperationalFailureIsNotAWrongAnswer(t *testing.T) {
 	}
 }
 
-func TestVerificationOfficialComparisonDoesNotCertifyIdentity(t *testing.T) {
+func TestVerificationSelectedOfficialAccountRunsIndependentlyWithoutComparison(t *testing.T) {
 	f := setup(t, 2, "openai", func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{"output_text": "21", "model": "new-model", "usage": map[string]any{"input_tokens": 50, "output_tokens": 1}})
 	})
@@ -294,15 +294,20 @@ func TestVerificationOfficialComparisonDoesNotCertifyIdentity(t *testing.T) {
 		t.Fatal(err)
 	}
 	rows := finished(t, f).Result["tests"].([]map[string]any)
-	found := false
-	for _, item := range rows[0]["evidence"].([]any) {
-		if item.(map[string]any)["id"] == "reference-2" {
-			found = true
+	for _, row := range rows {
+		if _, ok := row["reference"]; ok {
+			t.Fatalf("removed comparison still emitted: %v", row["reference"])
+		}
+		if _, ok := row["reference_comparisons"]; ok {
+			t.Fatal("comparison details still emitted")
+		}
+		for _, item := range row["evidence"].([]any) {
+			if strings.Contains(item.(map[string]any)["id"].(string), "reference") {
+				t.Fatal("comparison evidence still generated")
+			}
 		}
 	}
-	if !found || rows[0]["authenticity"].(map[string]any)["status"] != "unverified" {
-		t.Fatalf("comparison missing or certified identity: %v", rows[0])
-	}
+
 }
 
 func TestVerificationAllCorrectAnswersPassCapabilityWithoutCertifyingAlias(t *testing.T) {
@@ -352,7 +357,7 @@ func TestVerificationAllCorrectAnswersPassCapabilityWithoutCertifyingAlias(t *te
 		t.Fatal(err)
 	}
 	row := finished(t, f).Result["tests"].([]map[string]any)[0]
-	if row["verdict"] != "NO_ANOMALIES" || row["capability"].(map[string]any)["status"] != "passed" || row["authenticity"].(map[string]any)["status"] != "unverified" {
+	if row["verdict"] != "NO_ANOMALIES" || row["capability"].(map[string]any)["status"] != "passed" || row["authenticity"].(map[string]any)["status"] != "evidence_mismatch" {
 		t.Fatalf("capability and identity conflated: %v", row)
 	}
 }

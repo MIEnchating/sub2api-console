@@ -11,6 +11,9 @@ function setup(): void {
     defaultOptions: { queries: { retry: false, staleTime: Infinity } },
   });
   clients.push(client);
+  client.setQueryDefaults(["detection-timeout"], { staleTime: Infinity });
+  client.setQueryData(["detection-timeout", "animation"], { timeout_seconds: 120, version: 0 });
+  client.setQueryData(["detection-timeout", "precheck"], { timeout_seconds: 120, version: 0 });
   client.setQueryData(
     ["accounts"],
     [{ id: "41", name: "布局账号", groups: [], platform: "openai" }],
@@ -32,22 +35,26 @@ it.each(["账号检测", "前置检测"])("%s 的模型和超时位于开始检�
   });
   const fields = within(operations).getByRole("group", { name: "动画模型参数" });
   expect(within(operations).getByRole("button", { name: /开始检测|^前置检测（/ })).toBeVisible();
-  expect(fields).toHaveClass("w-full", "sm:w-[36rem]", "max-w-full");
+  expect(fields).toHaveClass("w-full", "sm:w-[37rem]", "max-w-full");
   expect(within(fields).getByRole("combobox", { name: "检测模型" })).toHaveTextContent(
     "gpt-6-astra",
   );
-  expect(within(fields).getByRole("spinbutton", { name: "请求超时（秒）" })).toBeVisible();
+  expect(
+    within(fields).getByRole("spinbutton", {
+      name: tab === "账号检测" ? "动画超时（秒）" : "前置检测超时（秒）",
+    }),
+  ).toBeVisible();
 });
 
 it("超时标签和输入框同行，窄屏宽度受容器约束", () => {
   setup();
   const fields = screen.getByRole("group", { name: "动画模型参数" });
   expect(fields).toHaveClass("grid-cols-1");
-  for (const name of ["检测模型设置", "请求超时设置"]) {
-    const field = within(fields).getByRole("group", { name });
-    expect(field).toHaveClass("grid", "grid-cols-[auto_minmax(0,1fr)]", "items-center");
-    expect(field.querySelector("label")).toHaveClass("whitespace-nowrap");
-  }
+  const timeout = within(fields).getByRole("group", { name: "动画超时设置" });
+  const input = within(timeout).getByRole("spinbutton", { name: "动画超时（秒）" });
+  expect(input.parentElement).toHaveClass("flex", "flex-wrap", "items-center");
+  expect(within(timeout).getByRole("button", { name: "保存动画超时" })).toHaveClass("h-8");
+  expect(timeout).toHaveClass("min-w-0");
 });
 
 it("动画与前置检测使用独立操作区且保留公共账号选择", () => {
@@ -92,7 +99,7 @@ it("开始检测按钮按内容扩展并保留共享按钮的左右内边距", (
 it("提示词设置与账号选择共用下方操作栏，点击后才显示编辑弹窗", () => {
   setup();
   const operations = screen.getByRole("group", { name: "动画检测操作" });
-  expect(operations).toHaveClass("flex-wrap", "items-center");
+  expect(operations).toHaveClass("flex-wrap", "items-start");
   const trigger = within(operations).getByRole("button", { name: "编辑动画提示词" });
   expect(trigger).toBeVisible();
   expect(trigger).toHaveClass("text-foreground");

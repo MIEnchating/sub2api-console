@@ -35,7 +35,7 @@ function candidate(id: string, name: string, status = "active"): OnboardingCandi
 it("第一页搜索站长时显示第二页的专用分组并允许选择本地分组", async () => {
   vi.stubGlobal("PointerEvent", MouseEvent);
   const candidates = [
-    ...Array.from({ length: 25 }, (_, index) =>
+    ...Array.from({ length: 20 }, (_, index) =>
       candidate(String(index + 1), `公开分组 ${index + 1}`),
     ),
     candidate("113", "站长专用分组"),
@@ -45,7 +45,9 @@ it("第一页搜索站长时显示第二页的专用分组并允许选择本地�
   expect(screen.queryByRole("combobox", { name: "站长专用分组 本地分组" })).not.toBeInTheDocument();
 
   const user = userEvent.setup();
-  await user.type(screen.getByRole("searchbox", { name: "搜索上游分组" }), "站长");
+  fireEvent.change(screen.getByRole("searchbox", { name: "搜索上游分组" }), {
+    target: { value: "站长" },
+  });
   const groupSelect = screen.getByRole("combobox", { name: "站长专用分组 本地分组" });
   expect(groupSelect).toBeEnabled();
   expect(screen.getByRole("button", { name: "转到下一页" })).toBeDisabled();
@@ -54,7 +56,9 @@ it("第一页搜索站长时显示第二页的专用分组并允许选择本地�
   fireEvent.keyDown(groupSelect, { key: "Escape" });
   expect(screen.getByRole("button", { name: "预览 1 项变更" })).toBeEnabled();
 
-  await user.clear(screen.getByRole("searchbox", { name: "搜索上游分组" }));
+  fireEvent.change(screen.getByRole("searchbox", { name: "搜索上游分组" }), {
+    target: { value: "" },
+  });
   await user.click(screen.getByRole("button", { name: "转到下一页" }));
   expect(screen.getByRole("combobox", { name: "站长专用分组 本地分组" })).toHaveTextContent(
     "备用分组",
@@ -68,8 +72,11 @@ it("在第二页搜索仍有多页结果时回到搜索结果第一页", async (
   );
   client = renderOnboarding(candidates[0], false, undefined, { candidates });
   const user = userEvent.setup();
-  await user.click(await screen.findByRole("button", { name: "转到下一页" }));
-  await user.type(screen.getByRole("searchbox", { name: "搜索上游分组" }), "公开");
+  await screen.findByText("公开分组 1", { exact: true });
+  await user.click(screen.getByRole("button", { name: "转到下一页" }));
+  fireEvent.change(screen.getByRole("searchbox", { name: "搜索上游分组" }), {
+    target: { value: "公开" },
+  });
 
   expect(screen.getByRole("combobox", { name: "公开分组 1 本地分组" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "转到上一页" })).toBeDisabled();

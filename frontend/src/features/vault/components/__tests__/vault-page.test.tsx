@@ -30,6 +30,7 @@ describe("VaultEntryTable", () => {
 
   it("shows only the redacted password entry index and exposes edit and delete actions", () => {
     const entry: VaultEntryIndex = {
+      id: "operator",
       entry: "operator",
       hosts: ["api.example.test", "backup.example.test"],
       has_username: true,
@@ -58,6 +59,7 @@ describe("VaultEntryTable", () => {
 
   it("condenses long Host lists instead of expanding the table row indefinitely", () => {
     const entry: VaultEntryIndex = {
+      id: "many-hosts",
       entry: "many-hosts",
       hosts: Array.from({ length: 10 }, (_, index) => `api-${index}.example.test`),
       has_username: true,
@@ -75,6 +77,7 @@ describe("VaultEntryTable", () => {
 
   it("describes missing credentials without inventing sensitive values", () => {
     const entry: VaultEntryIndex = {
+      id: "fallback",
       entry: "fallback",
       hosts: [],
       has_username: false,
@@ -94,6 +97,7 @@ describe("VaultEntryTable", () => {
 
   it("warns when multiple vault entries claim the same Host", () => {
     const entry: VaultEntryIndex = {
+      id: "duplicate-host",
       entry: "duplicate-host",
       hosts: ["api.example.test"],
       has_username: true,
@@ -116,6 +120,7 @@ describe("VaultEntryTable", () => {
 
   it("warns when a wildcard vault entry overlaps an explicit Host", () => {
     const wildcard: VaultEntryIndex = {
+      id: "all-hosts",
       entry: "all-hosts",
       hosts: [],
       has_username: true,

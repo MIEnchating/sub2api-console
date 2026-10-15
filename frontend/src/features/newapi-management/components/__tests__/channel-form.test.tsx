@@ -18,6 +18,7 @@ describe("New API 渠道表单", () => {
         sub2APIBaseURL="https://sub2api.example"
         vaultEntries={[
           {
+            id: "运营账号",
             entry: "运营账号",
             hosts: ["sub2api.example"],
             has_username: true,

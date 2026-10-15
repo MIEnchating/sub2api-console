@@ -1,5 +1,5 @@
 import { zodResolver } from "@hookform/resolvers/zod";
-import { ArrowRight, ShieldCheck } from "lucide-react";
+import { ShieldCheck } from "lucide-react";
 import { useCallback, useState, type ReactElement } from "react";
 import { useForm } from "react-hook-form";
 
@@ -14,6 +14,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { OnboardingAccountSummary } from "./onboarding-account-summary";
 import { OnboardingAccountModelFields } from "./onboarding-account-model-fields";
 import {
   parseOnboardingProbeModels,
@@ -52,12 +53,6 @@ type ContentProps = {
   ) => void;
 };
 
-function schedulingLabel(item: OnboardingBindingPreview): string {
-  if (item.status === "待更新") return "保持原值";
-  if (item.waitingForCapacity) return "停用等待";
-  return "开启";
-}
-
 function OnboardingConfirmContent(props: ContentProps): ReactElement {
   const form = useForm<OnboardingConfirmationForm>({
     resolver: zodResolver(onboardingConfirmationSchema),
@@ -65,7 +60,9 @@ function OnboardingConfirmContent(props: ContentProps): ReactElement {
       accounts: props.items.map((item) => ({ id: item.id, models: "", mapping: [] })),
     },
   });
-  const hasNewAccounts = props.items.some((item) => item.status === "待添加");
+  const newAccountCount = props.items.filter((item) => item.status === "待添加").length;
+  const updateAccountCount = props.items.length - newAccountCount;
+  const hasNewAccounts = newAccountCount > 0;
   const [loadingAccounts, setLoadingAccounts] = useState<Set<string>>(() => new Set());
   const onModelPendingChange = useCallback((accountId: string, pending: boolean) => {
     setLoadingAccounts((current) => {
@@ -101,68 +98,29 @@ function OnboardingConfirmContent(props: ContentProps): ReactElement {
             ? "核对账号信息，按需配置模型映射和探活模型。"
             : "核对现有账号的本地分组变更。"}
         </DialogDescription>
+        <div
+          role="group"
+          aria-label="变更概览"
+          className="flex flex-wrap items-center gap-2 pt-1 text-xs"
+        >
+          <span className="text-muted-foreground mr-1">共 {props.items.length} 项变更</span>
+          {newAccountCount > 0 ? <Badge variant="secondary">新增 {newAccountCount}</Badge> : null}
+          {updateAccountCount > 0 ? (
+            <Badge variant="outline">更新 {updateAccountCount}</Badge>
+          ) : null}
+        </div>
       </DialogHeader>
       <DialogBody className="pr-0 [scrollbar-gutter:stable]">
-        <div className="grid gap-4">
+        <div className="grid gap-3">
           {props.items.map((item, index) => {
             const identity = `${item.upstreamGroup} → ${item.localGroup}`;
             return (
               <section
                 key={item.id}
                 aria-label={identity}
-                className="grid min-w-0 gap-4 rounded-lg border p-3 sm:p-4"
+                className="bg-background min-w-0 overflow-hidden rounded-lg border"
               >
-                <div className="flex min-w-0 items-start justify-between gap-3">
-                  <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 font-medium">
-                    <span className="min-w-0 break-all">{item.upstreamGroup}</span>
-                    <ArrowRight
-                      aria-hidden="true"
-                      className="text-muted-foreground size-3.5 shrink-0"
-                    />
-                    <span className="min-w-0 break-all">{item.localGroup}</span>
-                  </div>
-                  <Badge variant="outline" className="shrink-0">
-                    {item.status}
-                  </Badge>
-                </div>
-                <dl className="text-muted-foreground bg-muted/40 grid grid-cols-2 gap-x-4 gap-y-2 rounded-md p-3 text-xs tabular-nums sm:grid-cols-5">
-                  <div className="flex gap-1.5">
-                    <dt>账号协议</dt>
-                    <dd className="text-foreground">{item.platform}</dd>
-                  </div>
-                  <div className="flex gap-1.5">
-                    <dt>账号成本</dt>
-                    <dd className="text-foreground">{item.multiplier}</dd>
-                  </div>
-                  <div className="flex gap-1.5">
-                    <dt>并发</dt>
-                    <dd className="text-foreground">
-                      {item.status === "待更新" ? "保持原值" : item.concurrency}
-                    </dd>
-                  </div>
-                  <div className="flex gap-1.5">
-                    <dt>优先级</dt>
-                    <dd className="text-foreground">
-                      {item.status === "待更新" ? "保持原值" : item.priority}
-                    </dd>
-                  </div>
-                  <div className="flex gap-1.5">
-                    <dt>调度状态</dt>
-                    <dd className="text-foreground">{schedulingLabel(item)}</dd>
-                  </div>
-                </dl>
-                {item.status === "待添加" && item.allocationOverride !== undefined ? (
-                  <p className="text-muted-foreground text-xs">
-                    共享并发分配：{item.allocationOverride ? "单独开启" : "单独关闭"}
-                    （总开关与容量保护继续生效）
-                  </p>
-                ) : null}
-                {item.waitingForCapacity ? (
-                  <p className="text-muted-foreground text-xs">
-                    <span className="font-medium">等待并发额度</span>：账号将以并发 1
-                    创建并保持停用，启用前须由调度器重新核对容量。
-                  </p>
-                ) : null}
+                <OnboardingAccountSummary item={item} index={index} />
                 {item.status === "待添加" ? (
                   <OnboardingAccountModelFields
                     form={form}

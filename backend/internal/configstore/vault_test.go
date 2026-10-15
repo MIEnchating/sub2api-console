@@ -15,7 +15,7 @@ func TestVaultEntryUsesExactSelectionAndRedactedIndex(t *testing.T) {
 	defer store.Close()
 	ctx := context.Background()
 	username, password := "operator@example.test", "secret"
-	if err := store.SaveVaultEntry(ctx, VaultEntry{
+	if err := store.SaveVaultEntry(ctx, VaultEntry{ID: "Primary",
 		Entry: "Primary", Username: &username, Password: &password,
 		Hosts: []string{"HTTPS://API.EXAMPLE/", "api.example"}, Headers: map[string]string{"X-Site": "one"},
 	}, nil); err != nil {
@@ -44,10 +44,10 @@ func TestVaultEntryUsesExactSelectionAndRedactedIndex(t *testing.T) {
 func TestVaultEntryNameUsesUnicodeCharacterLimit(t *testing.T) {
 	store := openTestStore(t)
 	entry := strings.Repeat("凭", 255)
-	if err := store.SaveVaultEntry(context.Background(), VaultEntry{Entry: entry}, nil); err != nil {
+	if err := store.SaveVaultEntry(context.Background(), VaultEntry{ID: "unicode-name-id", Entry: entry}, nil); err != nil {
 		t.Fatalf("valid Unicode vault entry name was rejected: %v", err)
 	}
-	stored, err := store.VaultEntry(context.Background(), entry)
+	stored, err := store.VaultEntry(context.Background(), "unicode-name-id")
 	if err != nil || stored == nil || stored.Entry != entry {
 		t.Fatalf("stored=%#v err=%v", stored, err)
 	}
@@ -68,10 +68,10 @@ func TestVaultEntryPatchPreservesOmittedAndClearsExplicitNull(t *testing.T) {
 	defer store.Close()
 	ctx := context.Background()
 	username, password := "operator", "secret"
-	if err := store.SaveVaultEntry(ctx, VaultEntry{Entry: "entry", Username: &username, Password: &password}, nil); err != nil {
+	if err := store.SaveVaultEntry(ctx, VaultEntry{ID: "entry", Entry: "entry", Username: &username, Password: &password}, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.SaveVaultEntry(ctx, VaultEntry{Entry: "entry", Username: nil}, map[string]bool{"username": true}); err != nil {
+	if err := store.SaveVaultEntry(ctx, VaultEntry{ID: "entry", Entry: "entry", Username: nil}, map[string]bool{"username": true}); err != nil {
 		t.Fatal(err)
 	}
 	stored, err := store.VaultEntry(ctx, "entry")

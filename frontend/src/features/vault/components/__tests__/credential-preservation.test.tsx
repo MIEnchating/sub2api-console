@@ -22,6 +22,7 @@ function renderEditor(): Record<string, unknown>[] {
     auth_records: [],
     vault_entries: [
       {
+        id: "operator",
         entry: "operator",
         hosts: ["api.example.test"],
         has_username: true,
@@ -85,7 +86,11 @@ it("填写 Headers JSON 后提交新值且不更改其他凭据", async () => {
   await user.paste('{"X-Client":"replacement"}');
   await user.click(screen.getByRole("button", { name: "保存修改" }));
   await waitFor(() => expect(writes).toHaveLength(1));
-  expect(writes[0]).toEqual({ entry: "operator", headers: { "X-Client": "replacement" } });
+  expect(writes[0]).toEqual({
+    id: "operator",
+    entry: "operator",
+    headers: { "X-Client": "replacement" },
+  });
 });
 
 it("明确清除 Headers 时提交空对象并保留其他敏感字段", async () => {
@@ -94,5 +99,5 @@ it("明确清除 Headers 时提交空对象并保留其他敏感字段", async (
   fireEvent.click(screen.getByRole("button", { name: "保存修改" }));
 
   await waitFor(() => expect(writes).toHaveLength(1));
-  expect(writes[0]).toEqual({ entry: "operator", headers: {} });
+  expect(writes[0]).toEqual({ id: "operator", entry: "operator", headers: {} });
 });

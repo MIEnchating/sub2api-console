@@ -11,7 +11,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 
-import { AnimationQualityBadge } from "./animation-quality-badge";
+import { AnimationResultQualityBadge } from "./animation-result-quality-badge";
 import { AnimationQualityReviewPanel } from "./animation-quality-review";
 import { AnimationCanvas } from "./animation-canvas";
 import { AnimationResultMetrics } from "./animation-result-metrics";
@@ -39,7 +39,7 @@ export const AnimationPreview = memo(function AnimationPreview(props: {
       >
         <AnimationCanvas result={props.result} thumbnail />
         <span className="absolute top-2 left-2 max-w-[calc(100%-1rem)] rounded bg-background/95 px-2 py-1 text-xs shadow-sm">
-          <AnimationQualityBadge prediction={props.result.quality} />
+          <AnimationResultQualityBadge result={props.result} />
         </span>
         <span
           className="absolute right-2 bottom-2 grid size-6 place-items-center rounded-md bg-black/60 text-white transition-colors group-hover:bg-black/80 group-focus-visible:bg-black/80"
@@ -112,7 +112,7 @@ export const AnimationPreview = memo(function AnimationPreview(props: {
             </Tabs.Panel>
             <Tabs.Panel
               value="quality"
-              className="h-[min(60svh,44rem)] min-h-0 overflow-y-auto overscroll-contain rounded-lg bg-muted/20 p-2 sm:p-4"
+              className="flex h-[min(60svh,44rem)] min-h-0 min-w-0 flex-col overflow-hidden rounded-lg border bg-background"
             >
               <AnimationQualityReviewPanel result={props.result} />
             </Tabs.Panel>

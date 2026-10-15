@@ -23,12 +23,15 @@ type qualityRepository interface {
 }
 
 type AnimationQualityReview struct {
-	Prediction   animationquality.Prediction  `json:"prediction"`
-	Annotation   *animationquality.Annotation `json:"annotation,omitempty"`
-	SampleID     string                       `json:"sample_id"`
-	Benchmark    string                       `json:"benchmark"`
-	SourceSHA256 string                       `json:"source_sha256"`
-	PromptSHA256 string                       `json:"prompt_sha256"`
+	PredictionSHA256 string                       `json:"prediction_sha256"`
+	RecheckVersion   int                          `json:"recheck_version"`
+	Recheck          *AnimationQualityRecheckTask `json:"recheck,omitempty"`
+	Prediction       animationquality.Prediction  `json:"prediction"`
+	Annotation       *animationquality.Annotation `json:"annotation,omitempty"`
+	SampleID         string                       `json:"sample_id"`
+	Benchmark        string                       `json:"benchmark"`
+	SourceSHA256     string                       `json:"source_sha256"`
+	PromptSHA256     string                       `json:"prompt_sha256"`
 }
 
 type AnimationQualityAnnotationRequest struct {
@@ -77,9 +80,6 @@ func (s *Service) qualitySample(ctx context.Context, taskID, accountID, requestI
 	if err != nil {
 		return sample, err
 	}
-	if task.Status == "running" || task.Status == "queued" || task.Status == "waiting_input" {
-		return sample, taskstore.ErrTaskStillActive
-	}
 	var rows []AnimationResult
 	raw, err := json.Marshal(task.Result)
 	if err != nil {
@@ -117,6 +117,9 @@ func (s *Service) qualitySample(ctx context.Context, taskID, accountID, requestI
 		}
 	}
 	if selected == nil || selected.Status != "succeeded" || selected.Mode == precheckMode || selected.Precheck != nil || selected.HTML == "" || selected.SourceTruncated || (!utf8.ValidString(selected.Source) || strings.TrimSpace(selected.Source) == "") || len(selected.Source) > animationquality.MaxSourceBytes || !validQualityText(selected.Prompt, maximumAnimationPromptLength, true) {
+		return sample, ErrQualityReview
+	}
+	if (task.Status == "running" || task.Status == "queued" || task.Status == "waiting_input") && selected.Phase != "completed" {
 		return sample, ErrQualityReview
 	}
 	if _, err = time.Parse(time.RFC3339Nano, selected.CompletedAt); err != nil {
@@ -158,7 +161,7 @@ func (s *Service) AnimationQuality(ctx context.Context, taskID, accountID, reque
 	if saved != nil {
 		sample = *saved
 	}
-	return qualityReview(sample), nil
+	return s.withQualityRecheck(ctx, sample)
 }
 func (s *Service) SaveAnimationQualityAnnotation(ctx context.Context, taskID string, request AnimationQualityAnnotationRequest, actor string) (AnimationQualityReview, error) {
 	request.Reason = strings.TrimSpace(request.Reason)
@@ -173,7 +176,12 @@ func (s *Service) SaveAnimationQualityAnnotation(ctx context.Context, taskID str
 	if request.SourceGroup == "" {
 		request.SourceGroup = "sha256:" + sample.SourceSHA256
 	}
-	sample.Annotation = animationquality.Annotation{Label: request.Label, Reason: request.Reason, SourceGroup: request.SourceGroup, UpdatedBy: actor}
+	latest, err := s.withQualityRecheck(ctx, sample)
+	if err != nil {
+		return AnimationQualityReview{}, err
+	}
+	sample.Prediction = latest.Prediction
+	sample.Annotation = animationquality.Annotation{Source: "manual", Label: request.Label, Reason: request.Reason, SourceGroup: request.SourceGroup, UpdatedBy: actor}
 	repo, ok := s.accounts.(qualityRepository)
 	if !ok {
 		return AnimationQualityReview{}, errors.New("质量标注存储尚未就绪")
@@ -182,7 +190,7 @@ func (s *Service) SaveAnimationQualityAnnotation(ctx context.Context, taskID str
 	if err != nil {
 		return AnimationQualityReview{}, err
 	}
-	return qualityReview(saved), nil
+	return s.withQualityRecheck(ctx, saved)
 }
 func (s *Service) AnimationQualitySamples(ctx context.Context, after string, limit int) (animationquality.SamplePage, error) {
 	if limit < 1 || limit > 100 {

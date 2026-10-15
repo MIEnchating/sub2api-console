@@ -36,7 +36,8 @@ it("手动凭据验证等待响应时按 Escape 保留窗口，失败后允许�
     }),
   );
   renderUpstreams();
-  await user.click(await screen.findByRole("button", { name: "更多操作" }));
+  await screen.findByText("测试上游", { exact: true });
+  await user.click(screen.getByRole("button", { name: "更多操作" }));
   await user.click(await screen.findByRole("menuitem", { name: "恢复鉴权" }));
   fireEvent.change(screen.getByLabelText("Token", { exact: true }), {
     target: { value: "test-token" },

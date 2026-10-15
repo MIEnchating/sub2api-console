@@ -14,18 +14,18 @@ func TestDatabaseContractConcurrentPartialVaultEditsRetainBothFields(t *testing.
 			for index := range 8 {
 				entry := fmt.Sprintf("concurrent-vault-%d", index)
 				initial := "initial"
-				if err := store.SaveVaultEntry(t.Context(), configstore.VaultEntry{Entry: entry, Username: &initial, Password: &initial}, nil); err != nil {
+				if err := store.SaveVaultEntry(t.Context(), configstore.VaultEntry{ID: entry, Entry: entry, Username: &initial, Password: &initial}, nil); err != nil {
 					t.Fatal(err)
 				}
 				start, results := make(chan struct{}), make(chan error, 2)
 				username, password := "new-user", "new-password"
 				go func() {
 					<-start
-					results <- store.SaveVaultEntry(t.Context(), configstore.VaultEntry{Entry: entry, Username: &username}, map[string]bool{"username": true})
+					results <- store.SaveVaultEntry(t.Context(), configstore.VaultEntry{ID: entry, Entry: entry, Username: &username}, map[string]bool{"username": true})
 				}()
 				go func() {
 					<-start
-					results <- store.SaveVaultEntry(t.Context(), configstore.VaultEntry{Entry: entry, Password: &password}, map[string]bool{"password": true})
+					results <- store.SaveVaultEntry(t.Context(), configstore.VaultEntry{ID: entry, Entry: entry, Password: &password}, map[string]bool{"password": true})
 				}()
 				close(start)
 				for range 2 {

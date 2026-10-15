@@ -118,7 +118,7 @@ func ManagementTarget() string { return "management-target" }
 
 func UpstreamCatalog() string { return "upstream-catalog" }
 
-func Vault(entry string) string { return "vault/" + strings.TrimSpace(entry) }
+func Vault(id string) string { return "vault/" + strings.TrimSpace(id) }
 
 // UpstreamKeyCatalog serializes remote Key mutations without blocking read-only upstream synchronization.
 func UpstreamKeyCatalog(host string) string {

@@ -41,5 +41,5 @@ func (s *Store) ensureServerSchema(ctx context.Context) error {
 			"CREATE TABLE console_sessions (\n\t\t\ttoken_hash VARCHAR(128) COLLATE utf8mb4_0900_bin PRIMARY KEY, username LONGTEXT COLLATE utf8mb4_0900_bin NOT NULL,\n\t\t\texpires_at VARCHAR(40) COLLATE utf8mb4_0900_bin NOT NULL, created_at LONGTEXT COLLATE utf8mb4_0900_bin NOT NULL\n\t\t) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin",
 			"CREATE INDEX ix_console_sessions_expires_at ON console_sessions(expires_at)",
 		},
-	}}})
+	}}, vaultIdentityMigration()})
 }

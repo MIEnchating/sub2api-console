@@ -1209,7 +1209,7 @@ func TestCreateChannelKeyLogsInWithSelectedVaultEntryAndStoresSecret(t *testing.
 		platform: configstore.NewAPIPlatform{ID: "platform-1"},
 		target:   configstore.TargetSettings{BaseURL: "https://sub2api.example", AdminKey: "must-not-be-used"},
 		vaultEntries: map[string]configstore.VaultEntry{
-			"运营账号": {Entry: "运营账号", Username: &username, Password: &password},
+			"运营账号": {ID: "运营账号", Entry: "运营账号", Username: &username, Password: &password},
 		},
 	}
 	authenticator := &authenticatorStub{result: configstore.AuthRecord{
@@ -1366,7 +1366,7 @@ func TestCreateChannelKeyRejectsMissingCredentialAndLoginFailure(t *testing.T) {
 		platform: configstore.NewAPIPlatform{ID: "platform-1"},
 		target:   configstore.TargetSettings{BaseURL: "https://sub2api.example"},
 		vaultEntries: map[string]configstore.VaultEntry{
-			"incomplete": {Entry: "incomplete"},
+			"incomplete": {ID: "incomplete", Entry: "incomplete"},
 		},
 	}
 	service := New(private, &repositoryStub{groups: []business.NewAPILocalGroup{{ID: "6", Name: "标准"}}}, nil, &keyManagerStub{}, &authenticatorStub{})
@@ -1511,7 +1511,7 @@ func TestCreateChannelKeyUsesSelectedGroupNameAndReusesItOnRetry(t *testing.T) {
 		platform: configstore.NewAPIPlatform{ID: "platform-1"},
 		target:   configstore.TargetSettings{BaseURL: "https://sub2api.example"},
 		vaultEntries: map[string]configstore.VaultEntry{
-			"运营账号": {Entry: "运营账号", Username: &username, Password: &password},
+			"运营账号": {ID: "运营账号", Entry: "运营账号", Username: &username, Password: &password},
 		},
 	}
 	authenticator := &authenticatorStub{result: configstore.AuthRecord{AccessToken: &token}}

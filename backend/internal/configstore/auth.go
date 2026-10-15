@@ -95,7 +95,7 @@ func (s *Store) RenameAuthRecord(ctx context.Context, oldHost, newHost string) e
 	if _, err := tx.ExecContext(ctx, `UPDATE upstream_key_secrets SET host=? WHERE host=?`, newHost, oldHost); err != nil {
 		return err
 	}
-	rows, err := tx.QueryContext(ctx, `SELECT entry,hosts_json FROM vault_entries`)
+	rows, err := tx.QueryContext(ctx, `SELECT id,hosts_json FROM vault_entries`)
 	if err != nil {
 		return err
 	}
@@ -146,7 +146,7 @@ func (s *Store) RenameAuthRecord(ctx context.Context, oldHost, newHost string) e
 		return err
 	}
 	for _, item := range updates {
-		if _, err := tx.ExecContext(ctx, `UPDATE vault_entries SET hosts_json=?,updated_at=? WHERE entry=?`, item.raw, time.Now().UTC().Format(time.RFC3339Nano), item.entry); err != nil {
+		if _, err := tx.ExecContext(ctx, `UPDATE vault_entries SET hosts_json=?,updated_at=? WHERE id=?`, item.raw, time.Now().UTC().Format(time.RFC3339Nano), item.entry); err != nil {
 			return err
 		}
 	}

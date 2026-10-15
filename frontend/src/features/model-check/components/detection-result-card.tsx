@@ -14,7 +14,7 @@ import {
 import { DetectionStageStatus } from "./detection-stage-status";
 import { AnimationPreview } from "./animation-preview";
 import { AnimationResultDetails } from "./animation-result-details";
-import { AnimationManualVerdictControls } from "./animation-manual-verdict";
+import { AnimationCardQualityActions } from "./animation-card-quality-actions";
 import { PrecheckResultDetails } from "./precheck-result-details";
 import { TerminalRoundResults } from "./terminal-round-results";
 import { detectionMissingResult } from "../lib/detection-task-outcome";
@@ -111,7 +111,7 @@ export function DetectionResultCard(props: {
               )}
             </div>
             <AnimationResultMetrics result={row.animation} showUsage={false} />
-            <AnimationManualVerdictControls result={row.animation} disabled={props.active} />
+            <AnimationCardQualityActions result={row.animation} />
           </div>
         )}
         {props.precheck && !row.precheck && (

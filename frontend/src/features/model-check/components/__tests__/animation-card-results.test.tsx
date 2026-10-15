@@ -430,7 +430,7 @@ it("同账号多个模型可切换结果，重测沿用当前选择模型", asyn
   await waitFor(() =>
     expect(bodies).toContainEqual({
       targets: [{ account_id: "41", model: "model-a" }],
-      timeout_seconds: 120,
+      timeout_seconds: 0,
     }),
   );
   view.dispose();
@@ -529,4 +529,61 @@ it("前置检测顶部切换后所有账号展示同一模型的统计", () => {
     expect(card.queryByText("model-a")).not.toBeInTheDocument();
   }
   view.dispose();
+});
+
+it("生成完成但评审未结束时展示动画与加载标签，评审失败后保留同一预览", async () => {
+  const generated = {
+    ...(task.result.animations as Record<string, unknown>[])[1],
+    phase: "reviewing",
+  };
+  const running: Task = {
+    ...task,
+    status: "running",
+    result: { ...task.result, animations: [generated] },
+  };
+  const view = setup(running);
+  try {
+    const card = within(screen.getByRole("article", { name: "账号 甲账号" }));
+    const preview = card.getByRole("button", { name: "放大查看 甲账号 的动画" });
+    expect(preview).toBeEnabled();
+    expect(card.getByRole("img", { name: /甲账号生成/ })).toBeVisible();
+    expect(card.getByRole("status", { name: "质量标注中" })).toHaveAttribute("aria-busy", "true");
+    expect(card.getByText("成功")).toBeVisible();
+    expect(card.queryByText("正在重新检测")).not.toBeInTheDocument();
+    expect(card.getByRole("button", { name: "重测 甲账号" })).toBeDisabled();
+    fireEvent.click(preview);
+    fireEvent.click(screen.getByRole("tab", { name: "质量标注" }));
+    expect(
+      within(screen.getByRole("dialog")).getByRole("status", { name: "质量标注中" }),
+    ).toBeVisible();
+    fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+    act(() =>
+      view.client.setQueryData(["model-animation", "task", task.id], {
+        ...running,
+        status: "succeeded",
+        result: {
+          ...running.result,
+          animations: [
+            {
+              ...generated,
+              phase: "completed",
+              quality: {
+                status: "unknown",
+                score: null,
+                benchmark: "test",
+                reason: "review_failed",
+              },
+            },
+          ],
+        },
+      }),
+    );
+    await waitFor(() =>
+      expect(card.queryByRole("status", { name: "质量标注中" })).not.toBeInTheDocument(),
+    );
+    expect(card.getByRole("button", { name: "放大查看 甲账号 的动画" })).toBe(preview);
+    expect(card.getByLabelText("自动质量：评审失败")).toBeVisible();
+  } finally {
+    view.dispose();
+  }
 });

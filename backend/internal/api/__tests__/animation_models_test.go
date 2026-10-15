@@ -12,6 +12,7 @@ import (
 	"github.com/MIEnchating/sub2api-console/backend/internal/api"
 	"github.com/MIEnchating/sub2api-console/backend/internal/config"
 	"github.com/MIEnchating/sub2api-console/backend/internal/configstore"
+	"github.com/MIEnchating/sub2api-console/backend/internal/modelcheck"
 )
 
 type animationModelReader struct {
@@ -19,6 +20,10 @@ type animationModelReader struct {
 	fail      bool
 	failure   error
 	accountID string
+}
+
+func (s *animationModelReader) CustomAnimationModels(ctx context.Context, _ modelcheck.AnimationCustomEndpoint) ([]string, error) {
+	return s.AccountAnimationModels(ctx, "")
 }
 
 func (s *animationModelReader) AccountAnimationModels(_ context.Context, id string) ([]string, error) {
@@ -46,6 +51,29 @@ func TestAnimationModelAPIHidesUnexpectedInternalFailure(t *testing.T) {
 	router.ServeHTTP(response, request)
 	if response.Code != http.StatusBadGateway || strings.Contains(response.Body.String(), "/private/internal.db") || !strings.Contains(response.Body.String(), "上游服务请求失败") {
 		t.Fatalf("internal discovery failure exposed: %d %s", response.Code, response.Body.String())
+	}
+}
+
+func TestAnimationModelAPIExplainsInsufficientBalance(t *testing.T) {
+	private, err := configstore.Open(filepath.Join(t.TempDir(), "private.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = private.Close() })
+	service := &animationModelReader{failure: errors.New("上游账号余额不足，无法获取模型；请充值或更换账号后重试")}
+	router := api.New(config.Config{AdminToken: "isolated-token"}, private, nil, api.Dependencies{ModelChecks: service})
+	for _, route := range []struct{ method, path string }{
+		{http.MethodGet, "/api/model-checks/animations/accounts/41/models"},
+		{http.MethodPost, "/api/model-checks/animations/models"},
+	} {
+		request := httptest.NewRequest(route.method, route.path, strings.NewReader(`{}`))
+		request.Header.Set("Authorization", "Bearer isolated-token")
+		request.Header.Set("Content-Type", "application/json")
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, request)
+		if response.Code != http.StatusBadGateway || !strings.Contains(response.Body.String(), "上游账号余额不足，无法获取模型；请充值或更换账号后重试") {
+			t.Fatalf("balance reason hidden for %s: %d %s", route.path, response.Code, response.Body.String())
+		}
 	}
 }
 

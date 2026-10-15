@@ -110,7 +110,8 @@ const emptyValues: UpstreamEditValues = {
   username: "",
   password: "",
   save_to_vault: false,
-  entry: "",
+  entry_id: "",
+  entry_name: "",
 };
 
 function Field(props: {
@@ -527,7 +528,7 @@ function UpstreamEditor(props: Props & { host: string }) {
       account_base_url: configuration.data.account_base_url,
       upstream_type: configuration.data.upstream_type,
       auth_mode: configuration.data.auth_mode,
-      entry: configuration.data.entry ?? "",
+      entry_id: configuration.data.entry_id ?? "",
       recharge_rate: configuration.data.recharge_rate || "1",
     });
     setShowHeadersEditor(configuration.data.header_names.length > 0);
@@ -584,7 +585,7 @@ function UpstreamEditor(props: Props & { host: string }) {
         account_base_url: value.account_base_url,
         upstream_type: value.upstream_type,
         auth_mode: value.auth_mode,
-        entry: value.entry ?? "",
+        entry_id: value.entry_id ?? "",
         recharge_rate: value.recharge_rate,
       });
       setShowHeadersEditor(value.header_names.length > 0);
@@ -625,7 +626,7 @@ function UpstreamEditor(props: Props & { host: string }) {
       pendingSave.current
     )
       return;
-    form.clearErrors(["entry", "headers", "cookies"]);
+    form.clearErrors(["entry_id", "headers", "cookies"]);
     const payload: UpstreamConfigurationUpdate = {
       name_mode: values.name_mode ?? "auto",
       ...upstreamConnectionPayload(values),
@@ -667,15 +668,22 @@ function UpstreamEditor(props: Props & { host: string }) {
     if (values.username.trim()) payload.username = values.username.trim();
     if (values.password) payload.password = values.password;
     if (["sub2api_user_login", "newapi_user_login"].includes(values.auth_mode)) {
-      if (!values.entry.trim()) {
-        form.setError("entry", { type: "manual", message: "请选择一个密码箱项" });
+      if (!values.entry_id.trim()) {
+        form.setError("entry_id", { type: "manual", message: "请选择一个密码箱项" });
         return;
       }
-      payload.entry = values.entry.trim();
+      if (!vaultOptions.some((item) => item.id === values.entry_id.trim())) {
+        form.setError("entry_id", {
+          type: "manual",
+          message: "原凭据已不可用，请重新选择密码箱项",
+        });
+        return;
+      }
+      payload.entry_id = values.entry_id.trim();
     }
     if (values.save_to_vault) {
       payload.save_to_vault = true;
-      if (values.entry.trim()) payload.entry = values.entry.trim();
+      if (values.entry_name.trim()) payload.entry_name = values.entry_name.trim();
     }
     pendingSave.current = { host: props.host, payload };
     saving.current = true;
@@ -705,12 +713,11 @@ function UpstreamEditor(props: Props & { host: string }) {
       }),
     [platform, props.host, vaultConfiguration.data?.vault_entries],
   );
-  const selectedVaultEntry = form.watch("entry");
+  const selectedVaultEntry = form.watch("entry_id");
   useEffect(() => {
     if (!showVaultLogin || !vaultConfiguration.data) return;
-    if (selectedVaultEntry && vaultOptions.some((item) => item.entry === selectedVaultEntry))
-      return;
-    form.setValue("entry", defaultVaultEntryForHost(vaultOptions, props.host));
+    if (selectedVaultEntry) return;
+    form.setValue("entry_id", defaultVaultEntryForHost(vaultOptions, props.host));
   }, [form, props.host, selectedVaultEntry, showVaultLogin, vaultConfiguration.data, vaultOptions]);
 
   return (
@@ -1020,14 +1027,14 @@ function UpstreamEditor(props: Props & { host: string }) {
                       <Field
                         label="密码箱密码项"
                         htmlFor="upstream-edit-vault-entry"
-                        error={form.formState.errors.entry?.message}
+                        error={form.formState.errors.entry_id?.message}
                       >
                         <Select
                           disabled={save.isPending}
-                          value={form.watch("entry")}
+                          value={form.watch("entry_id")}
                           onValueChange={(value) => {
                             if (!value) return;
-                            form.setValue("entry", value, { shouldDirty: true });
+                            form.setValue("entry_id", value, { shouldDirty: true });
                           }}
                         >
                           <SelectTrigger id="upstream-edit-vault-entry">
@@ -1035,7 +1042,7 @@ function UpstreamEditor(props: Props & { host: string }) {
                           </SelectTrigger>
                           <SelectContent>
                             {vaultOptions.map((item) => (
-                              <SelectItem key={item.entry} value={item.entry}>
+                              <SelectItem key={item.id} value={item.id}>
                                 {vaultEntryLabel(item)}
                               </SelectItem>
                             ))}
@@ -1078,12 +1085,12 @@ function UpstreamEditor(props: Props & { host: string }) {
                           </label>
                         </div>
                         {form.watch("save_to_vault") ? (
-                          <Field label="凭据名称（可选）" htmlFor="upstream-edit-entry">
+                          <Field label="凭据名称（可选）" htmlFor="upstream-edit-entry-name">
                             <Input
                               disabled={save.isPending}
-                              id="upstream-edit-entry"
+                              id="upstream-edit-entry-name"
                               placeholder="默认使用 Host"
-                              {...form.register("entry")}
+                              {...form.register("entry_name")}
                             />
                           </Field>
                         ) : null}

@@ -51,6 +51,10 @@ func TestDatabaseContractQualityAnnotationsPersistWithVersionAndPrivateAudit(t *
 			if saved.Annotation.Version != 1 || saved.CreatedAt == "" {
 				t.Fatalf("%+v", saved)
 			}
+			annotations, err := store.AnimationQualityAnnotations(t.Context(), []string{sample.ID, q.Hash("missing")})
+			if err != nil || len(annotations) != 1 || annotations[sample.ID].Annotation.Label != "normal" || annotations[sample.ID].SourceSHA256 != sample.SourceSHA256 || annotations[sample.ID].PromptSHA256 != sample.PromptSHA256 {
+				t.Fatalf("annotation projection: %+v %v", annotations, err)
+			}
 			var wg sync.WaitGroup
 			out := make(chan error, 2)
 			for range 2 {

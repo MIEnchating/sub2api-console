@@ -1,6 +1,9 @@
 import type { AccountControlAction, AccountControlState } from "@/api";
 import { effectiveAccountState } from "@/features/accounts/lib/account-state";
-import { accountConcurrencyLimitedHelp } from "@/features/accounts/constants";
+import {
+  accountConcurrencyLimitedHelp,
+  upstreamExcludedAccountHelp,
+} from "@/features/accounts/constants";
 
 export type DetectionControlAction = Extract<AccountControlAction, "fuse" | "recover" | "resume">;
 export const detectionControlLabels: Record<DetectionControlAction, string> = {
@@ -17,6 +20,7 @@ export function detectionControlState(account: AccountControlState): {
   const state = effectiveAccountState({ ...account, health: account.health ?? "" });
   let protectedReason = "";
   if (!/^[1-9]\d*$/.test(account.id)) protectedReason = "账号 ID 无效，请同步账号";
+  else if (account.upstream_excluded) protectedReason = upstreamExcludedAccountHelp;
   else if (state === "excluded") protectedReason = "请先在账号管理恢复管控";
   const fused = state === "fused";
   const recovery = fused || state === "cost_blocked" ? "recover" : "resume";

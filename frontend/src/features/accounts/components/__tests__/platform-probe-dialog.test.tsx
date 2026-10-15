@@ -198,6 +198,7 @@ describe("平台模型探活", () => {
       actualModel: "",
       statusCode: 404,
       failureReason: "模型不可用",
+      responseText: "",
       durationMS: 2180,
     });
   });

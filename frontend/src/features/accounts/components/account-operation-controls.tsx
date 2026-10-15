@@ -22,6 +22,8 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Button } from "@/components/ui/button";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { upstreamExcludedAccountHelp } from "@/features/accounts/constants";
 import { accountPoolState } from "@/features/accounts/lib/account-pool";
 
 const prominentDangerActionClassName =
@@ -163,10 +165,11 @@ export function AccountOperationControls(props: AccountOperationProps): ReactEle
   const visibleCount = Math.min(5, allActions.length - 1);
   const visibleActions = allActions.slice(0, visibleCount);
   const moreActions = allActions.slice(visibleCount);
-  return (
+  const controls = (
     <div
       role="group"
       aria-label="账号操作"
+      aria-description={props.account.upstream_excluded ? upstreamExcludedAccountHelp : undefined}
       className="ml-auto grid w-fit shrink-0 grid-cols-3 items-center gap-1"
     >
       {visibleActions.map((action) => (
@@ -174,7 +177,7 @@ export function AccountOperationControls(props: AccountOperationProps): ReactEle
           key={action.label}
           label={action.label}
           tone={action.tone}
-          disabled={action.disabled}
+          disabled={props.account.upstream_excluded || action.disabled}
           onClick={action.onClick}
           className={action.prominent ? prominentDangerActionClassName : undefined}
         >
@@ -190,7 +193,7 @@ export function AccountOperationControls(props: AccountOperationProps): ReactEle
               size="icon"
               className="col-start-3 row-start-2 data-popup-open:bg-muted"
               aria-label="更多账号操作"
-              disabled={props.pending}
+              disabled={props.account.upstream_excluded || props.pending}
             />
           }
         >
@@ -203,7 +206,7 @@ export function AccountOperationControls(props: AccountOperationProps): ReactEle
               className={
                 action.tone === "danger" ? "text-destructive focus:text-destructive" : undefined
               }
-              disabled={action.disabled}
+              disabled={props.account.upstream_excluded || action.disabled}
               onClick={action.onClick}
             >
               {action.icon}
@@ -213,5 +216,12 @@ export function AccountOperationControls(props: AccountOperationProps): ReactEle
         </DropdownMenuContent>
       </DropdownMenu>
     </div>
+  );
+  if (!props.account.upstream_excluded) return controls;
+  return (
+    <Tooltip>
+      <TooltipTrigger render={controls} tabIndex={0} />
+      <TooltipContent role="tooltip">{upstreamExcludedAccountHelp}</TooltipContent>
+    </Tooltip>
   );
 }

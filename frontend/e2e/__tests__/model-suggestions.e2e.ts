@@ -16,6 +16,8 @@ test("模型建议跟随主题和输入宽度，长名称与滚动列表不溢�
     "/api/setup/status": { initialized: true, configuration_errors: [] },
     "/api/auth/session": { authenticated: true, username: "样式测试" },
     "/api/accounts": [{ ...account, platform: "openai" }],
+    "/api/model-checks/timeouts/animation": { timeout_seconds: 120, version: 0 },
+    "/api/model-checks/timeouts/precheck": { timeout_seconds: 120, version: 0 },
     "/api/model-checks/animation-schedules": [],
     "/api/model-checks/animations": [],
     "/api/model-checks/animations/accounts/41/models": {
@@ -75,8 +77,8 @@ test("模型建议跟随主题和输入宽度，长名称与滚动列表不溢�
   await expect(input).toContainText("gpt-6-astra");
   await expect(input).toHaveAttribute("aria-expanded", "false");
   await selectDetectionModels(page, ["custom-model"]);
-  await page.getByLabel("请求超时（秒）", { exact: true }).click();
-  await expect(page.getByRole("spinbutton", { name: "请求超时（秒）" })).toBeFocused();
+  await page.getByLabel("动画超时（秒）", { exact: true }).click();
+  await expect(page.getByRole("spinbutton", { name: "动画超时（秒）" })).toBeFocused();
   await expect(input).toHaveText("custom-model");
   await expect(input).toHaveAttribute("aria-expanded", "false");
 });

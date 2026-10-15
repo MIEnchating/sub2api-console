@@ -16,7 +16,7 @@ func TestAuthRecoveryPreferenceKeepsLastVaultEntryAcrossRefreshSuccess(t *testin
 	entry := "Primary"
 	if err := store.SaveAuthRecoveryPreference(ctx, AuthRecoveryPreference{
 		Host: "HTTPS://API.EXAMPLE/", AuthMode: "sub2api_user_login", RecoveryMethod: "vault",
-		VaultEntry: &entry,
+		VaultEntryID: &entry,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -29,7 +29,7 @@ func TestAuthRecoveryPreferenceKeepsLastVaultEntryAcrossRefreshSuccess(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	if preference == nil || preference.AuthMode != "sub2api_user_token" || preference.RecoveryMethod != "refresh_token" || preference.VaultEntry == nil || *preference.VaultEntry != entry {
+	if preference == nil || preference.AuthMode != "sub2api_user_token" || preference.RecoveryMethod != "refresh_token" || preference.VaultEntryID == nil || *preference.VaultEntryID != entry {
 		t.Fatalf("preference=%#v", preference)
 	}
 }

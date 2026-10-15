@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 import { toast } from "sonner";
 import { AnimationCheckPanel } from "../animation-check-panel";
@@ -10,14 +10,17 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-it.each(["开始检测（1 个账号）", "前置检测（1）"])(
-  "点击%s且超时无效时显示关联字段错误，不重复弹出 toast",
+it.each(["动画超时", "前置检测超时"])(
+  "保存%s且超时无效时显示关联字段错误，不重复弹出 toast",
   async (action) => {
     const errorToast = vi.spyOn(toast, "error");
     const client = new QueryClient({
       defaultOptions: { queries: { retry: false, staleTime: Infinity } },
     });
     clients.push(client);
+    client.setQueryDefaults(["detection-timeout"], { staleTime: Infinity });
+    client.setQueryData(["detection-timeout", "animation"], { timeout_seconds: 120, version: 0 });
+    client.setQueryData(["detection-timeout", "precheck"], { timeout_seconds: 120, version: 0 });
     client.setQueryData(
       ["accounts"],
       [{ id: "41", name: "测试账号", groups: [], platform: "openai" }],
@@ -32,16 +35,14 @@ it.each(["开始检测（1 个账号）", "前置检测（1）"])(
     fireEvent.click(screen.getByRole("button", { name: "全选账号" }));
     if (action.startsWith("前置检测"))
       fireEvent.click(screen.getByRole("tab", { name: "前置检测" }));
-    fireEvent.change(screen.getByRole("spinbutton", { name: "请求超时（秒）" }), {
+    fireEvent.change(screen.getByRole("spinbutton", { name: `${action}（秒）` }), {
       target: { value: "1" },
     });
-    fireEvent.click(screen.getByRole("button", { name: action }));
+    fireEvent.click(screen.getByRole("button", { name: `保存${action}` }));
     expect(screen.getByRole("combobox", { name: "检测模型" })).toHaveTextContent("gpt-6-astra");
-    const timeout = screen.getByRole("spinbutton", { name: "请求超时（秒）" });
-    await waitFor(() => expect(timeout).toHaveAccessibleDescription("超时不能小于 5 秒"));
-    expect(
-      within(screen.getByRole("group", { name: "请求超时设置" })).getByRole("alert"),
-    ).toHaveClass("col-start-2");
+    const timeout = screen.getByRole("spinbutton", { name: `${action}（秒）` });
+    await waitFor(() => expect(timeout).toHaveAttribute("aria-invalid", "true"));
+    expect(timeout).toHaveAccessibleDescription(expect.stringContaining("超时不能小于 5 秒"));
     expect(errorToast).not.toHaveBeenCalled();
   },
 );

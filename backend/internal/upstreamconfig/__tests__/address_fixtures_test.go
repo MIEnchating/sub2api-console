@@ -65,7 +65,7 @@ func newAddressFixture(t *testing.T, baseURL string) *addressFixture {
 	}
 	t.Cleanup(func() { _ = db.Close() })
 	name, entry, username, password := "测试上游", "测试登录资料", "operator@example.test", "isolated-password"
-	if err := private.SaveVaultEntry(t.Context(), configstore.VaultEntry{Entry: entry, Username: &username, Password: &password}, nil); err != nil {
+	if err := private.SaveVaultEntry(t.Context(), configstore.VaultEntry{ID: entry, Entry: entry, Username: &username, Password: &password}, nil); err != nil {
 		t.Fatal(err)
 	}
 	fixture := &addressFixture{repository: repository, private: private, db: db, verifier: &addressVerifier{}}

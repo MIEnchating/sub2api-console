@@ -74,7 +74,7 @@ it("查询尚未返回时重置仍可用，重置取消请求且迟到结果不�
     expect(reset).toBeEnabled();
     fireEvent.click(reset);
     expect(signal?.aborted).toBe(true);
-    expect(screen.getByText("输入 request_id 开始查询")).toBeVisible();
+    expect(screen.getByText("设置筛选条件后点击查询")).toBeVisible();
     expect(screen.getByRole("textbox", { name: "request_id" })).toHaveValue("");
   } finally {
     await act(async () => release(Response.json(page("request-1"))));

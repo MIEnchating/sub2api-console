@@ -35,10 +35,11 @@ func TestAutomaticWriteRechecksAuthorizationAfterReadingRemoteAccount(t *testing
 				var updateErr error
 				if request.Method == http.MethodGet && request.URL.Path == "/api/v1/admin/accounts/41" {
 					once.Do(func() {
+						// Operator edits must not inherit cancellation of the upstream read.
 						if scenario.monitoring {
-							_, updateErr = fixture.store.SetMode(request.Context(), runtimepolicy.Monitoring)
+							_, updateErr = fixture.store.SetMode(t.Context(), runtimepolicy.Monitoring)
 						} else {
-							_, updateErr = fixture.store.UpdatePolicy(request.Context(), map[string]any{"auto_apply": map[string]any{"concurrency": false}}, "operator")
+							_, updateErr = fixture.store.UpdatePolicy(t.Context(), map[string]any{"auto_apply": map[string]any{"concurrency": false}}, "operator")
 						}
 					})
 				}

@@ -16,7 +16,7 @@ export function BindingCleanupCard(props: {
   return (
     <PolicyConfigCard
       title="失效绑定账号自动删除"
-      description="连续完整同步确认上游 Key 或所属分组不存在后，自动删除 Sub2API 中对应的受管账号，不删除上游 Key。默认关闭，仅完全模式执行；跳过人工保护、绑定不明确及同步失败的账号，删除前再次复核。允许删除分组最后一个失效账号。"
+      description="连续完整同步确认上游 Key 或所属分组不存在后，同步删除上游 Key 和 Sub2API 中对应的受管账号；Key 已不存在时继续清理账号，Key 删除或读回失败时保留账号。默认关闭，仅完全模式执行；跳过人工保护、绑定不明确及同步失败的账号，删除前再次复核。允许删除分组最后一个失效账号。"
       wide
       switchAction={{
         checked: props.value("enabled") === true,

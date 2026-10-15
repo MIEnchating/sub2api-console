@@ -50,6 +50,7 @@ test("账号快捷入口预选正确账号，完成模型检测后返回账号�
       "/api/model-checks/capabilities": { claude_standards: [], sol_models: ["gpt-5.6-sol"] },
       "/api/model-checks/animations": [],
       "/api/model-checks/animation-schedules": [],
+      "/api/model-checks/timeouts/animation": { timeout_seconds: 120, version: 0 },
       "/api/model-checks/account-statuses": completed
         ? [
             {
@@ -74,6 +75,15 @@ test("账号快捷入口预选正确账号，完成模型检测后返回账号�
   const row = page.locator("tbody tr").filter({ hasText: "联动账号" });
   await row.getByRole("button", { name: "模型检测", exact: true }).click();
   await expect(page).toHaveURL(/\/model-check\?account_id=41/);
+  const mobileAccounts = page.getByTestId("model-check-account-mobile-list");
+  const desktopAccounts = page.getByTestId("model-check-account-desktop-table");
+  if (page.viewportSize()!.width < 768) {
+    await expect(mobileAccounts).toBeVisible();
+    await expect(desktopAccounts).toBeHidden();
+  } else {
+    await expect(desktopAccounts).toBeVisible();
+    await expect(mobileAccounts).toBeHidden();
+  }
   await expect(page.getByRole("checkbox", { name: /联动账号/ })).toBeChecked();
   await expect(page.getByRole("checkbox", { name: /选择账号 其他账号/ })).toHaveCount(0);
   await expect(page.getByText("联动账号（#41）", { exact: true })).toHaveCount(0);

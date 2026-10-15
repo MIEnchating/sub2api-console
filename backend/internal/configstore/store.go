@@ -139,7 +139,7 @@ func (s *Store) ensureSchema(ctx context.Context) error {
 		return err
 	}
 	defer tx.Rollback()
-	if err := tx.CheckSQLiteVersion(ctx, 1); err != nil {
+	if err := tx.CheckSQLiteVersion(ctx, 2); err != nil {
 		return err
 	}
 	statements := []string{
@@ -205,7 +205,10 @@ func (s *Store) ensureSchema(ctx context.Context) error {
 	if err := removeEmptyRetiredTables(ctx, tx); err != nil {
 		return err
 	}
-	if err := tx.SetSQLiteVersion(ctx, 1); err != nil {
+	if err := migrateSQLiteVaultIdentity(ctx, tx); err != nil {
+		return err
+	}
+	if err := tx.SetSQLiteVersion(ctx, 2); err != nil {
 		return err
 	}
 	return tx.Commit()

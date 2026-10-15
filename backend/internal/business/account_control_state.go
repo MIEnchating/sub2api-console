@@ -10,14 +10,15 @@ import (
 // AccountControlState shares the account list's effective scheduling state but
 // excludes detail, evidence history, bindings, and health score responses.
 type AccountControlState struct {
-	ID             string  `json:"id"`
-	Name           string  `json:"name"`
-	Health         string  `json:"health"`
-	HealthStatus   *string `json:"health_status"`
-	RoutingState   *string `json:"routing_state"`
-	Paused         *bool   `json:"paused"`
-	Schedulable    *bool   `json:"schedulable"`
-	ManualPriority *int64  `json:"manual_priority"`
+	UpstreamExcluded bool    `json:"upstream_excluded"`
+	ID               string  `json:"id"`
+	Name             string  `json:"name"`
+	Health           string  `json:"health"`
+	HealthStatus     *string `json:"health_status"`
+	RoutingState     *string `json:"routing_state"`
+	Paused           *bool   `json:"paused"`
+	Schedulable      *bool   `json:"schedulable"`
+	ManualPriority   *int64  `json:"manual_priority"`
 }
 
 func (s *Store) AccountControlState(ctx context.Context, accountID string) (*AccountControlState, error) {
@@ -34,7 +35,8 @@ func (s *Store) AccountControlState(ctx context.Context, accountID string) (*Acc
 	}
 	account := projections[0]
 	return &AccountControlState{
-		ID: account.ID, Name: account.Name, Health: account.Health,
+		UpstreamExcluded: account.UpstreamExcluded,
+		ID:               account.ID, Name: account.Name, Health: account.Health,
 		HealthStatus: account.HealthStatus, RoutingState: account.RoutingState,
 		Paused: account.Paused, Schedulable: account.Schedulable, ManualPriority: account.ManualPriority,
 	}, nil

@@ -358,3 +358,27 @@ it("人工熔断账号点击解除熔断时发起恢复确认", async () => {
   await user.click(screen.getByRole("button", { name: "解除熔断" }));
   expect(props.onControl).toHaveBeenCalledWith("recover", expect.any(String), expect.any(String));
 });
+
+it("上游已排除时所有账号操作禁用，鼠标和键盘均不能触发", async () => {
+  const props = { ...operationProps(), onModelCheck: vi.fn() };
+  Object.assign(props.account, { upstream_excluded: true });
+  render(<AccountOperationButtons {...props} />);
+  const user = userEvent.setup();
+  for (const button of within(screen.getByRole("group", { name: "账号操作" })).getAllByRole(
+    "button",
+  )) {
+    expect(button).toBeDisabled();
+    await user.click(button);
+  }
+  await user.tab();
+  expect(screen.getByRole("group", { name: "账号操作" })).toHaveFocus();
+  expect(await screen.findByRole("tooltip")).toHaveTextContent(
+    "上游已排除，请先在上游管理取消排除后操作",
+  );
+  await user.keyboard("{Enter}");
+  expect(props.onProbe).not.toHaveBeenCalled();
+  expect(props.onControl).not.toHaveBeenCalled();
+  expect(props.onModelCheck).not.toHaveBeenCalled();
+  expect(props.onRateSync).not.toHaveBeenCalled();
+  expect(props.onManualPriority).not.toHaveBeenCalled();
+});

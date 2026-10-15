@@ -59,6 +59,7 @@ it.each(["abnormal_cleanup", "binding_cleanup"])(
     );
     await user.click(screen.getByRole("button", { name: "保存策略" }));
     expect(screen.getByRole("dialog", { name: "确认启用自动删除" })).toBeVisible();
+    expect(screen.getByRole("dialog")).toHaveTextContent("同步删除上游 Key");
     expect(writes).toHaveLength(0);
     await user.click(screen.getByRole("button", { name: "取消" }));
     expect(writes).toHaveLength(0);

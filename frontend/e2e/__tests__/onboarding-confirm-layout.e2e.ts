@@ -18,7 +18,11 @@ const upstream = {
   cookie_names: [],
 };
 const model = "gm-deepseek-v4.1-flash";
-test.beforeEach(async ({ page }) => {
+test.beforeEach(async ({ page, colorScheme }) => {
+  await page.addInitScript(
+    (theme) => localStorage.setItem("sub2api-console-theme", theme ?? "light"),
+    colorScheme,
+  );
   await page.route("**/api/**", async (route) => {
     const path = new URL(route.request().url()).pathname;
     const task = {
@@ -100,11 +104,22 @@ for (const viewport of [
     await page.keyboard.press("Escape");
     await page.getByRole("button", { name: "预览添加账号" }).click();
     const dialog = page.getByRole("dialog", { name: "确认账号绑定变更" });
+    await expect(dialog.getByRole("group", { name: "变更概览" })).toContainText("新增 1");
     await dialog.getByRole("button", { name: "获取模型" }).click();
     await expect(dialog.getByText("已获取 2 个上游模型")).toBeVisible();
     await expect(dialog.getByRole("note", { name: "继承的探活配置" })).toContainText(
       "继承全局模型：global-probe",
     );
+    const account = dialog.getByRole("region", { name: "特价国模 → 国产-平价" });
+    const protocol = await account.getByRole("term").filter({ hasText: "账号协议" }).boundingBox();
+    const cost = await account.getByRole("term").filter({ hasText: "账号成本" }).boundingBox();
+    expect(protocol!.y).toBe(cost!.y);
+    const mode = dialog.getByRole("group", { name: "特价国模 → 国产-平价 探活模型填写方式" });
+    expect(await mode.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+    await expect(dialog.getByText("使用默认映射")).toBeVisible();
+    await page.screenshot({
+      path: test.info().outputPath(`confirmation-default-${viewport.width}.png`),
+    });
     const probe = dialog.getByRole("combobox", { name: "特价国模 → 国产-平价 探活模型" });
     await probe.scrollIntoViewIfNeeded();
     const selectHeight = (await probe.boundingBox())!.height;

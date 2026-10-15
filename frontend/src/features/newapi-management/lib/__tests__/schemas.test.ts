@@ -26,7 +26,7 @@ describe("New API 管理表单", () => {
   it("密码箱模式必须选择账号条目", () => {
     const result = newAPIChannelKeySchema.safeParse({
       credential_source: "vault",
-      vault_entry: "",
+      vault_entry_id: "",
       username: "",
       password: "",
       sub2api_group_id: "6",
@@ -38,14 +38,14 @@ describe("New API 管理表单", () => {
   it("自定义模式必须提供有效邮箱和密码", () => {
     const missing = newAPIChannelKeySchema.safeParse({
       credential_source: "custom",
-      vault_entry: "",
+      vault_entry_id: "",
       username: "not-an-email",
       password: "",
       sub2api_group_id: "6",
     });
     const valid = newAPIChannelKeySchema.safeParse({
       credential_source: "custom",
-      vault_entry: "",
+      vault_entry_id: "",
       username: "operator@example.test",
       password: "password",
       sub2api_group_id: "6",

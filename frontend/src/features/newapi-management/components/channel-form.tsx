@@ -81,7 +81,7 @@ export function NewAPIChannelForm(props: Props) {
     resolver: zodResolver(newAPIChannelKeySchema),
     defaultValues: {
       credential_source: "vault",
-      vault_entry: defaultVaultEntryForHost(vaultOptions, props.sub2APIBaseURL),
+      vault_entry_id: defaultVaultEntryForHost(vaultOptions, props.sub2APIBaseURL),
       username: "",
       password: "",
       sub2api_group_id: "",
@@ -97,7 +97,7 @@ export function NewAPIChannelForm(props: Props) {
       newapi_groups: [],
     },
   });
-  const selectedVaultEntry = keyForm.watch("vault_entry");
+  const selectedVaultEntry = keyForm.watch("vault_entry_id");
   const selectedModels = channelForm.watch("models");
   const selectedBaseURL = channelForm.watch("base_url");
   const selectedGroupID = keyForm.watch("sub2api_group_id");
@@ -111,10 +111,13 @@ export function NewAPIChannelForm(props: Props) {
   }
 
   useEffect(() => {
-    if (selectedVaultEntry && vaultOptions.some((item) => item.entry === selectedVaultEntry)) {
+    if (selectedVaultEntry && vaultOptions.some((item) => item.id === selectedVaultEntry)) {
       return;
     }
-    keyForm.setValue("vault_entry", defaultVaultEntryForHost(vaultOptions, props.sub2APIBaseURL));
+    keyForm.setValue(
+      "vault_entry_id",
+      defaultVaultEntryForHost(vaultOptions, props.sub2APIBaseURL),
+    );
   }, [keyForm, props.sub2APIBaseURL, selectedVaultEntry, vaultOptions]);
 
   function clearModels() {
@@ -135,7 +138,7 @@ export function NewAPIChannelForm(props: Props) {
       payload = {
         sub2api_group_id: values.sub2api_group_id,
         credential_source: "vault",
-        vault_entry: values.vault_entry,
+        vault_entry_id: values.vault_entry_id,
       };
     } else {
       payload = {
@@ -212,7 +215,7 @@ export function NewAPIChannelForm(props: Props) {
       channelForm.reset();
       keyForm.reset({
         credential_source: "vault",
-        vault_entry: defaultVaultEntryForHost(vaultOptions, props.sub2APIBaseURL),
+        vault_entry_id: defaultVaultEntryForHost(vaultOptions, props.sub2APIBaseURL),
         username: "",
         password: "",
         sub2api_group_id: "",

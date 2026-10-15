@@ -15,19 +15,24 @@ type recoveryPreferenceStore interface {
 
 // Record only the entry used by a verified, committed login. Existing recovery
 // preferences also cover credentials selected outside the upstream editor.
-func (s *Service) saveVaultSelection(ctx context.Context, record configstore.AuthRecord, input Input) error {
+func (s *Service) saveVaultSelection(ctx context.Context, record configstore.AuthRecord, input Input, change *vaultChange) error {
 	preferences, ok := s.private.(recoveryPreferenceStore)
-	if !ok || !isVaultLogin(input.AuthMode) || input.Entry == nil {
+	if !ok {
 		return nil
 	}
-	entry := strings.TrimSpace(*input.Entry)
-	if entry == "" || !input.Present["entry"] {
+	entry := ""
+	if change != nil {
+		entry = change.entry.ID
+	} else if isVaultLogin(input.AuthMode) && input.Entry != nil && input.Present["entry"] {
+		entry = strings.TrimSpace(*input.Entry)
+	}
+	if entry == "" {
 		return nil
 	}
 	writeCtx, cancel := detachedOperationContext(ctx)
 	defer cancel()
 	if err := preferences.SaveAuthRecoveryPreference(writeCtx, configstore.AuthRecoveryPreference{
-		Host: record.Host, AuthMode: record.AuthMode, RecoveryMethod: "vault", VaultEntry: &entry,
+		Host: record.Host, AuthMode: record.AuthMode, RecoveryMethod: "vault", VaultEntryID: &entry,
 	}); err != nil {
 		return fmt.Errorf("上游配置已保存，但密码箱选择记录失败：%w", err)
 	}

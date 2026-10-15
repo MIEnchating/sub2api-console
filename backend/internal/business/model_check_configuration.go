@@ -76,6 +76,9 @@ func (s *Store) saveModelCheckState(ctx context.Context, raw []byte, actor, acti
 	if key == "animation-quality-settings" {
 		objectType, objectName = "animation-quality-settings", "自动质量标注设置"
 	}
+	if key == "model-detection-timeouts" {
+		objectType, objectName = "model-detection-timeouts", "检测超时设置"
+	}
 	if key == "model-animation-prompt" {
 		objectType, objectName = "model-animation-prompt", "动画提示词"
 	}

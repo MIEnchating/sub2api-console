@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/MIEnchating/sub2api-console/backend/internal/modelrequest"
 	"io"
 	"net/http"
 	"net/url"
@@ -39,10 +40,10 @@ func (sender directBundleSender) Send(ctx context.Context, _ string, model, prom
 }
 
 func (sender directBundleSender) SendWithReasoning(ctx context.Context, _ string, model, prompt string, timeoutSeconds int, effort string) (string, string, error) {
-	requestContext, cancel := context.WithTimeout(ctx, time.Duration(timeoutSeconds)*time.Second)
+	requestContext, cancel := modelrequest.Start(ctx, time.Duration(timeoutSeconds)*time.Second, sender.stream)
 	defer cancel()
 	if sender.credential.Platform == "gemini" {
-		return sendGeminiGeneration(requestContext, sender.client, sender.credential, model, prompt, sender.requestID, 4096, sender.usage, nil)
+		return sendGeminiGeneration(requestContext, sender.client, sender.credential, model, prompt, sender.requestID, 4096, sender.usage, nil, sender.stream)
 	}
 	if strings.EqualFold(strings.TrimSpace(sender.credential.Platform), "anthropic") {
 		if effort != "" && sender.usage == nil {
@@ -54,17 +55,8 @@ func (sender directBundleSender) SendWithReasoning(ctx context.Context, _ string
 }
 
 func (sender directBundleSender) sendAnthropic(ctx context.Context, model, prompt, effort string) (string, string, error) {
-	body := map[string]any{
-		"model": model, "max_tokens": 4096, "stream": sender.stream,
-		"messages": []map[string]any{{"role": "user", "content": prompt}},
-	}
-	if effort != "" {
-		body["output_config"] = map[string]string{"effort": effort}
-	}
-	headers := map[string]string{
-		"x-api-key": sender.credential.Secret, "anthropic-version": "2023-06-01",
-	}
-	payload, status, raw, err := sender.request(ctx, "/v1/messages", body, headers)
+	parameters := modelrequest.Parameters{Model: model, Prompt: prompt, MaxOutputTokens: 4096, Stream: sender.stream, ReasoningEffort: effort}
+	payload, status, raw, err := sender.request(ctx, modelrequest.Anthropic, parameters)
 	if err != nil {
 		return "", "", err
 	}
@@ -79,14 +71,8 @@ func (sender directBundleSender) sendAnthropic(ctx context.Context, model, promp
 }
 
 func (sender directBundleSender) sendOpenAI(ctx context.Context, model, prompt, effort string) (string, string, error) {
-	headers := map[string]string{"Authorization": "Bearer " + sender.credential.Secret}
-	responsesBody := map[string]any{
-		"model": model, "input": prompt, "max_output_tokens": 4096, "stream": sender.stream,
-	}
-	if effort != "" {
-		responsesBody["reasoning"] = map[string]string{"effort": effort}
-	}
-	payload, status, raw, err := sender.request(ctx, "/v1/responses", responsesBody, headers)
+	parameters := modelrequest.Parameters{Model: model, Prompt: prompt, MaxOutputTokens: 4096, Stream: sender.stream, ReasoningEffort: effort, IncludeUsage: true}
+	payload, status, raw, err := sender.request(ctx, modelrequest.Responses, parameters)
 	if err != nil {
 		return "", "", err
 	}
@@ -100,17 +86,7 @@ func (sender directBundleSender) sendOpenAI(ctx context.Context, model, prompt, 
 	if !responsesEndpointUnsupported(status, raw) {
 		return "", "", directStatusError(status, raw, sender.credential.Secret)
 	}
-	chatBody := map[string]any{
-		"model": model, "messages": []map[string]any{{"role": "user", "content": prompt}},
-		"max_tokens": 4096, "stream": sender.stream,
-	}
-	if effort != "" {
-		chatBody["reasoning_effort"] = effort
-	}
-	if sender.stream {
-		chatBody["stream_options"] = map[string]bool{"include_usage": true}
-	}
-	payload, status, raw, err = sender.request(ctx, "/v1/chat/completions", chatBody, headers)
+	payload, status, raw, err = sender.request(ctx, modelrequest.Chat, parameters)
 	if err != nil {
 		return "", "", err
 	}
@@ -124,46 +100,23 @@ func (sender directBundleSender) sendOpenAI(ctx context.Context, model, prompt, 
 	return text, stringField(payload, "model"), nil
 }
 
-func (sender directBundleSender) request(ctx context.Context, path string, payload map[string]any, headers map[string]string) (map[string]any, int, []byte, error) {
-	endpoint, err := directEndpoint(sender.credential.BaseURL, path)
-	if err != nil {
-		return nil, 0, nil, visibleRequestError{message: "账号 Base URL 无效"}
-	}
-	encoded, err := json.Marshal(payload)
-	if err != nil {
-		return nil, 0, nil, errors.New("模型检测请求编码失败")
-	}
-	result, status, raw, err := sender.sendRequest(ctx, endpoint, path, encoded, headers)
+func (sender directBundleSender) request(ctx context.Context, protocol modelrequest.Protocol, parameters modelrequest.Parameters) (map[string]any, int, []byte, error) {
+	result, status, raw, err := sender.sendRequest(ctx, sender.credential.BaseURL, protocol, parameters)
 	if err != nil {
 		return nil, status, raw, err
 	}
-	if shouldRetryOnFallbackHost(status, raw) && sender.credential.FallbackBaseURL != "" {
-		fallbackEndpoint, fallbackErr := directEndpoint(sender.credential.FallbackBaseURL, path)
-		if fallbackErr == nil && fallbackEndpoint != endpoint {
-			return sender.sendRequest(ctx, fallbackEndpoint, path, encoded, headers)
-		}
+	if shouldRetryOnFallbackHost(status, raw) && sender.credential.FallbackBaseURL != "" && sender.credential.FallbackBaseURL != sender.credential.BaseURL {
+		return sender.sendRequest(ctx, sender.credential.FallbackBaseURL, protocol, parameters)
 	}
 	return result, status, raw, nil
 }
 
-func (sender directBundleSender) sendRequest(ctx context.Context, endpoint, path string, encoded []byte, headers map[string]string) (map[string]any, int, []byte, error) {
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(encoded))
+func (sender directBundleSender) sendRequest(ctx context.Context, baseURL string, protocol modelrequest.Protocol, parameters modelrequest.Parameters) (map[string]any, int, []byte, error) {
+	path, _, err := modelrequest.Build(protocol, parameters)
 	if err != nil {
-		return nil, 0, nil, errors.New("模型检测请求创建失败")
+		return nil, 0, nil, err
 	}
-	request.Header.Set("Accept", "application/json")
-	if sender.stream {
-		request.Header.Set("Accept", "text/event-stream, application/json")
-	}
-	request.Header.Set("Content-Type", "application/json")
-	request.Header.Set("User-Agent", "Sub2API-Console/1.0")
-	if sender.requestID != "" {
-		request.Header.Set("X-Request-ID", sender.requestID)
-	}
-	for key, value := range headers {
-		request.Header.Set(key, value)
-	}
-	response, err := sender.client.Do(request)
+	response, err := modelrequest.Open(ctx, sender.client, modelrequest.Request{BaseURL: baseURL, Secret: sender.credential.Secret, Protocol: protocol, Parameters: parameters, Headers: http.Header{"X-Request-Id": []string{sender.requestID}}})
 	if err != nil {
 		return nil, 0, nil, safeTransportError(err)
 	}

@@ -78,3 +78,14 @@ it("无匹配或空账号列表时返回空结果，重置筛选后返回全部�
   expect(filterAnimationAccounts([], defaultAnimationFilters)).toEqual([]);
   expect(filterAnimationAccounts(accounts, defaultAnimationFilters)).toEqual(accounts);
 });
+
+it("已排除上游的账号保留展示，但混合批量选择只返回未排除账号", () => {
+  const excluded = { ...account, id: "41", upstream_excluded: true };
+  const available = { ...account, id: "42" };
+  expect(filterAnimationAccounts([excluded, available], defaultAnimationFilters)).toEqual([
+    excluded,
+    available,
+  ]);
+  expect(selectableDetectionAccountIDs([excluded, available], new Set())).toEqual(["42"]);
+  expect(selectableDetectionAccountIDs([excluded], new Set())).toEqual([]);
+});

@@ -79,7 +79,13 @@ it("账号管理跳转后按 ID 预选同名账号，选择模型后提交正确
   fireEvent.click(screen.getByRole("button", { name: /开始检测/ }));
   await waitFor(() =>
     expect(run).toHaveBeenCalledWith(
-      { account_ids: ["41"], models: ["gpt-5.6-sol"], rounds: 1, timeout_seconds: 45 },
+      {
+        account_ids: ["41"],
+        models: ["gpt-5.6-sol"],
+        fingerprint: true,
+        rounds: 1,
+        timeout_seconds: 45,
+      },
       expect.anything(),
     ),
   );

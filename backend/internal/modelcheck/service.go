@@ -64,6 +64,7 @@ type UpstreamAuthResolver interface {
 }
 
 type Request struct {
+	Fingerprint    bool
 	AccountIDs     []string
 	Models         []string
 	Rounds         int
@@ -107,6 +108,8 @@ type preparedRun struct {
 }
 
 type Service struct {
+	qualityRecheckMu      sync.Mutex
+	detectionTimeouts     detectionTimeoutState
 	qualityModel          atomic.Pointer[animationquality.Detector]
 	qualitySettings       qualitySettingsState
 	animationPrompt       animationPromptState
@@ -151,6 +154,9 @@ func New(tasks TaskStore, credentials CredentialStore, accounts AccountCatalog, 
 	service.configuration = newBuiltinConfiguration(claudeProfiles, sol)
 	if repository, ok := accounts.(configurationRepository); ok {
 		service.profileRepository = repository
+	}
+	if err := service.loadDetectionTimeouts(context.Background()); err != nil {
+		return nil, err
 	}
 	if err := service.loadQualitySettings(context.Background()); err != nil {
 		return nil, err
@@ -202,6 +208,9 @@ func (s *Service) AccountStatuses(ctx context.Context) ([]AccountCheckStatus, er
 	detections, err := s.tasks.DetectionConfidenceHistory(ctx, now.Add(-30*24*time.Hour))
 	if err != nil {
 		return nil, fmt.Errorf("智商检测历史读取失败: %w", err)
+	}
+	if err = s.overlayQualityConfidence(ctx, detections); err != nil {
+		return nil, fmt.Errorf("动画质量记录读取失败: %w", err)
 	}
 	addDetectionConfidence(confidence, detections, now)
 	seen := map[string]bool{}
@@ -505,8 +514,9 @@ func (s *Service) execute(parent context.Context, task taskstore.Task, prepared 
 					}}
 					credential := credentials[current.account.ID]
 					input := targetRequest{
-						Challenges: challenges,
-						AccountID:  current.account.ID, AccountName: current.account.Name,
+						Challenges:  challenges,
+						Fingerprint: prepared.request.Fingerprint,
+						AccountID:   current.account.ID, AccountName: current.account.Name,
 						Model: current.model, Rounds: prepared.request.Rounds,
 						TimeoutSeconds: prepared.request.TimeoutSeconds,
 					}
@@ -518,14 +528,12 @@ func (s *Service) execute(parent context.Context, task taskstore.Task, prepared 
 						}
 						snapshot["account_id"], snapshot["account_name"], snapshot["claimed_model"] = current.account.ID, current.account.Name, current.model
 						snapshot["completed_probes"], snapshot["planned_probes"] = len(report.Probes), report.Total
+						snapshot["checker"], snapshot["timeout_seconds"] = "verification", prepared.request.TimeoutSeconds
 						events <- combinationEvent{index: index, progress: true, result: snapshot}
 					}
 					result, runErr := runPreparedCheck(ctx, client, oauthClient, credential, prepared, input)
 					if runErr != nil {
-						result = map[string]any{
-							"account_id": current.account.ID, "account_name": current.account.Name,
-							"claimed_model": current.model, "verdict": "ERROR", "error": runErr.Error(),
-						}
+						result = failedVerification(current.account, input, runErr)
 					}
 					result["credentials_persisted"] = credential.err == nil && credential.oauth == nil
 					events <- combinationEvent{index: index, result: result}
@@ -555,6 +563,9 @@ func (s *Service) execute(parent context.Context, task taskstore.Task, prepared 
 		if event.progress {
 			active[event.index] = event.result
 			task.Message = fmt.Sprintf("账号 %s：已完成 %v/%v 项检测", event.result["account_name"], event.result["completed_probes"], event.result["planned_probes"])
+			if current, ok := event.result["current_probe"].(map[string]any); ok {
+				task.Message = fmt.Sprintf("账号 %s · %s：第 %v 轮「%v」等待回复", event.result["account_name"], event.result["claimed_model"], current["round"], current["label"])
+			}
 		} else if event.started {
 			active[event.index] = event.result
 			task.Message = fmt.Sprintf("正在检测账号 %s 的模型 %s；已完成 %d/%d 个组合", event.result["account_name"], event.result["claimed_model"], completed, len(combinations))
@@ -565,11 +576,24 @@ func (s *Service) execute(parent context.Context, task taskstore.Task, prepared 
 			completed++
 			task.Message = fmt.Sprintf("已完成 %d/%d 个账号模型组合", completed, len(combinations))
 		}
-		task.Progress = 5 + completed*90/len(combinations)
+		finishedUnits := completed * verificationProbeCount(prepared.request.Rounds, prepared.request.Fingerprint)
+		for _, item := range active {
+			if count, ok := item["completed_probes"].(int); ok {
+				finishedUnits += count
+			}
+		}
+		task.Progress = 5 + finishedUnits*90/(len(combinations)*verificationProbeCount(prepared.request.Rounds, prepared.request.Fingerprint))
+		queued := make([]map[string]any, 0)
+		for index, combination := range combinations {
+			if results[index] == nil && active[index] == nil {
+				queued = append(queued, map[string]any{"account_id": combination.account.ID, "account_name": combination.account.Name, "claimed_model": combination.model})
+			}
+		}
 		task.Result = map[string]any{
 			"account_ids": prepared.request.AccountIDs, "completed": completed, "total": len(combinations),
 			"phase": "testing", "tests": slices.Clone(completedResults), "system_info": true,
 			"active":          maps.Clone(active),
+			"queued":          queued,
 			"profile_version": prepared.profileVersion, "profile_fingerprint": prepared.profileFingerprint,
 			"credentials_persisted": credentialsPersisted,
 		}
@@ -580,7 +604,6 @@ func (s *Service) execute(parent context.Context, task taskstore.Task, prepared 
 		s.finishFailed(ctx, task, prepared.request.AccountIDs, errors.New("账号模型检测被中断"))
 		return
 	}
-	addVerificationComparisons(results)
 	summary := map[string]int{}
 	for _, result := range results {
 		verdict, _ := result["verdict"].(string)

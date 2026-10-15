@@ -29,6 +29,9 @@ function setup(
   );
   const client = createConsoleQueryClient();
   seedDictionaries(client);
+  client.setQueryDefaults(["detection-timeout"], { staleTime: Infinity });
+  client.setQueryData(["detection-timeout", "animation"], { timeout_seconds: 120, version: 0 });
+  client.setQueryData(["detection-timeout", "precheck"], { timeout_seconds: 120, version: 0 });
   client.setDefaultOptions({ queries: { retry: false, staleTime: Infinity } });
   client.setQueryData(
     ["accounts"],
@@ -140,15 +143,15 @@ it("搜索后全选只选择当前筛选范围，空结果时禁用全选", () =
   view.dispose();
 });
 
-it("翻页后超时无效时，聚焦顶部超时字段", async () => {
+it("翻页后保存无效超时，聚焦超时字段并保留原生效值", async () => {
   const view = setup(25);
   fireEvent.click(screen.getByRole("checkbox", { name: /^检测 分页账号 1\b/ }));
   fireEvent.click(screen.getByRole("button", { name: "转到下一页" }));
-  fireEvent.change(screen.getByRole("spinbutton", { name: "请求超时（秒）" }), {
+  fireEvent.change(screen.getByRole("spinbutton", { name: "动画超时（秒）" }), {
     target: { value: "1" },
   });
-  fireEvent.click(screen.getByRole("button", { name: "开始检测（1 个账号）" }));
-  const model = screen.getByRole("spinbutton", { name: "请求超时（秒）" });
+  fireEvent.click(screen.getByRole("button", { name: "保存动画超时" }));
+  const model = screen.getByRole("spinbutton", { name: "动画超时（秒）" });
   await waitFor(() => expect(model).toHaveFocus());
   expect(model).toHaveAttribute("aria-invalid", "true");
   expect(screen.getByText("超时不能小于 5 秒")).toBeVisible();

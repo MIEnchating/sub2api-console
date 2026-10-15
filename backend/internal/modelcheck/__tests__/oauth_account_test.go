@@ -95,7 +95,7 @@ func TestOAuthAccountSolCheckUsesProfileCapturedBeforeQueueing(t *testing.T) {
 	runner.runs[0](context.Background())
 	task := finished(t, f)
 	rows := task.Result["tests"].([]map[string]any)
-	if rows[0]["checker"] != "verification" || task.Result["profile_version"] != "verification-v1" {
+	if rows[0]["checker"] != "verification" || task.Result["profile_version"] != "verification-v4" {
 		t.Fatalf("queued OAuth task did not preserve its profile: %#v", task.Result)
 	}
 }
@@ -226,6 +226,9 @@ func TestOAuthAccountWithoutKeyBindingRunsRequestedRoundsAndKeepsCredentialsPriv
 	rows, _ := task.Result["tests"].([]map[string]any)
 	if len(rows) != 1 || rows[0]["verdict"] != "ANOMALY" || calls.Load() != 14 {
 		t.Fatalf("OAuth account did not complete two rounds: result=%#v requests=%d", task.Result, calls.Load())
+	}
+	if rows[0]["authenticity"].(map[string]any)["status"] != "official_source" {
+		t.Fatalf("successful fixed OAuth endpoint must confirm source, got %v", rows[0]["authenticity"])
 	}
 	if rows[0]["transport"] != "oauth-direct" || rows[0]["production_path_equivalent"] != false || rows[0]["credentials_persisted"] != false || task.Result["credentials_persisted"] != false {
 		t.Fatalf("incorrect OAuth task metadata: %#v", task.Result)

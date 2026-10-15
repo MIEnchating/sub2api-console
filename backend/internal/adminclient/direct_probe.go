@@ -1,15 +1,14 @@
 package adminclient
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"net/http"
 	"net/url"
 	"strings"
 	"unicode"
 
+	"github.com/MIEnchating/sub2api-console/backend/internal/modelrequest"
 	"github.com/MIEnchating/sub2api-console/backend/internal/redact"
 )
 
@@ -117,31 +116,7 @@ func (probe *AccountProbe) Open(ctx context.Context, model, prompt string) (*htt
 	if err != nil {
 		return nil, err
 	}
-	endpoint, body, err := probe.requestPayload(model, prompt)
-	if err != nil {
-		return nil, err
-	}
-	encoded, err := json.Marshal(body)
-	if err != nil {
-		return nil, probeUnavailable("probe_request_invalid", "探活请求编码失败，请检查探活配置")
-	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(encoded))
-	if err != nil {
-		return nil, probeUnavailable("probe_request_invalid", "探活请求创建失败，请检查账号 Base URL")
-	}
-	request.Header.Set("Content-Type", "application/json")
-	request.Header.Set("Accept", "text/event-stream")
-	request.Header.Set("User-Agent", "Sub2API-Console/1.0")
-	switch probe.protocol {
-	case "anthropic":
-		request.Header.Set("X-Api-Key", probe.secret)
-		request.Header.Set("Anthropic-Version", directProbeAnthropicVersion)
-	case "gemini":
-		request.Header.Set("X-Goog-Api-Key", probe.secret)
-	default:
-		request.Header.Set("Authorization", "Bearer "+probe.secret)
-	}
-	response, err := probe.http.Do(request)
+	response, err := modelrequest.Open(ctx, probe.http, modelrequest.Request{BaseURL: probe.baseURL, Secret: probe.secret, Protocol: modelrequest.Protocol(probe.protocol), Parameters: modelrequest.Parameters{Model: model, Prompt: prompt, Stream: true, MaxOutputTokens: 4096}, Timeout: probe.http.Timeout})
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
 			return nil, context.Canceled
@@ -182,74 +157,13 @@ func (probe *AccountProbe) resolveModel(model string) (string, error) {
 	return model, nil
 }
 
-type directProbeResponsesRequest struct {
-	Model           string `json:"model"`
-	Input           string `json:"input"`
-	Stream          bool   `json:"stream"`
-	MaxOutputTokens int    `json:"max_output_tokens"`
-}
-
-type directProbeMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
-}
-
-type directProbeMessagesRequest struct {
-	Model     string               `json:"model"`
-	Messages  []directProbeMessage `json:"messages"`
-	Stream    bool                 `json:"stream"`
-	MaxTokens int                  `json:"max_tokens"`
-}
-
-type directProbeGeminiPart struct {
-	Text string `json:"text"`
-}
-
-type directProbeGeminiContent struct {
-	Role  string                  `json:"role"`
-	Parts []directProbeGeminiPart `json:"parts"`
-}
-
-type directProbeGeminiGenerationConfig struct {
-	MaxOutputTokens int `json:"maxOutputTokens"`
-}
-
-type directProbeGeminiRequest struct {
-	Contents         []directProbeGeminiContent        `json:"contents"`
-	GenerationConfig directProbeGeminiGenerationConfig `json:"generationConfig"`
-}
-
 func (probe *AccountProbe) requestPayload(model, prompt string) (string, any, error) {
-	path := "/v1/responses"
-	var body any
-	switch probe.protocol {
-	case "responses":
-		body = directProbeResponsesRequest{Model: model, Input: prompt, Stream: true, MaxOutputTokens: 4096}
-	case "anthropic", "chat_completions":
-		path = "/v1/messages"
-		if probe.protocol == "chat_completions" {
-			path = "/v1/chat/completions"
-		}
-		body = directProbeMessagesRequest{Model: model, Messages: []directProbeMessage{{Role: "user", Content: prompt}}, Stream: true, MaxTokens: 4096}
-	case "gemini":
-		model = strings.TrimPrefix(model, "models/")
-		if model == "" || strings.ContainsAny(model, "/\\?#%") || model == "." || model == ".." {
-			return "", nil, probeUnavailable("probe_model_invalid", "Gemini 探活模型必须是有效模型 ID，请检查模型配置")
-		}
-		path = "/v1beta/models/" + model + ":streamGenerateContent"
-		body = directProbeGeminiRequest{
-			Contents:         []directProbeGeminiContent{{Role: "user", Parts: []directProbeGeminiPart{{Text: prompt}}}},
-			GenerationConfig: directProbeGeminiGenerationConfig{MaxOutputTokens: 4096},
-		}
-	}
-	endpoint, err := directProbeEndpoint(probe.baseURL, path)
+	path, body, err := modelrequest.Build(modelrequest.Protocol(probe.protocol), modelrequest.Parameters{Model: model, Prompt: prompt, Stream: true, MaxOutputTokens: 4096})
 	if err != nil {
-		return "", nil, err
+		return "", nil, probeUnavailable("probe_model_invalid", "探活模型格式无效，请检查模型配置")
 	}
-	if probe.protocol == "gemini" {
-		endpoint += "?alt=sse"
-	}
-	return endpoint, body, nil
+	endpoint, err := modelrequest.Endpoint(probe.baseURL, path)
+	return endpoint, body, err
 }
 
 func directProbeProtocol(platform string, credentials map[string]any) (string, error) {

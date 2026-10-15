@@ -143,18 +143,23 @@ function AnimationCheckContent(props: {
     mutationFn: tasks.start,
   });
   const submit = (value: AnimationForm, mode?: "precheck"): void => {
+    const availableIDs = new Set(
+      accounts.data?.filter((account) => !account.upstream_excluded).map((account) => account.id),
+    );
+    const accountIDs = value.account_ids.filter(
+      (id) => availableIDs.has(id) && !tasks.busyIDs.has(id),
+    );
+    if (accountIDs.length === 0) return;
     run.mutate({
       ...(mode ? { mode, precheck_questions: allPrecheckQuestions } : {}),
-      targets: value.account_ids
-        .filter((id) => !tasks.busyIDs.has(id))
-        .map((id) => ({
-          account_id: id,
-          model: value.unified_model,
-          models: value.additional_models?.length
-            ? [value.unified_model, ...value.additional_models]
-            : undefined,
-        })),
-      timeout_seconds: value.timeout_seconds,
+      targets: accountIDs.map((id) => ({
+        account_id: id,
+        model: value.unified_model,
+        models: value.additional_models?.length
+          ? [value.unified_model, ...value.additional_models]
+          : undefined,
+      })),
+      timeout_seconds: 0,
     });
   };
   const editSchedules = (selected: AccountStatus[], batch: boolean): void => {
@@ -174,13 +179,18 @@ function AnimationCheckContent(props: {
   const start = tasks.start;
   const retry = useCallback(
     (target: AnimationTarget): void => {
-      const timeout = form.getValues("timeout_seconds");
+      if (
+        !accounts.data?.some(
+          (account) => account.id === target.account_id && !account.upstream_excluded,
+        )
+      )
+        return;
       void start({
         targets: [target],
-        timeout_seconds: Number.isFinite(timeout) && timeout >= 5 && timeout <= 120 ? timeout : 120,
+        timeout_seconds: 0,
       });
     },
-    [form, start],
+    [start, accounts.data],
   );
   return (
     <>

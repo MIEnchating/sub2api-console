@@ -656,7 +656,7 @@ describe("system log search contract", () => {
     vi.unstubAllGlobals();
   });
 
-  it("forwards only request_id and pagination parameters", async () => {
+  it("forwards request ID, time range, level and pagination parameters", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(JSON.stringify({ items: [], total: 0, page: 2, page_size: 20 }), {
         status: 200,
@@ -667,6 +667,8 @@ describe("system log search contract", () => {
 
     await api.systemLogs({
       requestId: "req-42",
+      timeRange: "7d",
+      level: "error",
       page: 2,
       pageSize: 20,
     });
@@ -675,10 +677,18 @@ describe("system log search contract", () => {
     expect(url.pathname).toBe("/api/ops/system-logs");
     expect(Object.fromEntries(url.searchParams)).toMatchObject({
       request_id: "req-42",
+      time_range: "7d",
+      level: "error",
       page: "2",
       page_size: "20",
     });
-    expect([...url.searchParams.keys()]).toEqual(["request_id", "page", "page_size"]);
+    expect([...url.searchParams.keys()]).toEqual([
+      "request_id",
+      "page",
+      "page_size",
+      "time_range",
+      "level",
+    ]);
   });
 });
 
@@ -1582,14 +1592,14 @@ describe("password vault request contracts", () => {
     await api.deleteVaultEntry("operator/primary");
 
     expect(fetchMock.mock.calls[0]?.[0]).toBe(
-      "/api/auth-recovery/vault-entry?entry=operator%2Fprimary",
+      "/api/auth-recovery/vault-entry?id=operator%2Fprimary",
     );
     const request = fetchMock.mock.calls[0]?.[1] as RequestInit;
     expect(request.method).toBe("DELETE");
     expect(request.body).toBeUndefined();
   });
 
-  it("creates and selects credentials by entry name without a group field", async () => {
+  it("creates a named credential and selects it by its independent stable ID", async () => {
     const fetchMock = vi.fn().mockImplementation(() =>
       Promise.resolve(
         new Response(JSON.stringify({ entry: "operator", configured: true }), {
@@ -1605,7 +1615,7 @@ describe("password vault request contracts", () => {
       username: "user",
       password: "secret",
     });
-    await api.runAuthRecovery("api.example.test", "operator", true);
+    await api.runAuthRecovery("api.example.test", "vault-independent-id", true);
     await api.runAuthRecoveryBatch(["api.example.test", "backup.example.test"]);
 
     expect(JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body))).toEqual({
@@ -1615,7 +1625,7 @@ describe("password vault request contracts", () => {
     });
     expect(JSON.parse(String((fetchMock.mock.calls[1]?.[1] as RequestInit).body))).toEqual({
       host: "api.example.test",
-      entry: "operator",
+      entry_id: "vault-independent-id",
       accept_login_agreement: true,
     });
     expect(fetchMock.mock.calls[2]?.[0]).toBe("/api/auth-recovery/run-batch");
@@ -1729,14 +1739,14 @@ describe("New API management request contracts", () => {
     await api.createNewAPIChannelKey("platform-1", {
       sub2api_group_id: "6",
       credential_source: "vault",
-      vault_entry: "运营账号",
+      vault_entry_id: "运营账号",
     });
 
     expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/newapi/platforms/platform-1/channel-key");
     expect(JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body))).toEqual({
       sub2api_group_id: "6",
       credential_source: "vault",
-      vault_entry: "运营账号",
+      vault_entry_id: "运营账号",
     });
     expect(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body)).not.toContain("secret");
   });

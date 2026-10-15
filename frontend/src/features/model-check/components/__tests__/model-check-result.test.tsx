@@ -1,3 +1,5 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { render, screen, within } from "@testing-library/react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
@@ -25,7 +27,7 @@ function task(tests: Record<string, unknown>[]): Task {
 }
 
 describe("模型检测结果", () => {
-  it("任务运行中展示实时步骤和已完成组合而不是百分比", () => {
+  it("任务运行中展示后端进度和已完成组合，并保留取消入口", () => {
     const runningTask = {
       ...task([]),
       status: "running",
@@ -47,23 +49,31 @@ describe("模型检测结果", () => {
       },
     } as Task;
     const queryClient = new QueryClient();
-    const markup = renderToStaticMarkup(
+    const view = render(
       <QueryClientProvider client={queryClient}>
         <ModelCheckResult task={runningTask} />
       </QueryClientProvider>,
     );
 
-    expect(markup).toContain('role="status"');
-    expect(markup).toContain('data-testid="model-check-live-progress"');
-    expect(markup).toContain("已完成 2/20 个账号模型组合");
-    expect(markup).toContain("2/20");
-    expect(markup).toContain("准备账号凭据");
-    expect(markup).toContain("并行执行检测");
-    expect(markup).toContain("实时账号");
-    expect(markup).toContain("取消任务");
-    expect(markup).toContain("14%");
-    expect(markup).not.toContain('data-testid="model-check-result"');
-    expect(markup).toContain('data-table-panel=""');
+    try {
+      expect(screen.getByRole("status")).toHaveTextContent("已完成 2/20 个账号模型组合");
+      expect(screen.getByRole("progressbar", { name: "检测进度 14%" })).toHaveAttribute(
+        "aria-valuenow",
+        "14",
+      );
+      const combinations = within(screen.getByRole("navigation", { name: "检测组合" }));
+      expect(combinations.getByRole("button", { name: /实时账号/ })).toHaveAttribute(
+        "aria-pressed",
+        "true",
+      );
+      const details = within(screen.getByRole("region", { name: "逐项检测过程" }));
+      expect(details.getByRole("heading", { name: "实时账号" })).toBeVisible();
+      expect(details.getByText("此组合没有逐项记录，请查看最终报告。")).toBeVisible();
+      expect(screen.getByRole("button", { name: "取消任务" })).toBeEnabled();
+    } finally {
+      view.unmount();
+      queryClient.clear();
+    }
   });
 
   it("按账号和模型组合展示 Sol 与 Claude 结果", () => {
@@ -156,4 +166,3 @@ describe("模型检测结果", () => {
     expect(markup).toContain('aria-label="转到第 2 页"');
   });
 });
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";

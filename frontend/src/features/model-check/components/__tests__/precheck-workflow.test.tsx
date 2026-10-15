@@ -109,7 +109,7 @@ it("批量前置检测使用默认糖果题，完成后可手动勾选账号继�
         mode: "precheck",
         precheck_questions: ["candy"],
         targets: [1, 2, 3, 4].map((id) => ({ account_id: String(id), model: "gpt-6-astra" })),
-        timeout_seconds: 120,
+        timeout_seconds: 0,
       },
     ]),
   );

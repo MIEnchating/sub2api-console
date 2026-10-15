@@ -52,7 +52,7 @@ export function AbnormalCleanupCard(props: {
   return (
     <PolicyConfigCard
       title="长期异常账号处置"
-      description="持续降级或熔断且仍有新鲜失败证据的账号达到时长后自动处置，默认关闭。成功请求、证据过期或人工保护会重置计时；429 限流和成本拦截不计入。仅完全模式执行。"
+      description="持续降级或熔断且仍有新鲜失败证据的账号达到时长后自动处置，默认关闭。成功请求、证据过期或人工保护会重置计时；429 限流和成本拦截不计入。仅完全模式执行。选择删除账号时同步删除上游 Key，Key 删除或读回失败时保留账号。"
       columns={3}
       wide
       switchAction={{

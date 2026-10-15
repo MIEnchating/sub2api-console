@@ -459,6 +459,9 @@ func (s *Service) Delete(ctx context.Context, expected Preview, actor string) (R
 			return result, fmt.Errorf("上游 Key 删除前读回失败：%w", listErr)
 		}
 		if containsKey(keys, current.Binding.UpstreamKeyID) {
+			if err := adminclient.AuthorizeMutation(ctx); err != nil {
+				return result, err
+			}
 			result.UpstreamKeyDeleteRequested = true
 			deleteErr := s.keys.DeleteKey(ctx, *auth, current.Binding.UpstreamKeyID)
 			keys, listErr = s.keys.ListKeys(ctx, *auth)

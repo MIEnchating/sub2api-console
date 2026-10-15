@@ -18,6 +18,7 @@ test("模型多选保持单行工具栏，搜索勾选与手机布局不溢出",
       "/api/accounts": [{ id: "41", name: "测试账号", groups: [], platform: "openai" }],
       "/api/model-checks/animation-schedules": [],
       "/api/model-checks/animations": [],
+      "/api/model-checks/timeouts/animation": { timeout_seconds: 120, version: 0 },
       "/api/model-checks/animations/accounts/41/models": {
         models: ["gpt-6-astra", "gpt-6.1-sol", "claude-sonnet-4-5"],
       },
@@ -29,6 +30,7 @@ test("模型多选保持单行工具栏，搜索勾选与手机布局不溢出",
     else await route.fulfill({ status: 503, json: { detail: "隔离测试未配置此接口" } });
   });
   await page.goto("/animation-check");
+  await expect(page.getByRole("spinbutton", { name: "动画超时（秒）" })).toHaveValue("120");
   await page.getByRole("checkbox", { name: /检测 测试账号/ }).check();
   const trigger = page.getByRole("combobox", { name: "检测模型", exact: true });
   const toolbar = page.getByRole("group", { name: "动画检测操作", exact: true });

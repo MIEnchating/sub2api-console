@@ -28,6 +28,9 @@ function Settings(): ReactElement {
 function setup() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   clients.push(client);
+  client.setQueryDefaults(["detection-timeout"], { staleTime: Infinity });
+  client.setQueryData(["detection-timeout", "animation"], { timeout_seconds: 120, version: 0 });
+  client.setQueryData(["detection-timeout", "precheck"], { timeout_seconds: 120, version: 0 });
   const pending = new Map<string, { signal: AbortSignal; resolve: (response: Response) => void }>();
   const fetcher = vi.fn<typeof fetch>().mockImplementation((input, init) => {
     const id = String(input).split("/").at(-2)!;

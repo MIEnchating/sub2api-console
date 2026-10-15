@@ -1,11 +1,18 @@
 import { useId, type ReactElement } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useForm } from "react-hook-form";
+import { Controller, useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { toast } from "sonner";
 import { api, type AnimationQualitySettings } from "@/api";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectTrigger,
+  SelectValue,
+  SelectContent,
+  SelectItem,
+} from "@/components/ui/select";
+import { SavedDetectionTimeout } from "./saved-detection-timeout";
 import { ContentLoading } from "@/components/content-loading";
 import { ContentRetry } from "@/components/content-retry";
 import { DialogBody, DialogFooter } from "@/components/ui/dialog";
@@ -41,6 +48,10 @@ export function QualitySettingsFormEditor(props: {
     mutationFn: api.saveAnimationQualitySettings,
     onSuccess: (value) => {
       client.setQueryData(["animation-quality-settings"], value);
+      client.setQueryData(["detection-timeout", "review"], {
+        timeout_seconds: value.timeout_seconds,
+        version: value.version,
+      });
       toast.success("自动质量标注设置已保存");
       props.onClose();
     },
@@ -48,6 +59,7 @@ export function QualitySettingsFormEditor(props: {
   });
   return (
     <form
+      noValidate
       onSubmit={form.handleSubmit((value) => save.mutate(value))}
       className="flex min-h-0 flex-col"
     >
@@ -60,25 +72,41 @@ export function QualitySettingsFormEditor(props: {
           <div className="space-y-1.5">
             <label htmlFor={`${id}-account`}>评审账号</label>
             {accounts.data ? (
-              <select
-                id={`${id}-account`}
-                {...form.register("account_id")}
-                aria-invalid={!!form.formState.errors.account_id}
-                aria-describedby={`${id}-account-error`}
-                className="h-8 w-full rounded-md border bg-background px-2 text-sm"
-              >
-                <option value="">选择已有账号</option>
-                {accountID && !accounts.data.some((account) => account.id === accountID) ? (
-                  <option value={accountID} disabled>
-                    原账号已不可用（{accountID}）
-                  </option>
-                ) : null}
-                {accounts.data.map((account) => (
-                  <option key={account.id} value={account.id}>
-                    {account.name} · {account.id}
-                  </option>
-                ))}
-              </select>
+              <Controller
+                control={form.control}
+                name="account_id"
+                render={({ field }) => (
+                  <Select
+                    value={field.value || null}
+                    onValueChange={(value) => {
+                      field.onChange(value ?? "");
+                      form.setValue("model", "", { shouldDirty: true });
+                    }}
+                    disabled={save.isPending || !enabled}
+                  >
+                    <SelectTrigger
+                      id={`${id}-account`}
+                      ref={field.ref}
+                      onBlur={field.onBlur}
+                      aria-invalid={!!form.formState.errors.account_id}
+                      aria-describedby={`${id}-account-error`}
+                    >
+                      <SelectValue placeholder="选择已有账号">
+                        {accounts.data?.find((account) => account.id === field.value)?.name ??
+                          (field.value ? `原账号已不可用（${field.value}）` : "选择已有账号")}
+                      </SelectValue>
+                    </SelectTrigger>
+                    <SelectContent className="max-h-72">
+                      <SelectItem value="">清除选择</SelectItem>
+                      {accounts.data?.map((account) => (
+                        <SelectItem key={account.id} value={account.id}>
+                          {account.name} · {account.id}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                )}
+              />
             ) : (
               <div>
                 {accounts.isError ? (
@@ -98,13 +126,38 @@ export function QualitySettingsFormEditor(props: {
           <div className="space-y-1.5">
             <label htmlFor={`${id}-model`}>评审模型</label>
             <div className="flex min-w-0 gap-2">
-              <Input
-                id={`${id}-model`}
-                list={`${id}-models`}
-                {...form.register("model")}
-                placeholder="选择或输入模型 ID"
-                aria-invalid={!!form.formState.errors.model}
-                aria-describedby={`${id}-model-error`}
+              <Controller
+                control={form.control}
+                name="model"
+                render={({ field }) => (
+                  <Select
+                    value={field.value || null}
+                    onValueChange={(value) => field.onChange(value ?? "")}
+                    disabled={
+                      !accountID || !models.data?.models.length || save.isPending || !enabled
+                    }
+                  >
+                    <SelectTrigger
+                      id={`${id}-model`}
+                      className="min-w-0 flex-1"
+                      ref={field.ref}
+                      onBlur={field.onBlur}
+                      aria-invalid={!!form.formState.errors.model}
+                      aria-describedby={`${id}-model-error`}
+                    >
+                      <SelectValue placeholder="获取模型后选择评审模型">
+                        {field.value || "获取模型后选择评审模型"}
+                      </SelectValue>
+                    </SelectTrigger>
+                    <SelectContent className="max-h-72">
+                      {models.data?.models.map((model) => (
+                        <SelectItem key={model} value={model}>
+                          {model}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                )}
               />
               <Button
                 type="button"
@@ -114,32 +167,25 @@ export function QualitySettingsFormEditor(props: {
               >
                 {models.isFetching ? "读取中" : "获取模型"}
               </Button>
-              <datalist id={`${id}-models`}>
-                {models.data?.models.map((model) => (
-                  <option key={model} value={model} />
-                ))}
-              </datalist>
             </div>
+            {models.data?.models.length === 0 ? (
+              <p className="text-xs text-muted-foreground">
+                该账号未返回可选模型，可重新获取或更换账号。
+              </p>
+            ) : null}
             <p id={`${id}-model-error`} className="text-xs text-destructive">
               {form.formState.errors.model?.message}
             </p>
           </div>
-          <div className="space-y-1.5">
-            <label htmlFor={`${id}-timeout`}>评审超时（秒）</label>
-            <Input
-              id={`${id}-timeout`}
-              type="number"
-              min={5}
-              max={120}
-              {...form.register("timeout_seconds", { valueAsNumber: true })}
-              aria-invalid={!!form.formState.errors.timeout_seconds}
-              aria-describedby={`${id}-timeout-error`}
-            />
-            <p id={`${id}-timeout-error`} className="text-xs text-destructive">
-              {form.formState.errors.timeout_seconds?.message}
-            </p>
-          </div>
         </fieldset>
+        <SavedDetectionTimeout
+          mode="review"
+          disabled={save.isPending}
+          onSaved={(value) => {
+            form.setValue("timeout_seconds", value.timeout_seconds);
+            form.setValue("version", value.version);
+          }}
+        />
         <p className="text-xs leading-6 text-muted-foreground">
           评审只分析源码，不运行或观看动画。自动结果与人工标注分别保存；历史记录不会自动重评。设置变更会中止尚未提交的旧配置评审。
         </p>

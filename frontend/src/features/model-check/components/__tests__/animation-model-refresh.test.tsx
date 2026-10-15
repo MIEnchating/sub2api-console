@@ -28,6 +28,9 @@ function Settings(): ReactElement {
 function renderSettings(): void {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   clients.push(client);
+  client.setQueryDefaults(["detection-timeout"], { staleTime: Infinity });
+  client.setQueryData(["detection-timeout", "animation"], { timeout_seconds: 120, version: 0 });
+  client.setQueryData(["detection-timeout", "precheck"], { timeout_seconds: 120, version: 0 });
   client.setQueryData(["model-check-account-models", "41"], { models: ["old-management-alias"] });
   client.setQueryData(["model-animation", "account-models", "41"], {
     models: ["old-upstream-model"],
@@ -43,7 +46,7 @@ it("首次点击获取模型时重新读取实际检测接口，不复用管理�
   const user = userEvent.setup();
   const fetcher = vi
     .fn<typeof fetch>()
-    .mockResolvedValue(new Response(JSON.stringify({ models: ["current-upstream-model"] })));
+    .mockImplementation(async () => Response.json({ models: ["current-upstream-model"] }));
   vi.stubGlobal("fetch", fetcher);
   renderSettings();
   await user.click(screen.getByRole("button", { name: "获取模型" }));

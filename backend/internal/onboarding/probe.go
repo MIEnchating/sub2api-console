@@ -9,10 +9,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/MIEnchating/sub2api-console/backend/internal/modelrequest"
 	"io"
 	"log/slog"
 	"net/http"
-	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -591,43 +591,36 @@ func runGatewayProbe(ctx context.Context, baseURL, secret, model string, platfor
 	}()
 	started := time.Now()
 	stream := probeStreamMode(modes...)
-	path := "/v1/responses"
-	body := map[string]any{"model": model, "input": "hi", "max_output_tokens": 16, "stream": stream}
-	headers := map[string]string{}
-	if stream {
-		headers["Accept"] = "text/event-stream"
-	}
+	protocol := modelrequest.Responses
 	if platform != nil {
 		switch strings.ToLower(strings.TrimSpace(*platform)) {
 		case "anthropic", "claude":
-			path = "/v1/messages"
-			body = map[string]any{"model": model, "max_tokens": 16, "messages": []map[string]string{{"role": "user", "content": "hi"}}, "stream": stream}
-			headers["anthropic-version"] = "2023-06-01"
+			protocol = modelrequest.Anthropic
 		case "gemini", "google":
-			path = "/v1beta/models/" + url.PathEscape(model) + ":generateContent"
-			body = map[string]any{"contents": []map[string]any{{"role": "user", "parts": []map[string]string{{"text": "hi"}}}}}
-			if stream {
-				path = "/v1beta/models/" + url.PathEscape(model) + ":streamGenerateContent?alt=sse"
-			}
+			protocol = modelrequest.Gemini
 		}
 	}
-	raw, status, err := gatewayRequest(ctx, baseURL, secret, http.MethodPost, path, body, headers)
-	// Each compatibility change is allowed once, only after a confirmed
-	// pre-generation rejection. Keep the same host, model, prompt and credential.
+	ctx, cancel := modelrequest.Start(ctx, 60*time.Second, stream)
+	defer cancel()
+	parameters := modelrequest.Parameters{Model: model, Prompt: "hi", MaxOutputTokens: 16, Stream: stream}
+	// Preserve the native Gemini probe's default output budget.
+	if protocol == modelrequest.Gemini {
+		parameters.MaxOutputTokens = 0
+	}
+	path, _, _ := modelrequest.Build(protocol, parameters)
+	raw, status, err := gatewayGeneration(ctx, baseURL, secret, protocol, parameters)
 	for err == nil {
 		if gatewayRequiresChat(path, status, raw) {
-			path = "/v1/chat/completions"
-			body = map[string]any{"model": model, "max_tokens": 16, "messages": []map[string]string{{"role": "user", "content": "hi"}}, "stream": stream}
-			delete(headers, "anthropic-version")
-		} else if !stream && body["stream"] == false && gatewayRequiresStream(status, raw) {
-			stream = true
-			body["stream"] = true
-			headers["Accept"] = "text/event-stream"
+			protocol = modelrequest.Chat
+		} else if !parameters.Stream && protocol != modelrequest.Gemini && gatewayRequiresStream(status, raw) {
+			parameters.Stream = true
 		} else {
 			break
 		}
-		raw, status, err = gatewayRequest(ctx, baseURL, secret, http.MethodPost, path, body, headers)
+		path, _, _ = modelrequest.Build(protocol, parameters)
+		raw, status, err = gatewayGeneration(ctx, baseURL, secret, protocol, parameters)
 	}
+	stream = parameters.Stream
 	result = ProbeResult{Status: "failed", Message: "探活请求失败", RequestModel: model, LatencyMS: time.Since(started).Milliseconds(), HTTPStatus: status}
 	if err != nil {
 		result.Message = err.Error()
@@ -702,6 +695,7 @@ func decodeGatewayProbeResponse(raw []byte, stream bool, secret string) (any, st
 
 	var lastPayload any
 	var contentPayload any
+	var text modelrequest.TextAccumulator
 	events := make([]any, 0)
 	actualModel := ""
 	scanner := bufio.NewScanner(bytes.NewReader(raw))
@@ -720,6 +714,7 @@ func decodeGatewayProbeResponse(raw []byte, stream bool, secret string) (any, st
 			return nil, actualModel, "", probeResponseJSON(events, secret), err
 		}
 		events = append(events, event)
+		text.Add(event)
 		lastPayload = event
 		if actualModel == "" {
 			actualModel = responseModelFromPayload(event)
@@ -735,7 +730,7 @@ func decodeGatewayProbeResponse(raw []byte, stream bool, secret string) (any, st
 		return nil, actualModel, "", probeResponseJSON(events, secret), errors.New("上游探活流读取失败")
 	}
 	if contentPayload != nil {
-		return contentPayload, actualModel, probeResponseText(contentPayload, secret), probeResponseJSON(events, secret), nil
+		return contentPayload, actualModel, probeResponseText(map[string]any{"output_text": text.String()}, secret), probeResponseJSON(events, secret), nil
 	}
 	if lastPayload != nil {
 		return lastPayload, actualModel, probeResponseText(lastPayload, secret), probeResponseJSON(events, secret), errors.New("上游探活流未返回有效文本")
@@ -801,36 +796,12 @@ func probeSecretField(key string) bool {
 }
 
 func probeResponseText(value any, secret string) string {
-	var find func(any) string
-	find = func(item any) string {
-		switch typed := item.(type) {
-		case string:
-			text := strings.TrimSpace(probeCredentialText(typed, secret))
-			if text == "" {
-				return ""
-			}
-			if len([]rune(text)) > 2000 {
-				return string([]rune(text)[:2000])
-			}
-			return text
-		case []any:
-			for _, child := range typed {
-				if text := find(child); text != "" {
-					return text
-				}
-			}
-		case map[string]any:
-			for _, key := range []string{"output_text", "text", "delta", "content", "parts", "output", "choices", "candidates", "message", "response"} {
-				if child, present := typed[key]; present {
-					if text := find(child); text != "" {
-						return text
-					}
-				}
-			}
-		}
-		return ""
+	text := strings.TrimSpace(redact.Secrets(probeCredentialText(modelrequest.Text(value), secret)))
+	runes := []rune(text)
+	if len(runes) > 2000 {
+		return string(runes[:2000]) + "…（内容已截断）"
 	}
-	return find(value)
+	return text
 }
 
 func eventHasProbeContent(value any) bool {
@@ -873,6 +844,32 @@ func eventHasProbeText(value any) bool {
 		}
 	}
 	return false
+}
+
+func gatewayGeneration(ctx context.Context, baseURL, secret string, protocol modelrequest.Protocol, parameters modelrequest.Parameters) ([]byte, int, error) {
+	headers := http.Header{"Authorization": []string{"Bearer " + strings.TrimSpace(secret)}}
+	if parameters.Stream {
+		headers.Set("Accept", "text/event-stream")
+	}
+	response, err := modelrequest.Open(ctx, &http.Client{}, modelrequest.Request{BaseURL: baseURL, Secret: secret, Protocol: protocol, Parameters: parameters, Headers: headers, Timeout: 60 * time.Second})
+	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			return nil, 0, errors.New("探活请求超时")
+		}
+		return nil, 0, errors.New("上游网络请求失败")
+	}
+	defer response.Body.Close()
+	raw, err := modelrequest.ReadBody(response.Body, parameters.Stream && response.StatusCode >= 200 && response.StatusCode < 300, onboardingProbeResponseLimit)
+	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			return nil, response.StatusCode, errors.New("探活请求超时")
+		}
+		return nil, response.StatusCode, errors.New("上游响应读取失败")
+	}
+	if len(raw) > onboardingProbeResponseLimit {
+		return nil, response.StatusCode, errors.New("上游响应过大")
+	}
+	return raw, response.StatusCode, nil
 }
 
 func gatewayRequest(ctx context.Context, baseURL, secret, method, path string, payload map[string]any, headers map[string]string) ([]byte, int, error) {

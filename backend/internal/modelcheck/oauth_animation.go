@@ -112,30 +112,13 @@ func runManagedOAuthAnimation(ctx context.Context, client *adminclient.Client, a
 	return nil
 }
 
-func (s *Service) runOAuthPromptTarget(ctx context.Context, account selectedAccount, timeout int, model, requestID, prompt string) (string, string, error) {
-	guarded, release, err := s.acquirePreparedAccounts(ctx, []selectedAccount{account})
-	if err != nil {
-		return "", "", err
-	}
-	defer func() { _ = release() }()
-	store, ok := s.credentials.(targetguard.Store)
-	if !ok {
-		return "", "", errors.New("OAuth 账号检测的管理目标尚未配置")
-	}
-	guarded, err = targetguard.Pin(guarded, store)
-	if err != nil {
-		return "", "", errors.New("管理目标在检测排队后已变化或不可用，请重新提交")
-	}
-	credential, err := s.resolveOAuthCredential(guarded, account, true)
-	if err != nil {
-		return "", "", err
-	}
+func (s *Service) runOAuthPromptTarget(ctx context.Context, account selectedAccount, credential *oauthCredential, timeout int, model, requestID, prompt string) (string, string, error) {
 	effort := "none"
 	if model == astraModel {
 		effort = "low"
 	}
 	if credential.previewClient != nil {
-		response, err := credential.previewClient.GenerateAccountPreview(guarded, account.ID, adminclient.AccountPreviewRequest{
+		response, err := credential.previewClient.GenerateAccountPreview(ctx, account.ID, adminclient.AccountPreviewRequest{
 			ModelID: model, Prompt: prompt, ReasoningEffort: effort, RequestID: requestID, TimeoutSeconds: timeout,
 		})
 		if err != nil {
@@ -143,15 +126,16 @@ func (s *Service) runOAuthPromptTarget(ctx context.Context, account selectedAcco
 		}
 		return response.Text, safeCredentialText(response.Model), nil
 	}
-	transport, closeTransport, err := s.animationOAuthTransport(guarded, timeout, credential)
+	transport, closeTransport, err := s.animationOAuthTransport(ctx, timeout, credential)
 	if err != nil {
 		return "", "", err
 	}
 	defer closeTransport()
 	sender := oauthBundleSender{
+		stream: true,
 		client: &http.Client{Transport: transport, Timeout: time.Duration(timeout) * time.Second,
 			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }},
 		credential: *credential, models: []string{model}, slots: make(chan struct{}, 1), requestID: requestID,
 	}
-	return sender.SendWithReasoning(guarded, account.ID, model, prompt, timeout, effort)
+	return sender.SendWithReasoning(ctx, account.ID, model, prompt, timeout, effort)
 }

@@ -118,9 +118,9 @@ func (s *recoveryPrivate) SaveAuthRecoveryPreference(_ context.Context, value co
 	if s.preferences == nil {
 		s.preferences = map[string]configstore.AuthRecoveryPreference{}
 	}
-	if value.VaultEntry == nil {
+	if value.VaultEntryID == nil {
 		if current, found := s.preferences[configstore.CanonicalHost(value.Host)]; found {
-			value.VaultEntry = current.VaultEntry
+			value.VaultEntryID = current.VaultEntryID
 		}
 	}
 	s.preferences[configstore.CanonicalHost(value.Host)] = value
@@ -161,7 +161,7 @@ func (s *recoveryPrivate) VaultEntryIndex(context.Context) ([]configstore.VaultE
 	defer s.mu.Unlock()
 	result := make([]configstore.VaultEntrySummary, 0, len(s.vault))
 	for _, value := range s.vault {
-		result = append(result, configstore.VaultEntrySummary{Entry: value.Entry, Hosts: append([]string{}, value.Hosts...)})
+		result = append(result, configstore.VaultEntrySummary{ID: value.ID, Entry: value.Entry, Hosts: append([]string{}, value.Hosts...)})
 	}
 	return result, nil
 }
@@ -373,7 +373,7 @@ func TestRecoveryUsesRefreshBeforeVaultAndCommitsBeforeBalanceRead(t *testing.T)
 	private := &recoveryPrivate{record: &configstore.AuthRecord{
 		Host: "api.example", BaseURL: "https://api.example", UpstreamType: "sub2api", AuthMode: "sub2api_user_token",
 		AccessToken: &access, RefreshToken: &refresh, Headers: map[string]string{}, Cookies: map[string]string{},
-	}, vault: map[string]configstore.VaultEntry{"selected": {Entry: "selected"}}}
+	}, vault: map[string]configstore.VaultEntry{"selected": {ID: "selected", Entry: "selected"}}}
 	auth := &recoveryAuthenticator{
 		refresh: func(_ context.Context, record configstore.AuthRecord) (configstore.AuthRecord, error) {
 			record.AccessToken = &rotated
@@ -482,7 +482,7 @@ func TestRecoveryCorrectsStoredPlatformAfterVerifiedPublicFingerprint(t *testing
 		Host: "api.example", BaseURL: "https://api.example", UpstreamType: "sub2api", AuthMode: "sub2api_user_login",
 		AccessToken: &access, RefreshToken: &refresh, Headers: map[string]string{}, Cookies: map[string]string{},
 	}, vault: map[string]configstore.VaultEntry{
-		"selected": {Entry: "selected", Username: &username, Password: &password},
+		"selected": {ID: "selected", Entry: "selected", Username: &username, Password: &password},
 	}}
 	auth := &recoveryAuthenticator{
 		refresh: func(_ context.Context, record configstore.AuthRecord) (configstore.AuthRecord, error) {
@@ -524,8 +524,8 @@ func TestRecoveryUsesOnlyExplicitlySelectedVaultEntryAfterRefreshFailure(t *test
 		Host: "api.example", BaseURL: "https://api.example", UpstreamType: "sub2api", AuthMode: "sub2api_user_token",
 		RefreshToken: &refresh, Headers: map[string]string{}, Cookies: map[string]string{},
 	}, vault: map[string]configstore.VaultEntry{
-		"selected": {Entry: "selected", Username: &username, Password: &password},
-		"other":    {Entry: "other", Username: &username, Password: &password},
+		"selected": {ID: "selected", Entry: "selected", Username: &username, Password: &password},
+		"other":    {ID: "other", Entry: "other", Username: &username, Password: &password},
 	}}
 	var loginEntries []string
 	auth := &recoveryAuthenticator{
@@ -562,7 +562,7 @@ func TestRecoveryCreatesMissingPrivateRecordFromBusinessHostAfterVerifiedVaultLo
 		"api.example": {Host: "api.example", BaseURL: "https://api.example", UpstreamType: "sub2api"},
 	}}
 	private := &recoveryPrivate{vault: map[string]configstore.VaultEntry{
-		"selected": {Entry: "selected", Username: &username, Password: &password},
+		"selected": {ID: "selected", Entry: "selected", Username: &username, Password: &password},
 	}}
 	auth := &recoveryAuthenticator{
 		refresh: func(context.Context, configstore.AuthRecord) (configstore.AuthRecord, error) {
@@ -601,7 +601,7 @@ func TestRecoveryDoesNotCreateMissingPrivateRecordWhenVaultLoginFails(t *testing
 		"api.example": {Host: "api.example", BaseURL: "https://api.example", UpstreamType: "newapi"},
 	}}
 	private := &recoveryPrivate{vault: map[string]configstore.VaultEntry{
-		"selected": {Entry: "selected", Username: &username, Password: &password},
+		"selected": {ID: "selected", Entry: "selected", Username: &username, Password: &password},
 	}}
 	auth := &recoveryAuthenticator{
 		refresh: func(context.Context, configstore.AuthRecord) (configstore.AuthRecord, error) {
@@ -657,7 +657,7 @@ func TestResolveAuthUsesUniqueExplicitVaultHostAndRelatedMetadata(t *testing.T) 
 			},
 		},
 		vault: map[string]configstore.VaultEntry{
-			"shared": {Entry: "shared", Username: &username, Password: &password, Hosts: []string{host, "accelerated.example.test", "other-cdn.example.test"}},
+			"shared": {ID: "shared", Entry: "shared", Username: &username, Password: &password, Hosts: []string{host, "accelerated.example.test", "other-cdn.example.test"}},
 		},
 	}
 	configurator := &recoveryConfigurator{onCreate: func(input upstreamconfig.Input) {
@@ -683,8 +683,8 @@ func TestResolveAuthUsesUniqueExplicitVaultHostAndRelatedMetadata(t *testing.T) 
 func TestResolveAuthRejectsAmbiguousVaultMatches(t *testing.T) {
 	const host = "192.0.2.44:8080"
 	private := &recoveryPrivate{vault: map[string]configstore.VaultEntry{
-		"first":  {Entry: "first", Hosts: []string{host}},
-		"second": {Entry: "second", Hosts: []string{host}},
+		"first":  {ID: "first", Entry: "first", Hosts: []string{host}},
+		"second": {ID: "second", Entry: "second", Hosts: []string{host}},
 	}}
 	service := New(&recoveryRepository{seeds: map[string]business.UpstreamAuthSeed{}}, private, &recoveryAuthenticator{}, &recoveryConfigurator{}, &recoveryBalance{}, &recoveryTasks{done: make(chan taskstore.Task, 1)})
 
@@ -805,7 +805,7 @@ func TestManualPasswordLoginReturnsCaptchaChallengeWithoutPersistingCredentials(
 	service := New(&recoveryRepository{}, private, &recoveryAuthenticator{}, configurator, &recoveryBalance{}, &recoveryTasks{done: make(chan taskstore.Task, 1)}, captcha)
 	mode, username, password, entry := "sub2api_manual_login", "operator", "secret", "operator-entry"
 	result, err := service.VerifyManual(context.Background(), ManualInput{
-		Host: "api.example", AuthMode: &mode, Username: &username, Password: &password, SaveToVault: true, Entry: &entry,
+		Host: "api.example", AuthMode: &mode, Username: &username, Password: &password, SaveToVault: true, EntryName: &entry,
 		Present: map[string]bool{"auth_mode": true, "username": true, "password": true, "save_to_vault": true, "entry": true},
 	}, "tester")
 	if err != nil {
@@ -855,7 +855,7 @@ func TestImageCaptchaWaitsForInputThenCompletesParentTask(t *testing.T) {
 		Host: "api.example", BaseURL: "https://api.example", UpstreamType: "sub2api", AuthMode: "sub2api_user_token",
 		Headers: map[string]string{}, Cookies: map[string]string{},
 	}, vault: map[string]configstore.VaultEntry{
-		"selected": {Entry: "selected", Username: &username, Password: &password},
+		"selected": {ID: "selected", Entry: "selected", Username: &username, Password: &password},
 	}}
 	auth := &recoveryAuthenticator{
 		refresh: func(context.Context, configstore.AuthRecord) (configstore.AuthRecord, error) {
@@ -975,9 +975,9 @@ func TestRecoveryWithoutExplicitEntryUsesLastSuccessfulVaultEntry(t *testing.T) 
 	}
 	private := &recoveryPrivate{
 		record: &record,
-		vault:  map[string]configstore.VaultEntry{entry: {Entry: entry}},
+		vault:  map[string]configstore.VaultEntry{entry: {ID: entry, Entry: entry}},
 		preferences: map[string]configstore.AuthRecoveryPreference{
-			"api.example": {Host: "api.example", AuthMode: "sub2api_user_login", RecoveryMethod: "vault", VaultEntry: &entry},
+			"api.example": {Host: "api.example", AuthMode: "sub2api_user_login", RecoveryMethod: "vault", VaultEntryID: &entry},
 		},
 	}
 	auth := &recoveryAuthenticator{
@@ -995,7 +995,7 @@ func TestRecoveryWithoutExplicitEntryUsesLastSuccessfulVaultEntry(t *testing.T) 
 		t.Fatalf("outcome=%#v vaultReads=%#v", outcome, private.vaultReads)
 	}
 	preference := private.preferences["api.example"]
-	if preference.RecoveryMethod != "vault" || preference.VaultEntry == nil || *preference.VaultEntry != entry {
+	if preference.RecoveryMethod != "vault" || preference.VaultEntryID == nil || *preference.VaultEntryID != entry {
 		t.Fatalf("preference=%#v", preference)
 	}
 }

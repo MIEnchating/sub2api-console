@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/MIEnchating/sub2api-console/backend/internal/animationquality"
+	"github.com/MIEnchating/sub2api-console/backend/internal/modelrequest"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -43,6 +44,7 @@ type AnimationRequest struct {
 
 type AnimationResult struct {
 	Quality              *animationquality.Prediction `json:"quality,omitempty"`
+	QualityAnnotation    *animationquality.Annotation `json:"quality_annotation,omitempty"`
 	ManualVerdict        *AnimationManualVerdict      `json:"manual_verdict,omitempty"`
 	Mode                 string                       `json:"mode,omitempty"`
 	Precheck             *PrecheckResult              `json:"precheck,omitempty"`
@@ -91,7 +93,15 @@ func (s *Service) prepareAnimation(ctx context.Context, request AnimationRequest
 		return request, nil, errors.New("动画提示词不能超过 10000 个字符或包含控制字符")
 	}
 	if request.TimeoutSeconds == 0 {
-		request.TimeoutSeconds = 120
+		mode := "animation"
+		if request.Mode == precheckMode {
+			mode = "precheck"
+		}
+		value, err := s.DetectionTimeout(mode)
+		if err != nil {
+			return request, nil, err
+		}
+		request.TimeoutSeconds = value.TimeoutSeconds
 	}
 	if request.TimeoutSeconds < 5 || request.TimeoutSeconds > 120 {
 		return request, nil, errors.New("动画检测超时必须在 5 到 120 秒之间")
@@ -409,13 +419,26 @@ func (s *Service) executeAnimation(parent context.Context, task taskstore.Task, 
 	taskstore.PersistFinal(s.tasks, task)
 }
 
-func (s *Service) runAnimationTarget(ctx context.Context, account selectedAccount, timeout int, custom *AnimationCustomEndpoint, questions []string, result *AnimationResult, onPhase ...func()) (time.Duration, error) {
+func (s *Service) runAnimationTarget(ctx context.Context, account selectedAccount, budget, idleTimeout time.Duration, custom *AnimationCustomEndpoint, questions []string, result *AnimationResult, onPhase ...func()) (time.Duration, error) {
 	releaseSlot, err := s.reserveAnimationSlot(ctx)
 	if err != nil {
 		return 0, errors.New("动画检测已取消或任务超时")
 	}
-	started := time.Now()
 	defer releaseSlot()
+	if custom == nil {
+		guarded, release, err := s.acquirePreparedAccounts(ctx, []selectedAccount{account})
+		if err != nil {
+			return 0, err
+		}
+		defer func() { _ = release() }()
+		ctx = guarded
+	}
+	started := time.Now()
+	ctx, cancel := modelrequest.Start(ctx, budget, true, idleTimeout)
+	defer cancel()
+	// The initial budget includes prior retry/backoff time; every stream event
+	// renews the configured idle interval. Queue waits precede this context.
+	timeout := int((budget + time.Second - 1) / time.Second)
 	result.Phase = "running"
 	for _, notify := range onPhase {
 		if notify != nil {
@@ -439,11 +462,8 @@ func (s *Service) runAnimationTarget(ctx context.Context, account selectedAccoun
 		err := runPrecheckTarget(guarded, client, credential, timeout, questions, result)
 		return time.Since(started), err
 	}
-	requestCtx, cancel, firstOutputTimedOut, markFirstOutput := firstOutputTimeout(guarded, timeout)
-	defer cancel()
 	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-	text, model, err := sendAnimation(requestCtx, client, credential, result.Model, result.Prompt, result.RequestID, result.Usage, func() {
-		markFirstOutput()
+	text, model, err := sendAnimation(guarded, client, credential, result.Model, result.Prompt, result.RequestID, result.Usage, func() {
 		result.Phase = "generating"
 		for _, notify := range onPhase {
 			if notify != nil {
@@ -451,9 +471,6 @@ func (s *Service) runAnimationTarget(ctx context.Context, account selectedAccoun
 			}
 		}
 	})
-	if firstOutputTimedOut() && err != nil {
-		err = context.DeadlineExceeded
-	}
 	if err != nil {
 		return time.Since(started), err
 	}

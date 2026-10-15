@@ -193,7 +193,7 @@ func TestMultipleModelsManualDeadlineCoversSequentialModels(t *testing.T) {
 	}
 	runner.runs[0](ctx)
 	credential.mu.Lock()
-	remaining := time.Until(credential.deadline)
+	remaining := time.Until(credential.taskDeadline)
 	credential.mu.Unlock()
 	if remaining < 95*time.Minute {
 		t.Fatalf("multi-model deadline too short: %s", remaining)

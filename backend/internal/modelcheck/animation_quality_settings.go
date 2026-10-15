@@ -28,7 +28,6 @@ type qualitySettingsState struct {
 	mu         sync.RWMutex
 	value      AnimationQualitySettings
 	repository qualitySettingsRepository
-	slots      chan struct{}
 }
 
 func validQualitySettings(v AnimationQualitySettings) bool {
@@ -38,8 +37,7 @@ func validQualitySettings(v AnimationQualitySettings) bool {
 		(!v.Enabled || (v.AccountID != "" && v.Model != ""))
 }
 func (s *Service) loadQualitySettings(ctx context.Context) error {
-	s.qualitySettings.value = AnimationQualitySettings{TimeoutSeconds: 60}
-	s.qualitySettings.slots = make(chan struct{}, 1)
+	s.qualitySettings.value = AnimationQualitySettings{TimeoutSeconds: 120}
 	repo, ok := s.accounts.(qualitySettingsRepository)
 	if !ok {
 		return nil

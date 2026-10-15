@@ -236,6 +236,9 @@ func (s *Service) executeDetectionTask(parent context.Context, task taskstore.Ta
 	models, _ := normalizeAnimationModels(value.Model, value.Models)
 	total := len(accounts) * len(stages) * len(models)
 	animations := previousResults[AnimationResult](task, "animations")
+	animations = slices.DeleteFunc(animations, func(result AnimationResult) bool {
+		return result.Phase == "reviewing"
+	})
 	total += historicalAnimationUnits(accounts, animations)
 	checks := previousResults[TerminalContinuityResult](task, "checks")
 	done := map[string]bool{}
@@ -284,7 +287,14 @@ func (s *Service) executeDetectionTask(parent context.Context, task taskstore.Ta
 						if modelIndex > 0 {
 							result.RequestID += fmt.Sprintf("-model-%d", modelIndex+1)
 						}
-						if err := s.runAnimationWithRetry(ctx, account, value.TimeoutSeconds, nil, questions, &result); err != nil {
+						result.CompletedAt = time.Now().UTC().Format(time.RFC3339Nano)
+						if err := s.runAnimationWithRetry(ctx, account, value.TimeoutSeconds, nil, questions, &result, func() {
+							if result.Phase != "reviewing" {
+								return
+							}
+							snapshot := cloneAnimationResult(result)
+							events <- stageEvent{animation: &snapshot}
+						}); err != nil {
 							if errors.Is(err, business.ErrUpstreamExcluded) {
 								events <- stageEvent{excludedID: account.ID}
 								continue
@@ -322,7 +332,19 @@ func (s *Service) executeDetectionTask(parent context.Context, task taskstore.Ta
 			request.Targets = slices.DeleteFunc(request.Targets, func(target AnimationTarget) bool { return target.AccountID == event.excludedID })
 		}
 		if event.animation != nil {
-			animations = append(animations, *event.animation)
+			key := animationResultKey(event.animation.AccountID, event.animation.Mode, event.animation.Model)
+			index := slices.IndexFunc(animations, func(result AnimationResult) bool {
+				return animationResultKey(result.AccountID, result.Mode, result.Model) == key
+			})
+			if index < 0 {
+				animations = append(animations, *event.animation)
+			} else {
+				animations[index] = *event.animation
+			}
+			if event.animation.Phase != "completed" {
+				publish(fmt.Sprintf("检测执行中：已完成 %d/%d 项检测", completed, total))
+				continue
+			}
 			if event.animation.Status == "succeeded" {
 				success++
 			}

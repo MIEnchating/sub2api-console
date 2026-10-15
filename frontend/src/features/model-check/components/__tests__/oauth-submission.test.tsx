@@ -64,7 +64,13 @@ it("选择 OAuth 账号和模型后按稳定 ID 提交检测且不要求前端�
 
   await waitFor(() => {
     expect(submitted).toEqual([
-      { account_ids: ["41"], models: ["gpt-6-astra"], rounds: 1, timeout_seconds: 45 },
+      {
+        account_ids: ["41"],
+        models: ["gpt-6-astra"],
+        fingerprint: true,
+        rounds: 1,
+        timeout_seconds: 45,
+      },
     ]);
   });
   expect(await screen.findByRole("dialog", { name: "模型检测结果" })).toBeVisible();

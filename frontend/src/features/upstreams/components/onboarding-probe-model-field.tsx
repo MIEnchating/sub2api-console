@@ -24,11 +24,11 @@ export function OnboardingProbeModelField(props: {
   const errorId = `${props.fieldId}-error`;
   const helpId = `${props.fieldId}-help`;
   return (
-    <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] gap-2 border-t pt-4">
+    <div className="flex min-w-0 flex-wrap items-center justify-between gap-2 border-t pt-3">
       <label htmlFor={props.fieldId} className="self-center text-sm font-medium">
         探活模型
       </label>
-      <div className="col-span-2 row-start-2 min-w-0">
+      <div className="order-1 w-full min-w-0">
         {manual ? (
           <Textarea
             id={props.fieldId}
@@ -64,11 +64,11 @@ export function OnboardingProbeModelField(props: {
       <div
         role="group"
         aria-label={`${props.identity} 探活模型填写方式`}
-        className="col-start-2 row-start-1 flex gap-2"
+        className="bg-muted/60 flex max-w-full flex-wrap gap-0.5 rounded-lg p-0.5"
       >
         <Button
           type="button"
-          variant={manual ? "outline" : "secondary"}
+          variant={manual ? "ghost" : "outline"}
           disabled={props.disabled}
           aria-pressed={!manual}
           onClick={() => setManual(false)}
@@ -77,7 +77,7 @@ export function OnboardingProbeModelField(props: {
         </Button>
         <Button
           type="button"
-          variant={manual ? "secondary" : "outline"}
+          variant={manual ? "outline" : "ghost"}
           disabled={props.disabled}
           aria-pressed={manual}
           onClick={() => setManual(true)}
@@ -85,14 +85,14 @@ export function OnboardingProbeModelField(props: {
           手动填写
         </Button>
       </div>
-      <p id={helpId} className="text-muted-foreground col-span-2 text-xs">
-        仅用于后续探活，可多选或每行填写一个模型；留空使用默认探活模型。
+      <p id={helpId} className="text-muted-foreground order-2 w-full text-xs">
+        仅用于后续探活；留空使用默认探活模型。
       </p>
       {!selected.length && props.inheritance ? (
-        <div className="col-span-2 min-w-0">{props.inheritance}</div>
+        <div className="order-3 w-full min-w-0">{props.inheritance}</div>
       ) : null}
       {props.error ? (
-        <p id={errorId} className="text-destructive col-span-2 text-xs">
+        <p id={errorId} className="text-destructive order-4 w-full text-xs">
           {props.error}
         </p>
       ) : null}

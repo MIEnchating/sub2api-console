@@ -1,6 +1,7 @@
 import { AnimationPromptSelector } from "@/features/model-check/components/animation-prompt-selector";
 import { animationPromptQueryKey } from "@/features/model-check/lib/animation-prompt-query";
 import { QueryErrorToast } from "@/components/query-error-toast";
+import { JsonEditor } from "@/components/json-editor";
 import { notifyOperationError } from "@/lib/operation-feedback";
 import { useOnboardingProbeTask, probeTaskResultSchema } from "../hooks/use-onboarding-probe-task";
 import { ProbeProgressSummary } from "./probe-task-timeline";
@@ -534,10 +535,25 @@ export function ProbeResultSlot(props: {
         {result ? (
           <>
             {props.compact ? null : <p className="mb-2 text-zinc-500">响应</p>}
-            <p className={`whitespace-pre-wrap ${passed ? "text-emerald-300" : "text-red-300"}`}>
-              {result.response_text || result.message}
-            </p>
-            {!passed && result.response_text ? (
+            {result.response_text ? (
+              <p className={`whitespace-pre-wrap ${passed ? "text-emerald-300" : "text-red-300"}`}>
+                {result.response_text}
+              </p>
+            ) : null}
+            {!result.response_text && result.response_json ? (
+              <JsonEditor
+                value={result.response_json}
+                readOnly
+                aria-label="上游响应原文"
+                className="h-48"
+              />
+            ) : null}
+            {!result.response_text && !result.response_json ? (
+              <p className={passed ? "text-emerald-300" : "text-red-300"}>
+                {passed ? "本次结果未保存响应原文" : result.message}
+              </p>
+            ) : null}
+            {!passed && (result.response_text || result.response_json) ? (
               <p className="mt-2 text-red-300">{result.message}</p>
             ) : null}
           </>

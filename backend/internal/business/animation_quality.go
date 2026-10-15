@@ -10,9 +10,11 @@ import (
 	"time"
 
 	"github.com/MIEnchating/sub2api-console/backend/internal/animationquality"
+	"github.com/MIEnchating/sub2api-console/backend/internal/dbconn"
 )
 
 var ErrQualityAnnotationConflict = errors.New("质量标注已被修改，请重新读取后保存")
+var ErrQualityConfirmationConflict = errors.New("评审结果已变化，请重新读取后确认")
 
 const qualitySamplePrefix = "animation-quality-sample/"
 
@@ -30,11 +32,20 @@ func (s *Store) AnimationQualitySample(ctx context.Context, id string) (*animati
 
 func (s *Store) SaveAnimationQualitySample(ctx context.Context, value animationquality.Sample, expectedVersion int) (animationquality.Sample, error) {
 	key := qualitySamplePrefix + value.ID
-	tx, err := s.beginResourceTx(ctx, []string{key})
+	resources := []string{key}
+	if value.Annotation.Source == "confirmed_auto" {
+		resources = append(resources, qualityRecheckPrefix+value.ID)
+	}
+	tx, err := s.beginResourceTx(ctx, resources)
 	if err != nil {
 		return value, err
 	}
 	defer tx.Rollback()
+	if value.Annotation.Source == "confirmed_auto" {
+		if err = validateQualityConfirmation(ctx, tx, value); err != nil {
+			return value, err
+		}
+	}
 	var previous string
 	err = tx.QueryRowContext(ctx, `SELECT value_json FROM app_state WHERE "key"=?`, key).Scan(&previous)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
@@ -79,6 +90,43 @@ func (s *Store) SaveAnimationQualitySample(ctx context.Context, value animationq
 		return value, err
 	}
 	return value, tx.Commit()
+}
+
+// The same resource lock is used by recheck completion/start, so a changed
+// review cannot be committed between confirmation validation and sample save.
+func validateQualityConfirmation(ctx context.Context, tx *dbconn.Tx, sample animationquality.Sample) error {
+	annotation := sample.Annotation
+	if annotation.ConfirmedPrediction == nil || annotation.PredictionSHA256 == "" {
+		return ErrQualityConfirmationConflict
+	}
+	sample.Prediction = *annotation.ConfirmedPrediction
+	if animationquality.ReviewFingerprint(sample) != annotation.PredictionSHA256 || annotation.Label != sample.Prediction.Status || annotation.Reason != sample.Prediction.Explanation {
+		return ErrQualityConfirmationConflict
+	}
+	var raw string
+	err := tx.QueryRowContext(ctx, `SELECT value_json FROM app_state WHERE "key"=?`, qualityRecheckPrefix+sample.ID).Scan(&raw)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+	var state animationquality.Recheck
+	if raw != "" {
+		if err = json.Unmarshal([]byte(raw), &state); err != nil {
+			return err
+		}
+		if state.SourceSHA256 != sample.SourceSHA256 || state.PromptSHA256 != sample.PromptSHA256 {
+			return ErrQualityConfirmationConflict
+		}
+	}
+	if state.Version != annotation.RecheckVersion {
+		return ErrQualityConfirmationConflict
+	}
+	if state.Prediction != nil {
+		sample.Prediction = *state.Prediction
+		if animationquality.ReviewFingerprint(sample) != annotation.PredictionSHA256 {
+			return ErrQualityConfirmationConflict
+		}
+	}
+	return nil
 }
 
 // Keyset pagination bounds memory and survives independent task cleanup.

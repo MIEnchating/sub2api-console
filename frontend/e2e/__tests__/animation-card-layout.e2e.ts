@@ -96,6 +96,8 @@ async function openAnimationCards(page: Page): Promise<{ schedules: AnimationSch
       "/api/accounts": accounts,
       "/api/model-checks/capabilities": { claude_standards: [], sol_models: [] },
       "/api/model-checks/account-statuses": [],
+      "/api/model-checks/timeouts/animation": { timeout_seconds: 120, version: 0 },
+      "/api/model-checks/timeouts/precheck": { timeout_seconds: 120, version: 0 },
       "/api/model-checks/animation-schedules": state.schedules,
       "/api/model-checks/animations": [{ ...task, result: {} }],
       "/api/tasks/combined-card": task,
@@ -139,7 +141,11 @@ test("动画与前置检测的模型参数在开始检测操作行且窄屏不�
     await expect(fields.getByRole("combobox", { name: "检测模型", exact: true })).toHaveText(
       "gpt-6-astra",
     );
-    await expect(fields.getByRole("spinbutton", { name: "请求超时（秒）" })).toBeVisible();
+    await expect(
+      fields.getByRole("spinbutton", {
+        name: tab === "账号检测" ? "动画超时（秒）" : "前置检测超时（秒）",
+      }),
+    ).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(
       true,
     );
@@ -271,7 +277,7 @@ test("成功卡片重测沿用原模型，启动与完成时卡片高度稳定�
   expect(requests).toEqual([
     {
       targets: [{ account_id: "1", model: "gpt-6-astra" }],
-      timeout_seconds: 120,
+      timeout_seconds: 0,
     },
   ]);
   expect((await card.boundingBox())!.height).toBe(before.height);

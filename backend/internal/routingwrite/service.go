@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/MIEnchating/sub2api-console/backend/internal/accountdelete"
 	"github.com/MIEnchating/sub2api-console/backend/internal/adminclient"
 	"github.com/MIEnchating/sub2api-console/backend/internal/business"
 	"github.com/MIEnchating/sub2api-console/backend/internal/configstore"
@@ -94,10 +95,11 @@ type Result struct {
 }
 
 type Service struct {
-	targets    TargetStore
-	repository Repository
-	admin      Admin
-	now        func() time.Time
+	accountDeletion *accountdelete.Service
+	targets         TargetStore
+	repository      Repository
+	admin           Admin
+	now             func() time.Time
 }
 
 type routingEventContextKey struct{}
@@ -280,6 +282,8 @@ func (s *Service) Apply(ctx context.Context, targets map[string]business.Account
 	}
 	orderedIDs := orderedTargetIDs(targets)
 	resources := routingMutationResources(orderedIDs, targets)
+	ctx, cleanupResources := s.prepareCleanupDeletion(ctx, targets)
+	resources = append(resources, cleanupResources...)
 	capacityPlan, capacityResources, err := prepareUpstreamCapacity(ctx, s.repository, targets, policy, policyDocument)
 	if err != nil {
 		return Result{}, err
@@ -1000,6 +1004,18 @@ func (s *Service) deleteCleanupAccount(
 	currentPayload map[string]any,
 ) AccountResult {
 	result := AccountResult{AccountID: target.AccountID}
+	var plan cleanupDeletePlan
+	if cleanupDeletesUpstreamKey(target) {
+		var planErr error
+		plan, planErr = s.cleanupDeletionPlan(ctx, target.AccountID)
+		if planErr != nil {
+			var change *writeAuthorizationChanged
+			if errors.As(planErr, &change) {
+				return s.skipAuthorizationChange(ctx, result, target, operationID, actor, change)
+			}
+			return failedResult(result, planErr)
+		}
+	}
 	var err error
 	if currentPayload == nil {
 		currentPayload, err = admin.Account(ctx, target.AccountID)
@@ -1033,6 +1049,9 @@ func (s *Service) deleteCleanupAccount(
 			s.recordRuntimeEvent(ctx, "cleanup_predisable_failed", "failed", "删除前摘除流量失败，仍将继续删除账号 "+target.AccountID, warning)
 		}
 		result.RemoteWrite = true
+	}
+	if plan.preview.Binding != nil {
+		return s.deleteBoundCleanupAccount(ctx, plan, target, actor, operationID, current.asMap(), payload, result)
 	}
 	if _, err := deleteAccount(ctx, admin, target.AccountID, true); err != nil {
 		if !result.RemoteWrite && mutationPrevented(err) {

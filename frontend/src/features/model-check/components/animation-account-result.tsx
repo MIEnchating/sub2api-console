@@ -1,6 +1,10 @@
 import { memo, type ReactElement } from "react";
 import type { AnimationResult, AnimationTarget } from "@/api";
-import { animationActivityLabel, type AnimationActivity } from "../lib/animation-task-results";
+import {
+  animationActivityLabel,
+  animationWaitingForGeneration,
+  type AnimationActivity,
+} from "../lib/animation-task-results";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -9,7 +13,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { AnimationPreview } from "./animation-preview";
 import { AnimationCardResult } from "./animation-card-result";
 import { AnimationResultDetails } from "./animation-result-details";
-import { AnimationManualVerdictControls } from "./animation-manual-verdict";
+import { AnimationCardQualityActions } from "./animation-card-quality-actions";
 
 const resultStatusLabels = { succeeded: "成功", failed: "失败" } as const;
 const compactTimeFormat = new Intl.DateTimeFormat("zh-CN", {
@@ -24,14 +28,14 @@ export const AnimationAccountResult = memo(function AnimationAccountResult(props
   result: AnimationResult;
   layout?: "card" | "fill" | "record";
   activity?: AnimationActivity;
-  showManualVerdict?: boolean;
+  showQualityActions?: boolean;
   showRequestID?: boolean;
   retryDisabled: boolean;
   onRetry: (target: AnimationTarget) => void;
 }): ReactElement {
   if (props.layout === "card") return <AnimationCardResult {...props} />;
   const result = props.result;
-  if (props.activity) {
+  if (props.activity && animationWaitingForGeneration(result, props.activity)) {
     const label = animationActivityLabel(props.activity.status);
     return (
       <div
@@ -125,9 +129,7 @@ export const AnimationAccountResult = memo(function AnimationAccountResult(props
         <span className="shrink-0">耗时 {(result.duration_ms / 1000).toFixed(1)} 秒</span>
         <AnimationResultDetails result={result} />
       </div>
-      {props.showManualVerdict !== false ? (
-        <AnimationManualVerdictControls result={result} disabled={props.retryDisabled} />
-      ) : null}
+      {props.showQualityActions !== false ? <AnimationCardQualityActions result={result} /> : null}
     </div>
   );
 });

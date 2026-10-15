@@ -31,6 +31,7 @@ function setup(
     auth_records: [],
     vault_entries: [
       {
+        id: "operator",
         entry: "operator",
         hosts: ["api.example.test"],
         has_username: true,

@@ -47,7 +47,8 @@ export const upstreamEditSchema = z.object({
   username: z.string(),
   password: z.string(),
   save_to_vault: z.boolean(),
-  entry: z.string(),
+  entry_id: z.string(),
+  entry_name: z.string().trim().max(255),
 });
 
 export type UpstreamEditValues = z.infer<typeof upstreamEditSchema>;

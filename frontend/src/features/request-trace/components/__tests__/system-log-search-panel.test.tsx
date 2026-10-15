@@ -1,137 +1,29 @@
-import { renderToStaticMarkup } from "react-dom/server";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { describe, expect, it } from "vitest";
+import { render, screen, cleanup } from "@testing-library/react";
+import { afterEach, expect, it } from "vitest";
+import { SystemLogSearchPanel } from "../system-log-search-panel";
 
-import { readableSystemLog, readableUsage, SystemLogSearchPanel } from "../system-log-search-panel";
+afterEach(cleanup);
 
-describe("SystemLogSearchPanel", () => {
-  it("shows only request_id as a searchable field", () => {
-    const queryClient = new QueryClient({
-      defaultOptions: { queries: { enabled: false, retry: false } },
-    });
-    const markup = renderToStaticMarkup(
-      <QueryClientProvider client={queryClient}>
-        <SystemLogSearchPanel />
-      </QueryClientProvider>,
-    );
-
-    expect(markup).toContain("request_id");
-    expect(markup).toContain("输入完整 request_id");
-    expect(markup).toContain('data-slot="table-filter-toolbar"');
-    expect(markup).toContain("flex min-w-0 items-center gap-3");
-    expect(markup).toContain("shrink-0 whitespace-nowrap");
-    expect(markup).toContain("min-w-0 flex-1");
-    expect(markup).toContain("min-w-0 basis-72 flex-1");
-    expect(markup).not.toContain("查询 Sub2API 系统日志");
-    expect(markup).not.toContain("快速定位对应的请求日志和执行结果");
-    for (const label of [
-      "时间范围",
-      "开始时间（可选）",
-      "结束时间（可选）",
-      "级别",
-      "Host",
-      "client_request_id",
-      "KEY ID",
-      "account_id",
-      "平台",
-      "模型",
-      "关键词",
-    ]) {
-      expect(markup).not.toContain(label);
-    }
-  });
-
-  it("fills the remaining area with a placeholder before the first search", () => {
-    const queryClient = new QueryClient({
-      defaultOptions: { queries: { enabled: false, retry: false } },
-    });
-    const markup = renderToStaticMarkup(
-      <QueryClientProvider client={queryClient}>
-        <SystemLogSearchPanel />
-      </QueryClientProvider>,
-    );
-
-    expect(markup).toContain('data-slot="request-trace-placeholder"');
-    expect(markup).toContain("min-h-0 flex-1");
-    expect(markup).toContain("items-center justify-center");
-    expect(markup).toContain("输入 request_id 开始查询");
-  });
-
-  it("turns the compact HTTP log message into readable request fields", () => {
-    const log = readableSystemLog({
-      id: 1,
-      request_id: "4031aae9-e191-4955-b38d-5eec098ef571",
-      account_id: null,
-      account_name: "星筱 AI-1",
-      group_name: null,
-      is_error: false,
-      error_reason: null,
-      first_token_ms: null,
-      duration_ms: null,
-      summary:
-        "http request completed status=200 latency_ms=20093 method=POST path=/v1/responses ip=172.18.0.7 proto=HTTP/1.1 req=4031aae9-e191-4955-b38d-5eec098ef571 client_req=15139114-18df-499e-81b2-6ccb7e515b11 acc=22 platform=openai model=gpt-5.6-sol",
-      observed_at: "2026-08-29T00:00:00Z",
-      source: "system-log",
-      payload: {},
-    });
-
-    expect(log).toMatchObject({
-      title: "HTTP 请求完成",
-      status: "200",
-      duration: "20093",
-      accountId: "22",
-      accountName: "星筱 AI-1",
-      account: "星筱 AI-1（ID：22）",
-      method: "POST",
-      path: "/v1/responses",
-      platform: "openai",
-      model: "gpt-5.6-sol",
-      clientRequestId: "15139114-18df-499e-81b2-6ccb7e515b11",
-    });
-  });
-
-  it("uses a concise title for account test failures", () => {
-    const log = readableSystemLog({
-      id: 2,
-      request_id: "",
-      account_id: "298",
-      account_name: "星筱 AI-2",
-      group_name: null,
-      is_error: true,
-      error_reason: "API returned 403",
-      first_token_ms: null,
-      duration_ms: null,
-      summary: "Account test error: API returned 403: user quota exceeded",
-      observed_at: "2026-08-29T14:22:14Z",
-      source: "system-log",
-      payload: {},
-    });
-
-    expect(log.title).toBe("账号测试失败");
-    expect(log.account).toBe("星筱 AI-2（ID：298）");
-  });
-
-  it("formats available token usage for request result details", () => {
-    expect(
-      readableUsage({
-        usage_available: true,
-        input_tokens: "1000",
-        output_tokens: "25",
-        cache_read_tokens: "500",
-        cache_write_tokens: "0",
-      }),
-    ).toEqual({ input: "1,000", output: "25", cacheRead: "500", cacheWrite: "0" });
-  });
-
-  it("does not render an empty usage section when usage is unavailable", () => {
-    expect(
-      readableUsage({
-        usage_available: false,
-        input_tokens: null,
-        output_tokens: null,
-        cache_read_tokens: null,
-        cache_write_tokens: null,
-      }),
-    ).toBeNull();
-  });
+it("首次进入时结果区边框与分页可见，筛选标签与控件横向排列", () => {
+  const client = new QueryClient({ defaultOptions: { queries: { enabled: false } } });
+  const view = render(
+    <QueryClientProvider client={client}>
+      <SystemLogSearchPanel />
+    </QueryClientProvider>,
+  );
+  expect(screen.getByRole("textbox", { name: "request_id" })).toBeVisible();
+  expect(screen.getByRole("combobox", { name: "时间范围" })).toBeVisible();
+  expect(screen.getByRole("combobox", { name: "级别" })).toBeVisible();
+  const placeholder = screen.getByText("设置筛选条件后点击查询").parentElement;
+  expect(placeholder).toHaveClass("min-h-0", "flex-1", "items-center", "justify-center");
+  expect(placeholder?.closest("[data-table-panel]")).not.toBeNull();
+  expect(screen.getByRole("navigation", { name: "表格分页" })).toBeVisible();
+  expect(screen.getByRole("button", { name: "转到下一页" })).toBeDisabled();
+  expect(screen.getByRole("textbox", { name: "request_id" }).parentElement).toHaveClass(
+    "flex",
+    "items-center",
+  );
+  view.unmount();
+  client.clear();
 });

@@ -43,7 +43,7 @@ func TestCaptchaSubmitRejectsAuthConfigurationChangedAfterPreparation(t *testing
 				Host: "api.example.test", BaseURL: server.URL, UpstreamType: "sub2api", AuthMode: "sub2api_user_token",
 				AccessToken: stringPointer("expired-token"), Headers: map[string]string{}, Cookies: map[string]string{},
 			}
-			credential := configstore.VaultEntry{Entry: "operator", Username: stringPointer("operator@example.test"), Password: stringPointer("secret")}
+			credential := configstore.VaultEntry{ID: "operator", Entry: "operator", Username: stringPointer("operator@example.test"), Password: stringPointer("secret")}
 			store := &captchaStore{entry: &credential}
 			if test.initialRecord {
 				initial := cloneAuthRecord(candidate)
@@ -77,7 +77,7 @@ func TestCaptchaSubmitAllowsManualCandidateWhenStoredConfigurationIsUnchanged(t 
 	manager := NewCaptchaManager(store, &captchaVerifier{}, &captchaCatalog{}, server.Client())
 	candidate := cloneAuthRecord(*store.record)
 	candidate.AuthMode = "sub2api_manual_login"
-	credential := configstore.VaultEntry{Entry: "operator", Username: stringPointer("operator@example.test"), Password: stringPointer("secret")}
+	credential := configstore.VaultEntry{ID: "operator", Entry: "operator", Username: stringPointer("operator@example.test"), Password: stringPointer("secret")}
 	challenge, err := manager.PrepareCredential(context.Background(), candidate, credential, false, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -110,7 +110,7 @@ func TestCaptchaSubmitRejectsVaultEntryChangedBeforeSavingVerifiedCredentials(t 
 		{
 			name: "new entry created by another operation",
 			change: func(store *captchaStore) {
-				store.entry = &configstore.VaultEntry{Entry: "operator", Username: stringPointer("another@example.test"), Password: stringPointer("another-password")}
+				store.entry = &configstore.VaultEntry{ID: "operator", Entry: "operator", Username: stringPointer("another@example.test"), Password: stringPointer("another-password")}
 			},
 		},
 	}
@@ -121,10 +121,13 @@ func TestCaptchaSubmitRejectsVaultEntryChangedBeforeSavingVerifiedCredentials(t 
 				Host: "api.example.test", BaseURL: server.URL, UpstreamType: "sub2api", AuthMode: "sub2api_user_token",
 				Headers: map[string]string{}, Cookies: map[string]string{},
 			}}
-			credential := configstore.VaultEntry{Entry: "operator", Username: stringPointer("operator@example.test"), Password: stringPointer("secret")}
+			credential := configstore.VaultEntry{ID: "operator", Entry: "operator", Username: stringPointer("operator@example.test"), Password: stringPointer("secret")}
 			if test.initialEntry {
 				entry := cloneVaultEntry(credential)
 				store.entry = &entry
+			}
+			if !test.initialEntry {
+				credential.ID = ""
 			}
 			manager := NewCaptchaManager(store, &captchaVerifier{}, &captchaCatalog{}, server.Client())
 			challenge, err := manager.PrepareCredential(context.Background(), *store.record, credential, true, nil)

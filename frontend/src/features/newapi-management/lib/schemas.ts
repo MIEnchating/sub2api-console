@@ -12,16 +12,16 @@ export type NewAPIPlatformValues = z.infer<typeof newAPIPlatformSchema>;
 export const newAPIChannelKeySchema = z
   .object({
     credential_source: z.enum(["vault", "custom"]),
-    vault_entry: z.string().trim().max(255),
+    vault_entry_id: z.string().trim().max(255),
     username: z.string().trim().max(320),
     password: z.string().max(65536),
     sub2api_group_id: z.string().trim().min(1, "请选择 Sub2API 分组").max(128),
   })
   .superRefine((value, context) => {
-    if (value.credential_source === "vault" && !value.vault_entry) {
+    if (value.credential_source === "vault" && !value.vault_entry_id) {
       context.addIssue({
         code: "custom",
-        path: ["vault_entry"],
+        path: ["vault_entry_id"],
         message: "请选择密码箱账号",
       });
     }

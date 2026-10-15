@@ -200,7 +200,7 @@ func TestSub2APILoginUsesEmailAndVerifiesReturnedToken(t *testing.T) {
 	record, err := client.Login(context.Background(), configstore.AuthRecord{
 		Host: "api.example", BaseURL: "https://api.example", UpstreamType: "sub2api", AuthMode: "sub2api_manual_login",
 		Headers: map[string]string{}, Cookies: map[string]string{},
-	}, configstore.VaultEntry{Entry: "selected", Username: &username, Password: &password, Headers: map[string]string{"X-Login": "1"}})
+	}, configstore.VaultEntry{ID: "selected", Entry: "selected", Username: &username, Password: &password, Headers: map[string]string{"X-Login": "1"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -226,7 +226,7 @@ func TestSub2APILoginRequiresExplicitConsentForLatestLoginAgreement(t *testing.T
 	_, err := client.Login(context.Background(), configstore.AuthRecord{
 		Host: "api.example", BaseURL: "https://api.example", UpstreamType: "sub2api", AuthMode: "sub2api_manual_login",
 		Headers: map[string]string{}, Cookies: map[string]string{},
-	}, configstore.VaultEntry{Entry: "selected", Username: &username, Password: &password, Headers: map[string]string{}})
+	}, configstore.VaultEntry{ID: "selected", Entry: "selected", Username: &username, Password: &password, Headers: map[string]string{}})
 
 	var interaction *InteractionError
 	if !errors.As(err, &interaction) || interaction.Code != "login_agreement_required" {
@@ -248,7 +248,7 @@ func TestSub2APILoginDoesNotRetryUnrelatedForbiddenResponseWithAgreementConsent(
 	_, err := client.LoginWithOptions(context.Background(), configstore.AuthRecord{
 		Host: "api.example", BaseURL: "https://api.example", UpstreamType: "sub2api", AuthMode: "sub2api_manual_login",
 		Headers: map[string]string{}, Cookies: map[string]string{},
-	}, configstore.VaultEntry{Entry: "selected", Username: &username, Password: &password, Headers: map[string]string{}}, LoginOptions{
+	}, configstore.VaultEntry{ID: "selected", Entry: "selected", Username: &username, Password: &password, Headers: map[string]string{}}, LoginOptions{
 		AcceptLoginAgreement: true,
 	})
 
@@ -277,7 +277,7 @@ func TestSub2APILoginRetriesWithLatestAgreementRevisionAfterExplicitConsent(t *t
 	record, err := client.LoginWithOptions(context.Background(), configstore.AuthRecord{
 		Host: "api.example", BaseURL: "https://api.example", UpstreamType: "sub2api", AuthMode: "sub2api_manual_login",
 		Headers: map[string]string{}, Cookies: map[string]string{},
-	}, configstore.VaultEntry{Entry: "selected", Username: &username, Password: &password, Headers: map[string]string{}}, LoginOptions{
+	}, configstore.VaultEntry{ID: "selected", Entry: "selected", Username: &username, Password: &password, Headers: map[string]string{}}, LoginOptions{
 		AcceptLoginAgreement: true,
 	})
 
@@ -322,7 +322,7 @@ func TestSub2APILoginAcceptsRequiredAdminComplianceBeforeRetryingVerification(t 
 	_, err := client.Login(context.Background(), configstore.AuthRecord{
 		Host: "api.example", BaseURL: "https://api.example", UpstreamType: "sub2api", AuthMode: "sub2api_manual_login",
 		Headers: map[string]string{}, Cookies: map[string]string{},
-	}, configstore.VaultEntry{Entry: "selected", Username: &username, Password: &password, Headers: map[string]string{}})
+	}, configstore.VaultEntry{ID: "selected", Entry: "selected", Username: &username, Password: &password, Headers: map[string]string{}})
 
 	if err != nil {
 		t.Fatal(err)
@@ -383,7 +383,7 @@ func TestSub2APILoginDoesNotAcceptComplianceForUnrelatedForbiddenResponse(t *tes
 	_, err := client.Login(context.Background(), configstore.AuthRecord{
 		Host: "api.example", BaseURL: "https://api.example", UpstreamType: "sub2api", AuthMode: "sub2api_manual_login",
 		Headers: map[string]string{}, Cookies: map[string]string{},
-	}, configstore.VaultEntry{Entry: "selected", Username: &username, Password: &password, Headers: map[string]string{}})
+	}, configstore.VaultEntry{ID: "selected", Entry: "selected", Username: &username, Password: &password, Headers: map[string]string{}})
 
 	if err == nil || !strings.Contains(err.Error(), "ACCOUNT_DISABLED") {
 		t.Fatalf("unexpected error: %v", err)
@@ -406,7 +406,7 @@ func TestNewAPILegacyLoginUsesSessionCookieAndUserIDWithoutTokens(t *testing.T) 
 	record, err := client.Login(context.Background(), configstore.AuthRecord{
 		Host: "api.example", BaseURL: "https://api.example", UpstreamType: "newapi", AuthMode: "newapi_manual_login",
 		RefreshToken: &staleRefresh, Headers: map[string]string{}, Cookies: map[string]string{},
-	}, configstore.VaultEntry{Entry: "selected", Username: &username, Password: &password, Headers: map[string]string{}})
+	}, configstore.VaultEntry{ID: "selected", Entry: "selected", Username: &username, Password: &password, Headers: map[string]string{}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -435,7 +435,7 @@ func TestNewAPICurrentLoginExtractsNestedUserIDAndRefreshCookie(t *testing.T) {
 	record, err := client.Login(context.Background(), configstore.AuthRecord{
 		Host: "api.example", BaseURL: "https://api.example", UpstreamType: "newapi", AuthMode: "newapi_manual_login",
 		Headers: map[string]string{}, Cookies: map[string]string{},
-	}, configstore.VaultEntry{Entry: "selected", Username: &username, Password: &password, Headers: map[string]string{}})
+	}, configstore.VaultEntry{ID: "selected", Entry: "selected", Username: &username, Password: &password, Headers: map[string]string{}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -464,7 +464,7 @@ func TestSub2APILoginClassifiesCaptchaFromHTTP200BusinessFailure(t *testing.T) {
 	_, err := client.Login(context.Background(), configstore.AuthRecord{
 		Host: "api.example", BaseURL: "https://api.example", UpstreamType: "sub2api", AuthMode: "sub2api_manual_login",
 		Headers: map[string]string{}, Cookies: map[string]string{},
-	}, configstore.VaultEntry{Entry: "selected", Username: &username, Password: &password, Headers: map[string]string{}})
+	}, configstore.VaultEntry{ID: "selected", Entry: "selected", Username: &username, Password: &password, Headers: map[string]string{}})
 	var interaction *InteractionError
 	if !errors.As(err, &interaction) || interaction.Code != "image_captcha_required" {
 		t.Fatalf("captcha response was not classified: %v", err)
@@ -481,7 +481,7 @@ func TestSub2APILoginClassifiesCredentialBrowserFlowAsImageCaptcha(t *testing.T)
 	_, err := client.Login(context.Background(), configstore.AuthRecord{
 		Host: "www.example.test", BaseURL: "https://www.example.test", UpstreamType: "sub2api", AuthMode: "sub2api_user_login",
 		Headers: map[string]string{}, Cookies: map[string]string{},
-	}, configstore.VaultEntry{Entry: "selected", Username: &username, Password: &password, Headers: map[string]string{}})
+	}, configstore.VaultEntry{ID: "selected", Entry: "selected", Username: &username, Password: &password, Headers: map[string]string{}})
 	var interaction *InteractionError
 	if !errors.As(err, &interaction) || interaction.Code != "image_captcha_required" {
 		t.Fatalf("credential browser flow was not routed to image captcha: %v", err)

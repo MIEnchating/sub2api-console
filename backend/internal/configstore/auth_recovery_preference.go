@@ -12,7 +12,7 @@ type AuthRecoveryPreference struct {
 	Host           string
 	AuthMode       string
 	RecoveryMethod string
-	VaultEntry     *string
+	VaultEntryID   *string
 	SucceededAt    string
 }
 
@@ -23,7 +23,7 @@ func (s *Store) AuthRecoveryPreference(ctx context.Context, host string) (*AuthR
 	}
 	var result AuthRecoveryPreference
 	var vaultEntry sql.NullString
-	err := s.db.QueryRowContext(ctx, `SELECT host,auth_mode,recovery_method,vault_entry,succeeded_at
+	err := s.db.QueryRowContext(ctx, `SELECT host,auth_mode,recovery_method,vault_entry_id,succeeded_at
 		FROM auth_recovery_preferences WHERE host=?`, host).Scan(
 		&result.Host, &result.AuthMode, &result.RecoveryMethod, &vaultEntry, &result.SucceededAt,
 	)
@@ -33,7 +33,7 @@ func (s *Store) AuthRecoveryPreference(ctx context.Context, host string) (*AuthR
 	if err != nil {
 		return nil, err
 	}
-	result.VaultEntry = nullableText(vaultEntry)
+	result.VaultEntryID = nullableText(vaultEntry)
 	return &result, nil
 }
 
@@ -44,12 +44,12 @@ func (s *Store) SaveAuthRecoveryPreference(ctx context.Context, value AuthRecove
 	if value.Host == "" || value.AuthMode == "" || value.RecoveryMethod == "" {
 		return errors.New("鉴权恢复偏好缺少 Host、鉴权方式或恢复来源")
 	}
-	if value.VaultEntry != nil {
-		entry := strings.TrimSpace(*value.VaultEntry)
+	if value.VaultEntryID != nil {
+		entry := strings.TrimSpace(*value.VaultEntryID)
 		if entry == "" || textLength(entry) > 255 {
 			return errors.New("鉴权恢复偏好的密码箱项无效")
 		}
-		value.VaultEntry = &entry
+		value.VaultEntryID = &entry
 	}
 	if value.SucceededAt == "" {
 		value.SucceededAt = time.Now().UTC().Format(time.RFC3339Nano)
@@ -62,17 +62,17 @@ func (s *Store) SaveAuthRecoveryPreference(ctx context.Context, value AuthRecove
 	}
 	defer tx.Rollback()
 	_, err = tx.ExecContext(ctx, s.dialect(`INSERT INTO auth_recovery_preferences(
-		host,auth_mode,recovery_method,vault_entry,succeeded_at
+		host,auth_mode,recovery_method,vault_entry_id,succeeded_at
 	) VALUES(?,?,?,?,?) ON CONFLICT(host) DO UPDATE SET
 		auth_mode=excluded.auth_mode,recovery_method=excluded.recovery_method,
-		vault_entry=COALESCE(excluded.vault_entry,auth_recovery_preferences.vault_entry),
+		vault_entry_id=COALESCE(excluded.vault_entry_id,auth_recovery_preferences.vault_entry_id),
 		succeeded_at=excluded.succeeded_at`, `INSERT INTO auth_recovery_preferences(
-		host,auth_mode,recovery_method,vault_entry,succeeded_at
+		host,auth_mode,recovery_method,vault_entry_id,succeeded_at
 	) VALUES(?,?,?,?,?) ON DUPLICATE KEY UPDATE
 		auth_mode=VALUES(auth_mode),recovery_method=VALUES(recovery_method),
-		vault_entry=COALESCE(VALUES(vault_entry),auth_recovery_preferences.vault_entry),
+		vault_entry_id=COALESCE(VALUES(vault_entry_id),auth_recovery_preferences.vault_entry_id),
 		succeeded_at=VALUES(succeeded_at)`), value.Host, value.AuthMode, value.RecoveryMethod,
-		value.VaultEntry, value.SucceededAt)
+		value.VaultEntryID, value.SucceededAt)
 	if err != nil {
 		return err
 	}

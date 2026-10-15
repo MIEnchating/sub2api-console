@@ -55,6 +55,7 @@ export type PlatformProbeResult = {
   actualModel: string;
   statusCode: number | null;
   failureReason: string;
+  responseText?: string;
   durationMS: number | null;
 };
 
@@ -108,6 +109,7 @@ export function platformProbeResults(
         actualModel: optionalString(row.actual_model),
         statusCode: typeof row.status_code === "number" ? row.status_code : null,
         failureReason: optionalString(row.failure_reason),
+        responseText: optionalString(row.response_text),
         durationMS: typeof row.duration_ms === "number" ? row.duration_ms : null,
       },
     ];
@@ -188,6 +190,7 @@ export function PlatformProbeResultTable(props: { results: PlatformProbeResult[]
             <TableHead className="w-20">HTTP</TableHead>
             <TableHead className="w-24">耗时</TableHead>
             <TableHead>失败原因</TableHead>
+            <TableHead>响应内容</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -205,11 +208,14 @@ export function PlatformProbeResultTable(props: { results: PlatformProbeResult[]
               <TableCell>{result.statusCode ?? "-"}</TableCell>
               <TableCell>{formatProbeDuration(result.durationMS) ?? "-"}</TableCell>
               <TableCell>{result.failureReason || "-"}</TableCell>
+              <TableCell className="min-w-48 max-w-lg whitespace-pre-wrap break-words [overflow-wrap:anywhere]">
+                {result.responseText || "本次结果未保存响应原文"}
+              </TableCell>
             </TableRow>
           ))}
           {visibleResults.length === 0 ? (
             <TableRow>
-              <TableCell colSpan={7} className="h-20 text-center text-muted-foreground">
+              <TableCell colSpan={8} className="h-20 text-center text-muted-foreground">
                 当前分类暂无结果
               </TableCell>
             </TableRow>

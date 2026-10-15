@@ -1,12 +1,11 @@
 package modelcheck
 
 import (
-	"bytes"
 	"context"
 	"crypto/tls"
-	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/MIEnchating/sub2api-console/backend/internal/modelrequest"
 	"io"
 	"net"
 	"net/http"
@@ -122,7 +121,7 @@ func (s *Service) CheckOAuthWithProxy(ctx context.Context, accountID, accountNam
 		defer direct.CloseIdleConnections()
 	}
 	sender := oauthBundleSender{
-		stream: model == astraModel,
+		stream: true,
 		client: &http.Client{Transport: transport, Timeout: time.Duration(timeoutSeconds) * time.Second,
 			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }},
 		credential: credential, models: append(append([]string(nil), profile.Models...), astraModel), slots: make(chan struct{}, 2),
@@ -205,46 +204,22 @@ func (sender oauthBundleSender) SendWithReasoning(ctx context.Context, _ string,
 	case <-ctx.Done():
 		return "", "", ctx.Err()
 	}
-	requestContext, cancel := context.WithTimeout(ctx, time.Duration(timeoutSeconds)*time.Second)
-	firstOutputTimedOut := func() bool { return false }
-	if sender.animationStream {
-		cancel()
-		var markFirstOutput func()
-		requestContext, cancel, firstOutputTimedOut, markFirstOutput = firstOutputTimeout(ctx, timeoutSeconds)
-		progress := sender.onFirstOutput
-		sender.onFirstOutput = func() {
-			markFirstOutput()
-			if progress != nil {
-				progress()
-			}
-		}
-	}
+	stream := sender.stream || sender.animationStream
+	requestContext, cancel := modelrequest.Start(ctx, time.Duration(timeoutSeconds)*time.Second, stream)
 	defer cancel()
-	body, err := json.Marshal(map[string]any{
-		"model": model, "input": []map[string]string{{"role": "user", "content": prompt}},
-		"instructions": oauthCheckInstructions, "reasoning": map[string]string{"effort": effort},
-		"stream": true, "store": false,
-	})
-	if err != nil {
-		return "", "", visibleRequestError{message: "OAuth 检测请求编码失败"}
-	}
-	request, err := http.NewRequestWithContext(requestContext, http.MethodPost, oauthResponsesEndpoint, bytes.NewReader(body))
-	if err != nil {
-		return "", "", visibleRequestError{message: "OAuth 检测请求创建失败"}
-	}
-	request.Header.Set("Authorization", "Bearer "+sender.credential.accessToken)
-	request.Header.Set("Content-Type", "application/json")
-	request.Header.Set("Accept", "text/event-stream")
-	request.Header.Set("OpenAI-Beta", "responses=experimental")
-	request.Header.Set("Originator", "codex_cli_rs")
+	store := false
+	headers := http.Header{"Openai-Beta": []string{"responses=experimental"}, "Originator": []string{"codex_cli_rs"}, "User-Agent": []string{sender.credential.userAgent}}
 	if sender.requestID != "" {
-		request.Header.Set("X-Request-ID", sender.requestID)
+		headers.Set("X-Request-ID", sender.requestID)
 	}
-	request.Header.Set("User-Agent", sender.credential.userAgent)
 	if sender.credential.workspaceID != "" {
-		request.Header.Set("ChatGPT-Account-Id", sender.credential.workspaceID)
+		headers.Set("ChatGPT-Account-Id", sender.credential.workspaceID)
 	}
-	response, err := sender.client.Do(request)
+	response, err := modelrequest.Open(requestContext, sender.client, modelrequest.Request{
+		Endpoint: oauthResponsesEndpoint, Secret: sender.credential.accessToken, Protocol: modelrequest.Responses, Headers: headers,
+		Parameters: modelrequest.Parameters{Model: model, Prompt: prompt, Stream: stream, InputMessages: true, Instructions: oauthCheckInstructions, ReasoningEffort: effort, Store: &store},
+		Timeout:    time.Duration(timeoutSeconds) * time.Second,
+	})
 	if err != nil {
 		if sender.animationStream {
 			return "", "", animationVisibleError(animationRetryableReadError(animationReadError(err)), sender.credential.secrets...)
@@ -268,9 +243,6 @@ func (sender oauthBundleSender) SendWithReasoning(ctx context.Context, _ string,
 		return "", "", visibleRequestError{message: fmt.Sprintf("OAuth 检测请求失败（HTTP %d），请检查账号授权或稍后重试", response.StatusCode)}
 	}
 	payload, err := sender.readResponse(response.Body)
-	if firstOutputTimedOut() && err != nil {
-		err = context.DeadlineExceeded
-	}
 	if err != nil {
 		if sender.animationStream {
 			err = animationRetryableReadError(err)
@@ -300,10 +272,10 @@ func (sender oauthBundleSender) SendWithReasoning(ctx context.Context, _ string,
 }
 
 func (sender oauthBundleSender) readResponse(body io.Reader) (map[string]any, error) {
-	if sender.stream || sender.animationStream {
+	if sender.animationStream {
 		return readOAuthResponse(body, true, sender.onFirstOutput)
 	}
-	raw, err := io.ReadAll(io.LimitReader(body, maximumDirectResponseBytes+1))
+	raw, err := modelrequest.ReadBody(body, sender.stream, maximumDirectResponseBytes)
 	if err != nil {
 		return nil, visibleRequestError{message: safeTransportError(err).Error()}
 	}

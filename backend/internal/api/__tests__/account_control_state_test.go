@@ -47,10 +47,10 @@ func TestAccountControlStateOmitsDetailsAndDoesNotRequireEvidenceHistory(t *test
 	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
 		t.Fatal(err)
 	}
-	if len(body) != 8 || body["id"] != "41" || body["name"] != "health-snapshot" || body["schedulable"] != true {
+	if len(body) != 9 || body["id"] != "41" || body["name"] != "health-snapshot" || body["schedulable"] != true || body["upstream_excluded"] != false {
 		t.Fatalf("unexpected state projection: %#v", body)
 	}
-	for _, key := range []string{"id", "name", "health", "health_status", "routing_state", "paused", "schedulable", "manual_priority"} {
+	for _, key := range []string{"id", "name", "health", "health_status", "routing_state", "paused", "schedulable", "manual_priority", "upstream_excluded"} {
 		if _, ok := body[key]; !ok {
 			t.Fatalf("missing state field: %s", key)
 		}

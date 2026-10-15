@@ -63,7 +63,7 @@ it.each(["normal", "suspicious", "unknown"] as const)(
   (status) => {
     render(<AnimationQualityBadge prediction={{ ...review.prediction, status }} />);
     expect(screen.getByLabelText(/^自动质量：/)).toHaveTextContent(
-      { normal: "正常特征", suspicious: "疑似低质量", unknown: "无法判定" }[status],
+      { normal: "正常", suspicious: "降智", unknown: "无法判定" }[status],
     );
   },
 );
@@ -93,10 +93,42 @@ it.each([
   expect(screen.queryByRole("button", { name: "保存质量标注" })).not.toBeInTheDocument();
   expect(fetch).not.toHaveBeenCalled();
 });
-it("批次未结束时保留等待说明并禁止标注", () => {
-  setup({ ...result, source_task_status: "running" });
-  expect(screen.getByText(/本批检测完成后/)).toBeVisible();
-  expect(screen.queryByRole("radio")).not.toBeInTheDocument();
+it("批次仍在运行时已完成的单项可以立即保存质量标注", async () => {
+  const writes: unknown[] = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (_url: string, init?: RequestInit) => {
+      if (init?.method === "PUT") {
+        const body = JSON.parse(String(init.body));
+        writes.push(body);
+        return Response.json({
+          ...review,
+          annotation: {
+            ...body,
+            updated_by: "operator",
+            updated_at: result.completed_at,
+            version: 1,
+          },
+        });
+      }
+      return Response.json(review);
+    }),
+  );
+  setup({ ...result, phase: "completed", source_task_status: "running" });
+  const user = userEvent.setup();
+  await user.click(await screen.findByRole("button", { name: "人工纠正" }));
+  await user.click(screen.getByRole("radio", { name: "正常" }));
+  await user.type(screen.getByLabelText("判断理由（必填）"), "主体和踩踏正常");
+  await user.click(screen.getByRole("button", { name: "保存质量标注" }));
+  await waitFor(() => expect(writes).toHaveLength(1));
+  expect(writes[0]).toMatchObject({ request_id: "request-1", account_id: "41", label: "normal" });
+});
+it("单项仍在评审时显示质量加载状态且不读取标注", () => {
+  const fetch = vi.fn();
+  vi.stubGlobal("fetch", fetch);
+  setup({ ...result, phase: "reviewing", source_task_status: "running" });
+  expect(screen.getByRole("status", { name: "质量标注中" })).toHaveAttribute("aria-busy", "true");
+  expect(fetch).not.toHaveBeenCalled();
 });
 it("读取期间显示局部加载，失败后提供重试，成功显示模型未配置", async () => {
   const user = userEvent.setup();
@@ -147,14 +179,14 @@ it("必填理由通过后按任务和请求保存人工标签，独立于自动�
   expect(await screen.findByText("请填写可复核的判断理由")).toBeVisible();
   expect(screen.getByLabelText("判断理由（必填）")).toHaveAttribute("aria-invalid", "true");
   expect(bodies).toEqual([]);
-  const normal = screen.getByRole("radio", { name: "正常特征" });
+  const normal = screen.getByRole("radio", { name: "正常" });
   normal.focus();
   await user.keyboard(" ");
   expect(normal).toBeChecked();
   await user.type(screen.getByLabelText("判断理由（必填）"), "车轮转动连续，结构完整");
   await user.type(screen.getByLabelText("样本分组（可选）"), "模板甲");
   await user.click(screen.getByRole("button", { name: "保存质量标注" }));
-  expect(await screen.findByText(/已标注：正常特征/)).toBeVisible();
+  expect(await screen.findByText(/已标注：正常/)).toBeVisible();
   expect(bodies).toEqual([
     {
       account_id: "41",
@@ -219,7 +251,7 @@ it("打开质量页签才读取标注，键盘切换后可返回动画预览", a
   await user.click(screen.getByRole("tab", { name: /^动画$/ }));
   expect(screen.queryByRole("button", { name: "保存质量标注" })).not.toBeInTheDocument();
 });
-it("自动评审有理由时优先展示结果，人工纠正和样本管理默认收起", async () => {
+it("自动评审有理由时优先展示结果，人工纠正默认收起且单项不提供全局导出", async () => {
   const user = userEvent.setup();
   vi.stubGlobal(
     "fetch",
@@ -248,6 +280,6 @@ it("自动评审有理由时优先展示结果，人工纠正和样本管理默�
   await user.click(screen.getByRole("button", { name: "人工纠正" }));
   expect(screen.getByRole("radio", { name: "无法判定" })).toBeChecked();
   expect(screen.getByLabelText("判断理由（必填）")).toHaveValue("");
-  await user.click(screen.getByRole("button", { name: "样本管理" }));
-  expect(screen.getByRole("button", { name: "导出标注样本" })).toBeVisible();
+  expect(screen.queryByRole("button", { name: "样本管理" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "导出全部样本" })).not.toBeInTheDocument();
 });

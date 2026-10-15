@@ -1,0 +1,71 @@
+import type { ReactElement } from "react";
+import { VerificationStateBadge } from "./verification-state";
+import {
+  verificationCapabilityLabels,
+  verificationIdentityLabels,
+  verificationReferenceLabels,
+  verificationFingerprintLabels,
+  verificationIdentityLegacyExplanation,
+} from "../constants";
+import {
+  verificationRecord as record,
+  verificationText as text,
+  type VerificationRecord,
+} from "../lib/verification-progress";
+
+export function VerificationCapabilityStatus(props: { status: string }): ReactElement {
+  return (
+    <VerificationStateBadge
+      status={props.status}
+      label={
+        verificationCapabilityLabels[props.status] ?? verificationCapabilityLabels.inconclusive
+      }
+    />
+  );
+}
+
+export function VerificationIdentityStatus(props: { result: VerificationRecord }): ReactElement {
+  const reference = record(props.result.reference);
+  const status = text(reference.status) || text(record(props.result.authenticity).status);
+  const fingerprint = record(props.result.fingerprint);
+  const hidden =
+    status === "not_run" || status === "incomplete" || status === "insufficient_evidence";
+  const label =
+    verificationReferenceLabels[status] ?? verificationIdentityLabels[status] ?? "接口信息未记录";
+  return (
+    <>
+      {!hidden ? <VerificationStateBadge status={status} label={label} /> : null}
+      {fingerprint.status ? (
+        <VerificationStateBadge
+          status={text(fingerprint.status)}
+          label={verificationFingerprintLabels[text(fingerprint.status)] ?? "指纹待判定"}
+        />
+      ) : null}
+    </>
+  );
+}
+
+export function VerificationIdentitySummary(props: { result: VerificationRecord }): ReactElement {
+  const authenticity = record(props.result.authenticity);
+  const known = Object.hasOwn(verificationIdentityLabels, text(authenticity.status));
+  return (
+    <p className="text-muted-foreground text-xs leading-relaxed wrap-anywhere">
+      {identitySummary(props.result, known)}
+    </p>
+  );
+}
+
+function identitySummary(result: VerificationRecord, known: boolean): string {
+  const reference = record(result.reference);
+  if (["matched", "mismatch", "not_applicable"].includes(text(reference.status)))
+    return text(reference.summary);
+  if (
+    reference.status === "not_run" ||
+    reference.status === "incomplete" ||
+    record(result.authenticity).status === "insufficient_evidence"
+  )
+    return "";
+  if (known && text(record(result.authenticity).summary))
+    return text(record(result.authenticity).summary);
+  return verificationIdentityLegacyExplanation;
+}

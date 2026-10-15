@@ -98,7 +98,7 @@ it("没有账号时可确认自定义接口并创建任务，提交成功后清�
   expect(calls).toEqual([
     {
       targets: [],
-      timeout_seconds: 120,
+      timeout_seconds: 0,
       custom: {
         base_url: "https://custom.example.invalid/v1",
         api_key: secret,
@@ -200,7 +200,7 @@ it("自定义前置检测只提交糖果题、展示结果并清除 Key", async 
       mode: "precheck",
       targets: [],
       precheck_questions: ["candy"],
-      timeout_seconds: 120,
+      timeout_seconds: 0,
       custom: {
         base_url: "https://custom.example.invalid/v1",
         api_key: secret,
@@ -289,7 +289,8 @@ it("自定义历史读取失败时提供重试入口，恢复后展示空列表"
   let failed = true;
   vi.stubGlobal(
     "fetch",
-    vi.fn(async () => {
+    vi.fn(async (url: string) => {
+      if (url.includes("/timeouts/")) return Response.json({ timeout_seconds: 120, version: 0 });
       if (failed) return Response.json({ detail: "历史服务暂不可用" }, { status: 503 });
       return Response.json([]);
     }),

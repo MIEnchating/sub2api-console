@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { expect, it } from "vitest";
 import { VerificationResult } from "../verification-result";
 
-it("能力通过但身份未证实时分别展示结论且可打开原始证据", async () => {
+it("能力通过但接口信息未记录时分别展示结论且可打开原始证据", async () => {
   render(
     <VerificationResult
       result={{
@@ -29,14 +29,19 @@ it("能力通过但身份未证实时分别展示结论且可打开原始证据"
       }}
     />,
   );
-  expect(screen.getByText("身份未证实")).toBeVisible();
+  expect(screen.getByText("接口信息未记录")).toBeVisible();
+  expect(screen.getByText("接口信息未记录").closest('[data-slot="badge"]')).toHaveAttribute(
+    "data-variant",
+    "neutral",
+  );
   expect(screen.getByText("能力通过")).toBeVisible();
   expect(screen.queryByText(/100%/)).not.toBeInTheDocument();
   await userEvent.click(screen.getByRole("button", { name: "查看检测证据" }));
   const dialog = screen.getByRole("dialog", { name: "检测证据" });
   expect(within(dialog).getByText("**21**")).toBeVisible();
-  expect(within(dialog).getByText("型号字段不是身份证明")).toBeVisible();
   expect(within(dialog).getByText(/输入 — \/ 输出 — Token/)).toBeVisible();
+  await userEvent.click(within(dialog).getByRole("button", { name: "来源与指纹" }));
+  expect(within(dialog).getByText("型号字段不是身份证明")).toBeVisible();
   await userEvent.keyboard("{Escape}");
   expect(screen.queryByRole("dialog", { name: "检测证据" })).not.toBeInTheDocument();
 });
@@ -56,4 +61,15 @@ it("请求限流时展示能力待判定而不是能力失败", () => {
   );
   expect(screen.getByText("能力待判定")).toBeVisible();
   expect(screen.queryByText("能力未通过")).not.toBeInTheDocument();
+});
+
+it("没有逐项记录时保留证据切换和关闭入口", async () => {
+  render(<VerificationResult result={{ probes: [], evidence: [] }} />);
+  await userEvent.click(screen.getByRole("button", { name: "查看检测证据" }));
+  const dialog = screen.getByRole("dialog", { name: "检测证据" });
+  expect(within(dialog).getByText("没有逐项记录")).toBeVisible();
+  await userEvent.click(within(dialog).getByRole("button", { name: "来源与指纹" }));
+  expect(within(dialog).getByText(/能力、请求来源与指纹稳定性分别展示/)).toBeVisible();
+  await userEvent.click(within(dialog).getByRole("button", { name: "关闭" }));
+  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
 });

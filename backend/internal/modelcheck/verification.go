@@ -13,8 +13,8 @@ import (
 
 func runVerification(ctx context.Context, directClient, oauthClient *http.Client, credential credentialResolution, input targetRequest) (map[string]any, error) {
 	report := VerificationReport{Version: verificationVersion, Evidence: []VerificationEvidence{}, Probes: []VerificationProbe{}}
-	report.Total = input.Rounds * 7
-	report.Authenticity = VerificationDimension{Status: "unverified", Summary: "第三方接口的身份尚未证实；返回型号和协议字段不能证明实际模型。"}
+	report.Total = verificationProbeCount(input.Rounds, input.Fingerprint)
+	report.Authenticity = VerificationDimension{Status: "inconclusive", Summary: "检测进行中，等待有效响应与来源证据。"}
 	source := "third_party"
 	if credential.oauth != nil {
 		source = "official_oauth"
@@ -22,20 +22,17 @@ func runVerification(ctx context.Context, directClient, oauthClient *http.Client
 		source = "official_endpoint"
 	}
 	report.Evidence = append(report.Evidence, VerificationEvidence{ID: "source", Label: "请求来源", Status: "info", Detail: map[string]string{"third_party": "第三方接口；请求路径由账号配置决定。", "official_endpoint": "官方 API 地址；使用 HTTPS 且禁止重定向。", "official_oauth": "固定官方 OAuth 端点；未经过生产中转路径。"}[source]})
-	if source != "third_party" {
-		report.Authenticity.Summary = "请求发送到官方端点；该证据只覆盖本次检测路径，不代表生产路由，也不证明具体权重版本。"
-	}
-	successful := 0
+	successful, capabilitySuccessful := 0, 0
+	report.CapabilityTotal = input.Rounds * 7
 	models := []string{}
 	started := time.Now()
+	for round, challenges := range input.Challenges {
+		for _, challenge := range verificationPlannedRound(challenges, round+1, input) {
+			report.ProbePlan = append(report.ProbePlan, VerificationProbe{ID: challenge.id, Label: challenge.label, Round: round + 1, Prompt: challenge.prompt, Expected: challenge.expected, Status: "pending", Category: verificationCategory(challenge)})
+		}
+	}
 	for round := 1; round <= input.Rounds; round++ {
-		challenges := slices.Clone(input.Challenges[round-1])
-		// Repeat one identical question to reveal unstable results without treating
-		// sampling variation as proof of a substituted model.
-		repeated := challenges[0]
-		repeated.id = "consistency"
-		repeated.label = "重复请求一致性"
-		challenges = append(challenges, repeated)
+		challenges := verificationPlannedRound(input.Challenges[round-1], round, input)
 		for _, challenge := range challenges {
 			if ctx.Err() != nil {
 				break
@@ -44,7 +41,7 @@ func runVerification(ctx context.Context, directClient, oauthClient *http.Client
 			if err != nil {
 				return nil, err
 			}
-			row := VerificationProbe{ID: challenge.id, Label: challenge.label, Round: round, RequestID: requestID, Prompt: challenge.prompt, Expected: challenge.expected, Status: "error", Usage: &AnimationUsage{}}
+			row := VerificationProbe{ID: challenge.id, Label: challenge.label, Round: round, RequestID: requestID, Prompt: challenge.prompt, Expected: challenge.expected, Status: "error", Category: verificationCategory(challenge), Usage: &AnimationUsage{}}
 			trace := &verificationTransport{base: directClient.Transport}
 			direct := *directClient
 			direct.Transport = trace
@@ -66,6 +63,13 @@ func runVerification(ctx context.Context, directClient, oauthClient *http.Client
 				sender = directBundleSender{client: &direct, credential: value, requestID: requestID, stream: true, usage: row.Usage}
 			}
 			probeStarted := time.Now()
+			row.StartedAt = probeStarted.UTC().Format(time.RFC3339Nano)
+			current := row
+			current.Status, current.Usage = "running", nil
+			report.CurrentProbe = &current
+			if input.Progress != nil {
+				input.Progress(report)
+			}
 			answer, model, sendErr := sender.SendWithReasoning(ctx, input.AccountID, input.Model, challenge.prompt, input.TimeoutSeconds, "medium")
 			row.DurationMS = time.Since(probeStarted).Milliseconds()
 			row.Protocol, row.HTTPStatus, row.Attempts = trace.protocol, trace.status, trace.attempts
@@ -87,13 +91,19 @@ func runVerification(ctx context.Context, directClient, oauthClient *http.Client
 				if model != "" && !slices.Contains(models, model) {
 					models = append(models, model)
 				}
-				row.Status = "failed"
-				if verificationAnswerMatches(challenge, answer) {
-					row.Status = "passed"
-					report.Passed++
+				if challenge.measurement {
+					row.Status = "observed"
+				} else {
+					capabilitySuccessful++
+					row.Status = "failed"
+					if verificationAnswerMatches(challenge, answer) {
+						row.Status = "passed"
+						report.Passed++
+					}
 				}
 			}
 			report.Probes = append(report.Probes, row)
+			report.CurrentProbe = nil
 			if input.Progress != nil {
 				input.Progress(report)
 			}
@@ -107,12 +117,12 @@ func runVerification(ctx context.Context, directClient, oauthClient *http.Client
 			break
 		}
 	}
-	report.Total = input.Rounds * 7
+	report.Total = verificationProbeCount(input.Rounds, input.Fingerprint)
 	report.Capability = VerificationDimension{Status: "inconclusive", Summary: "检测未完整完成，请查看请求状态后重试；失败请求不计为答错。"}
-	wrong := successful - report.Passed
+	wrong := capabilitySuccessful - report.Passed
 	if wrong > 0 {
 		report.Capability = VerificationDimension{Status: "failed", Summary: fmt.Sprintf("%d 项已完成题目未通过，请核对逐项回答；不据此断言模型被替换。", wrong)}
-	} else if successful == report.Total {
+	} else if capabilitySuccessful == report.CapabilityTotal {
 		report.Capability = VerificationDimension{Status: "passed", Summary: "本次计算、逻辑、状态推演、信息提取与指令测试全部通过；不代表所有任务的能力保证。"}
 	}
 	modelStatus, modelDetail := "unknown", "上游未返回型号，无法核对声明。"
@@ -129,7 +139,10 @@ func runVerification(ctx context.Context, directClient, oauthClient *http.Client
 	}
 	report.Evidence = append(report.Evidence, VerificationEvidence{ID: "model", Label: "返回型号", Status: modelStatus, Detail: modelDetail})
 	report.Evidence = append(report.Evidence, verificationProtocolEvidence(report.Probes), verificationRepeatEvidence(report.Probes))
-	report.Evidence = append(report.Evidence, VerificationEvidence{ID: "identity_limit", Label: "证据边界", Status: "unknown", Detail: "没有可信的同版本官方对照时，不能确认具体型号；签名字段存在、自报身份和答题通过均不是身份认证。"})
+	report.Evidence = append(report.Evidence, VerificationEvidence{ID: "identity_limit", Label: "证据边界", Status: "unknown", Detail: "官方来源只确认本次请求路径；能力与指纹检查不能证明具体模型权重。签名字段存在、自报身份和答题通过均不是身份认证。"})
+	report.Authenticity = verificationAuthenticity(source, successful, modelStatus)
+	report.Fingerprint = verificationFingerprintReport(report.Probes, input.Fingerprint)
+	report.Evidence = append(report.Evidence, fingerprintEvidence(report.Fingerprint))
 	verdict := "INCONCLUSIVE"
 	if successful == 0 {
 		verdict = "ERROR"
@@ -154,6 +167,14 @@ func runVerification(ctx context.Context, directClient, oauthClient *http.Client
 		result["transport"] = "oauth-direct"
 	}
 	return result, nil
+}
+
+func verificationRound(challenges []verificationChallenge) []verificationChallenge {
+	result := slices.Clone(challenges)
+	// Reuse one question to observe repeatability, not to authenticate identity.
+	repeated := challenges[0]
+	repeated.id, repeated.label = "consistency", "重复请求一致性"
+	return append(result, repeated)
 }
 
 func officialVerificationEndpoint(raw, platform string) bool {
@@ -214,4 +235,18 @@ func verificationErrorAdvice(code string) string {
 	default:
 		return ""
 	}
+}
+
+func verificationPlannedRound(challenges []verificationChallenge, round int, input targetRequest) []verificationChallenge {
+	result := verificationRound(challenges)
+	if input.Fingerprint && round == input.Rounds {
+		result = append(result, verificationFingerprintChallenges()...)
+	}
+	return result
+}
+func verificationCategory(challenge verificationChallenge) string {
+	if challenge.measurement {
+		return "fingerprint"
+	}
+	return "capability"
 }

@@ -19,6 +19,8 @@ test("自定义接口分区排列，模型输入可读且空记录与操作栏�
       "/api/accounts": [],
       "/api/model-checks/animation-schedules": [],
       "/api/model-checks/animations": [],
+      "/api/model-checks/timeouts/animation": { timeout_seconds: 120, version: 0 },
+      "/api/model-checks/timeouts/precheck": { timeout_seconds: 120, version: 0 },
       "/api/dictionaries": { items: [] },
     };
     if (path.endsWith("/events"))
@@ -28,6 +30,8 @@ test("自定义接口分区排列，模型输入可读且空记录与操作栏�
   });
   await page.goto("/animation-check");
   await page.getByRole("tab", { name: "自定义接口", exact: true }).click();
+  await expect(page.getByRole("spinbutton", { name: "动画超时（秒）" })).toHaveValue("120");
+  await expect(page.getByRole("spinbutton", { name: "前置检测超时（秒）" })).toHaveValue("120");
   const model = page.getByRole("combobox", { name: "检测模型" });
   expect((await model.boundingBox())!.width).toBeGreaterThanOrEqual(180);
   const connection = page.getByRole("group", { name: "接口配置", exact: true });
@@ -42,7 +46,11 @@ test("自定义接口分区排列，模型输入可读且空记录与操作栏�
     const startBox = (await operations
       .getByRole("button", { name: "开始检测", exact: true })
       .boundingBox())!;
-    expect(startBox.y).toBeCloseTo((await model.boundingBox())!.y, 0);
+    expect(startBox.y).toBeGreaterThanOrEqual(parametersBox.y + parametersBox.height);
+    expect(startBox.y).toBeCloseTo(
+      (await operations.getByRole("button", { name: "清空配置", exact: true }).boundingBox())!.y,
+      0,
+    );
   }
   const empty = page.getByRole("group", { name: "暂无检测记录", exact: true });
   expect((await empty.boundingBox())!.height).toBeLessThanOrEqual(180);

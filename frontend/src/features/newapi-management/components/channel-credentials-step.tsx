@@ -46,7 +46,7 @@ export function ChannelCredentialsStep(props: {
               selected={credentialSource === "custom"}
               onClick={() => {
                 props.form.setValue("credential_source", "custom");
-                props.form.clearErrors("vault_entry");
+                props.form.clearErrors("vault_entry_id");
               }}
             >
               自定义账号密码
@@ -62,7 +62,7 @@ export function ChannelCredentialsStep(props: {
               </label>
               <Controller
                 control={props.form.control}
-                name="vault_entry"
+                name="vault_entry_id"
                 render={({ field }) => (
                   <Select
                     disabled={props.creatingKey}
@@ -74,7 +74,7 @@ export function ChannelCredentialsStep(props: {
                       className="min-w-0"
                       id="newapi-channel-vault-entry"
                       aria-label="密码箱账号"
-                      aria-invalid={Boolean(props.form.formState.errors.vault_entry)}
+                      aria-invalid={Boolean(props.form.formState.errors.vault_entry_id)}
                       disabled={props.vaultOptions.length === 0}
                     >
                       <SelectValue
@@ -83,7 +83,7 @@ export function ChannelCredentialsStep(props: {
                     </SelectTrigger>
                     <SelectContent>
                       {props.vaultOptions.map((entry) => (
-                        <SelectItem key={entry.entry} value={entry.entry}>
+                        <SelectItem key={entry.id} value={entry.id}>
                           {entry.entry}
                         </SelectItem>
                       ))}
@@ -96,8 +96,8 @@ export function ChannelCredentialsStep(props: {
                   暂无可用的密码箱账号，可切换为自定义账号密码。
                 </p>
               )}
-              {props.form.formState.errors.vault_entry && (
-                <FieldError message={props.form.formState.errors.vault_entry.message} />
+              {props.form.formState.errors.vault_entry_id && (
+                <FieldError message={props.form.formState.errors.vault_entry_id.message} />
               )}
             </div>
           ) : (

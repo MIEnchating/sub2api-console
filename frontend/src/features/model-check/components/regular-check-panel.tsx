@@ -32,9 +32,11 @@ import { modelCheckSchema, type ModelCheckForm } from "../lib/model-check-schema
 import { createQueuedRead } from "../lib/queued-read";
 import { taskEventIsOlder, taskEventSchema } from "../lib/task-event-schema";
 import { ModelCheckResult } from "./model-check-result";
+import { VerificationSetup } from "./verification-setup";
 import { ModelCheckSelection } from "./model-check-selection";
 
 const defaults: ModelCheckForm = {
+  fingerprint: true,
   account_ids: [],
   models: [],
   rounds: 1,
@@ -68,8 +70,20 @@ function commonDetectableModels(modelLists: string[][]): string[] {
 
 export function modelCheckDialogLayout(task?: Task) {
   const resultsReady = task?.status === "succeeded";
+  const results = task?.result.tests;
+  const verificationResults =
+    resultsReady &&
+    Array.isArray(results) &&
+    results.length > 0 &&
+    results.every(
+      (result: unknown) =>
+        result !== null &&
+        typeof result === "object" &&
+        "checker" in result &&
+        result.checker === "verification",
+    );
   return {
-    width: operationDialogWidth(true, "table"),
+    width: operationDialogWidth(true, verificationResults ? "wide" : "table"),
     height: "tall",
     resultsReady,
   } as const;
@@ -95,27 +109,36 @@ export function RegularCheckPanel(props: {
   const selectedModels = form.watch("models");
   const [readModels] = useState(() => createQueuedRead(api.accountModels));
   const rounds = form.watch("rounds");
+  const fingerprint = form.watch("fingerprint") === true;
   const timeoutSeconds = form.watch("timeout_seconds");
   const accounts = useQuery({
     queryKey: ["accounts"],
     queryFn: ({ signal }) => api.accounts(signal),
   });
+  const availableAccountIDs = useMemo(
+    () =>
+      new Set(
+        accounts.data?.filter((account) => !account.upstream_excluded).map((account) => account.id),
+      ),
+    [accounts.data],
+  );
   useEffect(() => {
     if (!accounts.data) return;
-    const available = new Set(accounts.data.map((account) => account.id));
-    const next = selectedAccountIDs.filter((id) => available.has(id));
+    const next = selectedAccountIDs.filter((id) => availableAccountIDs.has(id));
     if (next.length !== selectedAccountIDs.length) {
       form.setValue("account_ids", next, { shouldValidate: true });
-      toast.info("所选账号已不存在，请重新选择");
+      toast.info("所选账号已不存在或上游已排除，请重新选择");
     }
-  }, [accounts.data, form, selectedAccountIDs]);
+  }, [accounts.data, availableAccountIDs, form, selectedAccountIDs]);
   const modelQueries = useQueries({
-    queries: selectedAccountIDs.map((accountID) => ({
-      queryKey: ["model-check-account-models", accountID],
-      queryFn: ({ signal }) => readModels(accountID, signal),
-      staleTime: 5 * 60 * 1000,
-      retry: false,
-    })),
+    queries: selectedAccountIDs
+      .filter((id) => availableAccountIDs.has(id))
+      .map((accountID) => ({
+        queryKey: ["model-check-account-models", accountID],
+        queryFn: ({ signal }) => readModels(accountID, signal),
+        staleTime: 5 * 60 * 1000,
+        retry: false,
+      })),
   });
   const modelLists = modelQueries.flatMap((query) => (query.data ? [query.data.models] : []));
   const modelsLoading =
@@ -189,6 +212,7 @@ export function RegularCheckPanel(props: {
       setTaskID(created.id);
       queryClient.setQueryData(["model-check-task", created.id], created);
       void queryClient.invalidateQueries({ queryKey: ["tasks"] });
+      void queryClient.invalidateQueries({ queryKey: ["model-check-history"] });
       setResultOpen(true);
     },
     onError: (error) => notifyOperationError(error, "模型检测启动失败"),
@@ -208,6 +232,7 @@ export function RegularCheckPanel(props: {
     if (!task.data || !["succeeded", "partial", "failed", "cancelled"].includes(task.data.status))
       return;
     void queryClient.invalidateQueries({ queryKey: ["model-check-account-statuses"] });
+    void queryClient.invalidateQueries({ queryKey: ["model-check-history"] });
     void queryClient.invalidateQueries({ queryKey: ["accounts"] });
   }, [queryClient, task.data?.status]);
 
@@ -263,8 +288,10 @@ export function RegularCheckPanel(props: {
     resultDialogTitle = "模型检测失败";
   }
   const dialogLayout = modelCheckDialogLayout(task.data);
+  const liveResult = task.data && ["queued", "running", "waiting_input"].includes(task.data.status);
 
   function toggleAccount(accountID: string, checked: boolean) {
+    if (checked && !availableAccountIDs.has(accountID)) return;
     const next = checked
       ? [...selectedAccountIDs, accountID].slice(0, 20)
       : selectedAccountIDs.filter((id) => id !== accountID);
@@ -278,9 +305,14 @@ export function RegularCheckPanel(props: {
     form.setValue("models", [...new Set(next)], { shouldValidate: true });
   }
 
-  const submit = form.handleSubmit((value: ModelCheckRequest) => run.mutate(value));
-  const selectionError =
-    form.formState.errors.account_ids?.message ?? form.formState.errors.models?.message;
+  const submit = form.handleSubmit((value: ModelCheckRequest) => {
+    const accountIDs = value.account_ids.filter((id) => availableAccountIDs.has(id));
+    if (accountIDs.length === 0) return;
+    run.mutate({ ...value, account_ids: accountIDs });
+  });
+  const selectionError = [form.formState.errors.account_ids, form.formState.errors.models].find(
+    (error) => error && error.type !== "too_small",
+  )?.message;
   const hasPreviousResult =
     selectedAccountIDs.length === 1 &&
     Boolean(checkStatusByAccountID.get(selectedAccountIDs[0])?.task_id);
@@ -297,8 +329,14 @@ export function RegularCheckPanel(props: {
           ) : null}
         </PageActions>
       ) : null}
+      <VerificationSetup
+        fingerprint={fingerprint}
+        disabled={pending}
+        onFingerprintChange={(enabled) => form.setValue("fingerprint", enabled)}
+      />
       <div className="flex min-h-0 flex-1 flex-col">
         <ModelCheckSelection
+          fingerprint={fingerprint}
           onViewResult={task.data ? () => setResultOpen(true) : undefined}
           onViewPreviousResult={
             hasPreviousResult
@@ -342,7 +380,9 @@ export function RegularCheckPanel(props: {
           }}
           onAccountToggle={toggleAccount}
           onAccountsSelectAll={() => {
-            const selectableAccounts = filteredAccounts;
+            const selectableAccounts = filteredAccounts.filter(
+              (account) => !account.upstream_excluded,
+            );
             const merged = [
               ...new Set([
                 ...selectedAccountIDs,
@@ -390,7 +430,9 @@ export function RegularCheckPanel(props: {
           <DialogHeader>
             <DialogTitle>{resultDialogTitle}</DialogTitle>
           </DialogHeader>
-          <DialogBody className={dialogLayout.resultsReady ? "overflow-hidden pr-0" : undefined}>
+          <DialogBody
+            className={dialogLayout.resultsReady || liveResult ? "overflow-hidden pr-0" : undefined}
+          >
             {!task.data && task.isLoading ? <ContentLoading label="正在读取检测结果" /> : null}
             {!task.data && task.isError ? (
               <ContentRetry pending={task.isFetching} onRetry={() => void task.refetch()} />

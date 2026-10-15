@@ -17,6 +17,7 @@ import {
 import { useEffect, useRef } from "react";
 
 import type { AccountStatus } from "@/api";
+import { upstreamExcludedAccountHelp } from "@/features/accounts/constants";
 import { accountCheckStatus } from "../lib/account-link";
 import { AccountQualityCell } from "@/features/accounts/components/account-quality-cell";
 import { DataTablePagination } from "@/components/data-table/pagination";
@@ -42,6 +43,7 @@ import { cn } from "@/lib/utils";
 import { focusWithoutScroll } from "@/components/ui/dropdown-search-focus";
 
 export type ModelCheckSelectionProps = {
+  fingerprint?: boolean;
   onViewResult?: () => void;
   onViewPreviousResult?: () => void;
   accounts: AccountStatus[];
@@ -92,6 +94,16 @@ function accountCheckTime(value: string | null | undefined): string {
 }
 
 function AccountCheckBadge(props: { account: AccountStatus }) {
+  if (props.account.upstream_excluded) {
+    return (
+      <Tooltip>
+        <TooltipTrigger render={<Badge variant="outline" />} data-slot="badge" tabIndex={0}>
+          <span>上游已排除</span>
+        </TooltipTrigger>
+        <TooltipContent role="tooltip">{upstreamExcludedAccountHelp}</TooltipContent>
+      </Tooltip>
+    );
+  }
   if (props.account.manual_priority != null) {
     return <Badge variant="outline">人工控制</Badge>;
   }
@@ -115,7 +127,11 @@ function accountSelectionDisabled(
   props: ModelCheckSelectionProps,
 ): boolean {
   const checked = props.selectedAccountIDs.includes(account.id);
-  return props.disabled || (!checked && props.selectedAccountIDs.length >= 20);
+  return (
+    Boolean(account.upstream_excluded) ||
+    props.disabled ||
+    (!checked && props.selectedAccountIDs.length >= 20)
+  );
 }
 
 function AccountIdentity(props: { account: AccountStatus }) {
@@ -205,7 +221,9 @@ function AccountPanel(props: ModelCheckSelectionProps) {
   const pagination = useClientPagination(props.accounts);
   const emptyState = accountEmptyState(props);
   const showAccounts = !emptyState && props.accounts.length > 0;
-  const selectableAccountCount = props.accounts.length;
+  const selectableAccountCount = props.accounts.filter(
+    (account) => !account.upstream_excluded,
+  ).length;
 
   useEffect(() => {
     pagination.setCurrentPage(1);
@@ -561,8 +579,10 @@ function MatrixPanel(props: ModelCheckSelectionProps) {
           </div>
         </div>
         <p className="text-muted-foreground mb-3 text-xs">
-          计划 {props.combinationCount * props.rounds * 7} 项检测；每项通常 1 次请求，协议回退时最多
-          2 次，按上游用量计费。同一账号依次检测，不自动重试失败请求。
+          计划 {props.combinationCount * (props.rounds * 7 + (props.fingerprint ? 10 : 0))}{" "}
+          项检测（每组合 {props.rounds * 7} 项能力题{props.fingerprint ? " + 10 项指纹采样" : ""}
+          ）；每项通常 1 次请求，协议回退时最多 2
+          次，按上游用量计费。同一账号依次检测，不自动重试失败请求。
         </p>
         <FieldError message={props.selectionError} className="mb-2" />
         <Button

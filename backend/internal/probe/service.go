@@ -104,6 +104,7 @@ type Target struct {
 }
 
 type Result struct {
+	ResponseText              string  `json:"response_text,omitempty"`
 	IgnoredPlaceholder        bool    `json:"ignored_placeholder,omitempty"`
 	IgnoredPlaceholderPreview string  `json:"ignored_placeholder_preview,omitempty"`
 	IgnoredPlaceholderAttempt int     `json:"ignored_placeholder_attempt,omitempty"`
@@ -644,7 +645,7 @@ func probeTarget(ctx context.Context, client *adminclient.Client, target Target,
 	var ignoredPlaceholderPreview string
 	var ignoredPlaceholderAttempt int
 	var firstTokenAt time.Time
-	var lastReason, actualModel string
+	var lastReason, actualModel, responseText string
 	attempts := 0
 	attemptStatusCodes := []int{}
 	for {
@@ -662,6 +663,7 @@ func probeTarget(ctx context.Context, client *adminclient.Client, target Target,
 			return result
 		}
 		lastStatus, succeeded, lastReason, actualModel = outcome.status, outcome.content, outcome.reason, outcome.model
+		responseText = outcome.responseText
 		firstTokenAt = outcome.firstTokenAt
 		if outcome.ignoredPlaceholder {
 			ignoredPlaceholder = true
@@ -698,7 +700,7 @@ func probeTarget(ctx context.Context, client *adminclient.Client, target Target,
 			value := decimalMilliseconds(float64(firstTokenAt.Sub(started)) / float64(time.Millisecond))
 			latency = &value
 		}
-		return Result{AccountID: target.AccountID, AccountName: target.AccountName, GroupName: target.GroupName, Result: "通过", DurationMS: durationMS, LatencyP50: latency, LatencyP95: latency, LatencyP99: latency, Attempts: attempts, StatusCode: lastStatus, ObservedAt: observed, RequestModel: requestModel, ActualModel: actualModel, ModelRewritten: rewritten, AttemptStatusCodes: attemptStatusCodes, RetryRecovered: attempts > 1,
+		return Result{ResponseText: responseText, AccountID: target.AccountID, AccountName: target.AccountName, GroupName: target.GroupName, Result: "通过", DurationMS: durationMS, LatencyP50: latency, LatencyP95: latency, LatencyP99: latency, Attempts: attempts, StatusCode: lastStatus, ObservedAt: observed, RequestModel: requestModel, ActualModel: actualModel, ModelRewritten: rewritten, AttemptStatusCodes: attemptStatusCodes, RetryRecovered: attempts > 1,
 			IgnoredPlaceholder: ignoredPlaceholder, IgnoredPlaceholderPreview: ignoredPlaceholderPreview, IgnoredPlaceholderAttempt: ignoredPlaceholderAttempt, ProbeProtocol: descriptor.Protocol, ProbePromptFingerprint: promptFingerprint, ProbeRequestFingerprint: descriptor.RequestFingerprint, MeasuredFirstToken: measuredFirstToken}
 	}
 	result := "失败"
@@ -710,7 +712,7 @@ func probeTarget(ctx context.Context, client *adminclient.Client, target Target,
 	if lastReason == "" {
 		lastReason = "主动探测请求失败"
 	}
-	return Result{AccountID: target.AccountID, AccountName: target.AccountName, GroupName: target.GroupName, Result: result, DurationMS: durationMS, Attempts: attempts, FailureReason: &lastReason, StatusCode: lastStatus, ObservedAt: observed, RequestModel: requestModel, ActualModel: actualModel, ModelRewritten: rewritten, AttemptStatusCodes: attemptStatusCodes,
+	return Result{ResponseText: responseText, AccountID: target.AccountID, AccountName: target.AccountName, GroupName: target.GroupName, Result: result, DurationMS: durationMS, Attempts: attempts, FailureReason: &lastReason, StatusCode: lastStatus, ObservedAt: observed, RequestModel: requestModel, ActualModel: actualModel, ModelRewritten: rewritten, AttemptStatusCodes: attemptStatusCodes,
 		IgnoredPlaceholder: ignoredPlaceholder, IgnoredPlaceholderPreview: ignoredPlaceholderPreview, IgnoredPlaceholderAttempt: ignoredPlaceholderAttempt, ProbeProtocol: descriptor.Protocol, ProbePromptFingerprint: promptFingerprint, ProbeRequestFingerprint: descriptor.RequestFingerprint}
 }
 

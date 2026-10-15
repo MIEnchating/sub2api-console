@@ -233,7 +233,7 @@ type ChannelModelsInput struct {
 type ChannelKeyInput struct {
 	Sub2APIGroupID   string `json:"sub2api_group_id"`
 	CredentialSource string `json:"credential_source"`
-	VaultEntry       string `json:"vault_entry"`
+	VaultEntry       string `json:"vault_entry_id"`
 	Username         string `json:"username"`
 	Password         string `json:"password"`
 }
@@ -904,11 +904,11 @@ func (s *Service) CreateChannelKey(ctx context.Context, platformID string, input
 func (s *Service) channelCredential(ctx context.Context, input ChannelKeyInput) (configstore.VaultEntry, error) {
 	switch strings.TrimSpace(input.CredentialSource) {
 	case "vault":
-		entryName := strings.TrimSpace(input.VaultEntry)
-		if entryName == "" {
+		entryID := strings.TrimSpace(input.VaultEntry)
+		if entryID == "" {
 			return configstore.VaultEntry{}, serviceError(ErrorValidation, "请选择密码箱账号")
 		}
-		entry, err := s.private.VaultEntry(ctx, entryName)
+		entry, err := s.private.VaultEntry(ctx, entryID)
 		if err != nil {
 			return configstore.VaultEntry{}, fmt.Errorf("密码箱账号读取失败：%w", err)
 		}

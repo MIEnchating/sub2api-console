@@ -6,9 +6,14 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
-import { animationActivityLabel, type AnimationActivity } from "../lib/animation-task-results";
+import {
+  animationActivityLabel,
+  animationWaitingForGeneration,
+  type AnimationActivity,
+} from "../lib/animation-task-results";
 import { AnimationPreview } from "./animation-preview";
 import { AnimationResultDetails } from "./animation-result-details";
+import { AnimationCardQualityActions } from "./animation-card-quality-actions";
 
 const timeFormat = new Intl.DateTimeFormat("zh-CN", {
   month: "2-digit",
@@ -22,16 +27,18 @@ export function AnimationCardResult(props: {
   result: AnimationResult;
   activity?: AnimationActivity;
   retryDisabled: boolean;
+  showQualityActions?: boolean;
   onRetry: (target: AnimationTarget) => void;
 }): ReactElement {
   const result = props.result;
+  const waitingForGeneration = animationWaitingForGeneration(result, props.activity);
   const success = result.status === "succeeded" && Boolean(result.html || result.svg);
   const modelMismatch = Boolean(result.response_model && result.response_model !== result.model);
   const modelLabel = modelMismatch
     ? `${result.model} · 返回模型 ${result.response_model}`
     : result.model;
   let preview: ReactElement;
-  if (props.activity) {
+  if (waitingForGeneration && props.activity) {
     const label = animationActivityLabel(props.activity.status);
     preview = (
       <ContentLoading compact label={label} ariaLabel={label} className="h-full justify-center" />
@@ -58,8 +65,8 @@ export function AnimationCardResult(props: {
       >
         {preview}
       </div>
-      <div className="flex h-14 min-w-0 items-center gap-2 px-3">
-        {props.activity ? (
+      <div className="flex min-h-14 min-w-0 flex-wrap items-center gap-2 px-3 py-2">
+        {waitingForGeneration ? (
           <p className="min-w-0 flex-1 text-xs text-muted-foreground">本轮结果将在检测完成后显示</p>
         ) : (
           <div className="min-w-0 flex-1 space-y-0.5 text-xs">
@@ -90,7 +97,10 @@ export function AnimationCardResult(props: {
             </div>
           </div>
         )}
-        <div className="flex shrink-0 items-center gap-1">
+        <div className="flex shrink-0 flex-wrap items-center gap-1">
+          {!props.activity && props.showQualityActions !== false ? (
+            <AnimationCardQualityActions result={result} />
+          ) : null}
           <Tooltip>
             <TooltipTrigger
               render={
@@ -111,7 +121,7 @@ export function AnimationCardResult(props: {
             </TooltipTrigger>
             <TooltipContent>使用 {result.model} 重新检测，将产生 API 用量</TooltipContent>
           </Tooltip>
-          {!props.activity ? <AnimationResultDetails result={result} /> : null}
+          {!waitingForGeneration ? <AnimationResultDetails result={result} /> : null}
         </div>
       </div>
     </div>

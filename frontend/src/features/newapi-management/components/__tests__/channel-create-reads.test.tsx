@@ -19,6 +19,7 @@ function configurationResponse(url: RequestInfo | URL): Response {
     return Response.json({
       vault_entries: [
         {
+          id: "运营账号",
           entry: "运营账号",
           hosts: ["sub.example.test"],
           has_username: true,
