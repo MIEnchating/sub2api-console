@@ -37,7 +37,11 @@ export function VerificationResult(props: {
         查看检测证据
       </Button>
       <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent width="wide" height="tall" className="h-[min(44rem,calc(100svh-2rem))]">
+        <DialogContent
+          width="wide"
+          height="tall"
+          className="h-[min(46rem,calc(100svh-2rem))] w-[min(60rem,calc(100vw-2rem))] gap-3"
+        >
           <DialogHeader>
             <DialogTitle>检测证据</DialogTitle>
           </DialogHeader>

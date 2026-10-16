@@ -1,7 +1,10 @@
 import type { ReactElement } from "react";
+import { cn } from "@/lib/utils";
+import { publicReferenceSummary } from "../lib/public-reference-summary";
 import { VerificationStateBadge } from "./verification-state";
 import {
   verificationCapabilityLabels,
+  publicReferenceLabels,
   verificationIdentityLabels,
   verificationReferenceLabels,
   verificationFingerprintLabels,
@@ -25,6 +28,7 @@ export function VerificationCapabilityStatus(props: { status: string }): ReactEl
 }
 
 export function VerificationIdentityStatus(props: { result: VerificationRecord }): ReactElement {
+  const publicReference = record(props.result.public_reference);
   const reference = record(props.result.reference);
   const status = text(reference.status) || text(record(props.result.authenticity).status);
   const fingerprint = record(props.result.fingerprint);
@@ -34,6 +38,15 @@ export function VerificationIdentityStatus(props: { result: VerificationRecord }
     verificationReferenceLabels[status] ?? verificationIdentityLabels[status] ?? "接口信息未记录";
   return (
     <>
+      {publicReference.version ? (
+        <VerificationStateBadge
+          status={text(publicReference.status)}
+          label={
+            publicReferenceLabels[text(publicReference.status)] ??
+            publicReferenceLabels.inconclusive
+          }
+        />
+      ) : null}
       {!hidden ? <VerificationStateBadge status={status} label={label} /> : null}
       {fingerprint.status ? (
         <VerificationStateBadge
@@ -45,17 +58,27 @@ export function VerificationIdentityStatus(props: { result: VerificationRecord }
   );
 }
 
-export function VerificationIdentitySummary(props: { result: VerificationRecord }): ReactElement {
+export function VerificationIdentitySummary(props: {
+  result: VerificationRecord;
+  prominent?: boolean;
+}): ReactElement {
   const authenticity = record(props.result.authenticity);
   const known = Object.hasOwn(verificationIdentityLabels, text(authenticity.status));
   return (
-    <p className="text-muted-foreground text-xs leading-relaxed wrap-anywhere">
+    <p
+      className={cn(
+        "leading-relaxed wrap-anywhere",
+        props.prominent ? "text-sm" : "text-muted-foreground text-xs",
+      )}
+    >
       {identitySummary(props.result, known)}
     </p>
   );
 }
 
 function identitySummary(result: VerificationRecord, known: boolean): string {
+  const publicReference = record(result.public_reference);
+  if (publicReference.version) return publicReferenceSummary(result);
   const reference = record(result.reference);
   if (["matched", "mismatch", "not_applicable"].includes(text(reference.status)))
     return text(reference.summary);

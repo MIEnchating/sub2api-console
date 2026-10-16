@@ -1,3 +1,5 @@
+import { usePublicReferences, publicReferenceBudget } from "../lib/public-reference";
+import { PublicReferenceNotice } from "./public-reference-notice";
 import { QueryErrorToast } from "@/components/query-error-toast";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -37,6 +39,8 @@ import { ModelCheckSelection } from "./model-check-selection";
 
 const defaults: ModelCheckForm = {
   fingerprint: true,
+  behavior_fingerprint: false,
+  public_reference: true,
   account_ids: [],
   models: [],
   rounds: 1,
@@ -110,11 +114,20 @@ export function RegularCheckPanel(props: {
   const [readModels] = useState(() => createQueuedRead(api.accountModels));
   const rounds = form.watch("rounds");
   const fingerprint = form.watch("fingerprint") === true;
+  const behaviorFingerprint = form.watch("behavior_fingerprint") === true;
+  const publicReference = form.watch("public_reference") === true;
+  const publicReferences = usePublicReferences(publicReference && selectedModels.length > 0);
   const timeoutSeconds = form.watch("timeout_seconds");
   const accounts = useQuery({
     queryKey: ["accounts"],
     queryFn: ({ signal }) => api.accounts(signal),
   });
+  const referenceAccountCount = selectedAccountIDs.filter(
+    (id) => accounts.data?.find((account) => account.id === id)?.account_type !== "oauth",
+  ).length;
+  const publicRequests = publicReference
+    ? publicReferenceBudget(selectedModels, publicReferences.data) * referenceAccountCount
+    : 0;
   const availableAccountIDs = useMemo(
     () =>
       new Set(
@@ -329,14 +342,20 @@ export function RegularCheckPanel(props: {
           ) : null}
         </PageActions>
       ) : null}
-      <VerificationSetup
-        fingerprint={fingerprint}
-        disabled={pending}
-        onFingerprintChange={(enabled) => form.setValue("fingerprint", enabled)}
-      />
+      <VerificationSetup />
+      {publicReference && selectedModels.length > 0 ? (
+        <PublicReferenceNotice
+          models={selectedModels}
+          profiles={publicReferences.data}
+          pending={publicReferences.isPending}
+          onRetry={() => void publicReferences.refetch()}
+        />
+      ) : null}
       <div className="flex min-h-0 flex-1 flex-col">
         <ModelCheckSelection
+          publicReferenceRequests={publicRequests}
           fingerprint={fingerprint}
+          behaviorFingerprint={behaviorFingerprint}
           onViewResult={task.data ? () => setResultOpen(true) : undefined}
           onViewPreviousResult={
             hasPreviousResult
@@ -369,6 +388,7 @@ export function RegularCheckPanel(props: {
           disabled={pending}
           canSubmit={
             !pending &&
+            (!publicReference || Boolean(publicReferences.data)) &&
             !modelsRefreshing &&
             !modelsError &&
             combinationCount > 0 &&

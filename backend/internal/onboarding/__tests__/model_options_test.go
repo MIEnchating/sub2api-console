@@ -64,9 +64,13 @@ func (keys *modelOptionsKeys) DeleteKey(ctx context.Context, _ configstore.AuthR
 	return nil
 }
 
-type modelOptionsTasks struct{ final taskstore.Task }
+type modelOptionsTasks struct {
+	final     taskstore.Task
+	snapshots []taskstore.Task
+}
 
 func (store *modelOptionsTasks) Save(_ context.Context, task taskstore.Task) error {
+	store.snapshots = append(store.snapshots, task)
 	if task.Status == "succeeded" || task.Status == "failed" || task.Status == "cancelled" {
 		store.final = task
 	}

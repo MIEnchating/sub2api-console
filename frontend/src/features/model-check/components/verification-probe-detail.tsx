@@ -50,7 +50,13 @@ export function VerificationProbeDetail(props: { probe: VerificationRecord }): R
       </section>
       <div className="grid min-w-0 gap-4 lg:grid-cols-2">
         <OriginalText
-          label={probe.category === "fingerprint" ? "采样目的" : "预期答案"}
+          label={
+            probe.category === "fingerprint" ||
+            probe.category === "behavior_fingerprint" ||
+            probe.category === "public_reference"
+              ? "采样目的"
+              : "预期答案"
+          }
           value={text(probe.expected)}
           json={json}
         />

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/MIEnchating/sub2api-console/backend/internal/modelfingerprint"
 	"io"
 	"math"
 	"regexp"
@@ -34,14 +35,17 @@ type bundleSender interface {
 }
 
 type targetRequest struct {
-	Fingerprint    bool
-	Challenges     [][]verificationChallenge
-	Progress       func(VerificationReport)
-	AccountID      string
-	AccountName    string
-	Model          string
-	Rounds         int
-	TimeoutSeconds int
+	PublicReference     bool
+	publicPlan          []modelfingerprint.Probe
+	BehaviorFingerprint bool
+	Fingerprint         bool
+	Challenges          [][]verificationChallenge
+	Progress            func(VerificationReport)
+	AccountID           string
+	AccountName         string
+	Model               string
+	Rounds              int
+	TimeoutSeconds      int
 }
 
 type bundleResult struct {

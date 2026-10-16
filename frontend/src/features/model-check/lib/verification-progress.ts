@@ -32,9 +32,15 @@ export function verificationProgressProbes(
   active: boolean,
 ): VerificationRecord[] {
   const completed = verificationRows(result.probes);
-  const current = verificationRecord(result.current_probe);
+  const current = Array.isArray(result.current_probes)
+    ? verificationRows(result.current_probes)
+    : [verificationRecord(result.current_probe)];
   const byKey = new Map(completed.map((probe) => [verificationProbeKey(probe), probe]));
-  if (active && current.id) byKey.set(verificationProbeKey(current), current);
+  if (active) {
+    for (const probe of current) {
+      if (probe.id) byKey.set(verificationProbeKey(probe), probe);
+    }
+  }
   const plan = verificationRows(result.probe_plan);
   if (plan.length === 0) return [...byKey.values()];
   return plan.map(
@@ -44,4 +50,30 @@ export function verificationProgressProbes(
         status: active ? "pending" : "skipped",
       },
   );
+}
+
+export function verificationProbeGroups(probes: VerificationRecord[]): {
+  label: string;
+  probes: VerificationRecord[];
+}[] {
+  return [
+    {
+      label: "能力检测",
+      probes: probes.filter(
+        (probe) =>
+          !["fingerprint", "behavior_fingerprint", "public_reference"].includes(
+            verificationText(probe.category),
+          ),
+      ),
+    },
+    {
+      label: "公开参考对比",
+      probes: probes.filter((probe) => probe.category === "public_reference"),
+    },
+    { label: "分词指纹", probes: probes.filter((probe) => probe.category === "fingerprint") },
+    {
+      label: "行为指纹",
+      probes: probes.filter((probe) => probe.category === "behavior_fingerprint"),
+    },
+  ].filter((group) => group.probes.length > 0);
 }

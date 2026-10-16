@@ -1,4 +1,4 @@
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { focusManager, QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, expect, it, vi } from "vitest";
@@ -8,6 +8,8 @@ import { useOnboardingProbeTask } from "../use-onboarding-probe-task";
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+  vi.useRealTimers();
+  focusManager.setFocused(undefined);
 });
 
 it("上一轮完成后重试创建任务期间清除旧摘要并标记正在启动", async () => {
@@ -130,4 +132,90 @@ it("首次探活保留准备阶段，重试仅展示当前轮过程且轮询不�
   expect(hook.result.current.history).toHaveLength(4);
   hook.unmount();
   client.clear();
+});
+
+it.each(["succeeded", "failed", "cancelled"] as const)(
+  "创建接口已返回 %s 时直接结束等待，不依赖下一次状态请求",
+  async (status) => {
+    const terminal: Task = {
+      id: "finished-at-start",
+      skill: "onboarding",
+      operation: "onboarding-probe-probe",
+      status,
+      progress: 100,
+      message: "已结束",
+      created_at: "",
+      updated_at: "",
+      result: { steps: [{ stage: "request", status: "succeeded", started_at: "" }] },
+    };
+    vi.spyOn(api, "startOnboardingProbeTask").mockResolvedValue(terminal);
+    vi.spyOn(api, "task").mockImplementation(() => new Promise(() => {}));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const hook = renderHook(() => useOnboardingProbeTask("upstream.example", "7"), {
+      wrapper: (props: { children: ReactNode }) => (
+        <QueryClientProvider client={client}>{props.children}</QueryClientProvider>
+      ),
+    });
+    let completed: Task | undefined;
+    act(() => {
+      void hook.result.current.run("probe", "model", "verification").then((task) => {
+        completed = task;
+      });
+    });
+    try {
+      await waitFor(() => expect(completed?.status).toBe(status));
+      expect(hook.result.current.task?.id).toBe(terminal.id);
+      expect(hook.result.current.history).toHaveLength(1);
+      expect(hook.result.current.starting).toBe(false);
+    } finally {
+      hook.unmount();
+      client.clear();
+    }
+  },
+);
+
+it("页面在后台时仍接收任务终态并结束等待", async () => {
+  const running: Task = {
+    id: "background-probe",
+    skill: "onboarding",
+    operation: "onboarding-probe-probe",
+    status: "running",
+    progress: 95,
+    message: "清理中",
+    created_at: "",
+    updated_at: "",
+    result: { steps: [] },
+  };
+  vi.spyOn(api, "startOnboardingProbeTask").mockResolvedValue(running);
+  const fetchTask = vi.spyOn(api, "task").mockResolvedValue(running);
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const hook = renderHook(() => useOnboardingProbeTask("upstream.example", "7"), {
+    wrapper: (props: { children: ReactNode }) => (
+      <QueryClientProvider client={client}>{props.children}</QueryClientProvider>
+    ),
+  });
+  let completed: Task | undefined;
+  act(() => {
+    void hook.result.current.run("probe", "model", "verification").then((task) => {
+      completed = task;
+    });
+  });
+  try {
+    await waitFor(() => expect(hook.result.current.task?.status).toBe("running"));
+    // Move the polling timer onto the controlled clock before going unfocused.
+    vi.useFakeTimers();
+    await act(async () => {
+      await hook.result.current.refetch();
+    });
+    focusManager.setFocused(false);
+    fetchTask.mockResolvedValue({ ...running, status: "failed", message: "请求超时" });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+    expect(completed?.status).toBe("failed");
+    expect(hook.result.current.task?.status).toBe("failed");
+  } finally {
+    hook.unmount();
+    client.clear();
+  }
 });

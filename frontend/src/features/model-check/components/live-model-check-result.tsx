@@ -62,6 +62,7 @@ function CombinationButton(props: {
 export function LiveModelCheckResult(props: {
   task: Task;
   rows: VerificationRecord[];
+  embedded?: boolean;
 }): ReactElement {
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const task = props.task;
@@ -83,88 +84,102 @@ export function LiveModelCheckResult(props: {
   else if (phase === "testing") preparation = "等待单项检测进度，收到后会显示题目与回答。";
   return (
     <div
-      className="flex h-full min-h-0 min-w-0 flex-col gap-3"
+      className={cn("flex min-h-0 min-w-0 flex-col gap-3", !props.embedded && "h-full")}
       data-testid="model-check-live-progress"
     >
-      <header className="shrink-0 space-y-3 rounded-lg border bg-muted/20 p-3 sm:p-4">
-        <div className="flex items-center justify-between gap-3">
-          <div className="min-w-0">
-            <h2 className="font-medium">实时检测过程</h2>
-            <p className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground tabular-nums">
-              <span className="whitespace-nowrap">
-                已完成 {completed}/{total ?? "—"} 个组合
-              </span>
-              <span className="whitespace-nowrap">检测中 {activeItems.length}</span>
-              <span className="whitespace-nowrap">等待 {queued.length}</span>
-            </p>
+      {!props.embedded ? (
+        <header className="shrink-0 space-y-3 rounded-lg border bg-muted/20 p-3 sm:p-4">
+          <div className="flex items-center justify-between gap-3">
+            <div className="min-w-0">
+              <h2 className="font-medium">实时检测过程</h2>
+              <p className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground tabular-nums">
+                <span className="whitespace-nowrap">
+                  已完成 {completed}/{total ?? "—"} 个组合
+                </span>
+                <span className="whitespace-nowrap">检测中 {activeItems.length}</span>
+                <span className="whitespace-nowrap">等待 {queued.length}</span>
+              </p>
+            </div>
+            <TaskCancelButton taskId={task.id} className="shrink-0" />
           </div>
-          <TaskCancelButton taskId={task.id} className="shrink-0" />
-        </div>
-        {progress !== null ? (
-          <div className="flex items-center gap-3">
-            <Progress
-              value={progress}
-              className="flex-1"
-              aria-label={`检测进度 ${progress.toFixed(0)}%`}
-            />
-            <strong className="text-sm tabular-nums">{progress.toFixed(0)}%</strong>
-          </div>
-        ) : (
-          <TaskStartupState message="正在准备检测" />
+          {progress !== null ? (
+            <div className="flex items-center gap-3">
+              <Progress
+                value={progress}
+                className="flex-1"
+                aria-label={`检测进度 ${progress.toFixed(0)}%`}
+              />
+              <strong className="text-sm tabular-nums">{progress.toFixed(0)}%</strong>
+            </div>
+          ) : (
+            <TaskStartupState message="正在准备检测" />
+          )}
+          <p
+            role="status"
+            aria-live="polite"
+            className="text-muted-foreground text-xs wrap-anywhere"
+          >
+            {task.message}
+          </p>
+        </header>
+      ) : null}
+      <div
+        className={cn(
+          "flex min-h-0 min-w-0 flex-col md:flex-row",
+          !props.embedded && "flex-1 overflow-hidden rounded-lg border",
         )}
-        <p role="status" aria-live="polite" className="text-muted-foreground text-xs wrap-anywhere">
-          {task.message}
-        </p>
-      </header>
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-lg border md:flex-row">
-        <nav
-          aria-label="检测组合"
-          className="flex max-h-32 min-h-0 shrink-0 gap-1 overflow-auto border-b bg-muted/20 p-2 md:block md:max-h-none md:w-60 md:space-y-1 md:border-r md:border-b-0"
-        >
-          <h3 className="sr-only px-2 py-1 text-xs font-medium text-muted-foreground md:not-sr-only">
-            检测组合
-          </h3>
-          {combinations.map((item) => (
-            <CombinationButton
-              key={combinationKey(item)}
-              item={item}
-              selected={item === selected}
-              onSelect={() => setSelectedKey(combinationKey(item))}
-            />
-          ))}
-          {combinations.length === 0 ? (
-            <p className="p-2 text-xs text-muted-foreground">准备检测组合…</p>
-          ) : null}
-          {queued.length > 0 ? (
-            <details className="shrink-0 p-2 md:mt-2 md:border-t">
-              <summary className="cursor-pointer text-xs text-muted-foreground">
-                等待执行 · {queued.length} 个组合
-              </summary>
-              <ul className="mt-2 space-y-2 text-xs text-muted-foreground">
-                {queued.map((item) => (
-                  <li
-                    key={JSON.stringify([item.account_id, item.claimed_model])}
-                    className="space-y-1"
-                  >
-                    <span className="block wrap-anywhere">{text(item.account_name)}</span>
-                    <span className="block wrap-anywhere">{text(item.claimed_model)}</span>
-                  </li>
-                ))}
-              </ul>
-            </details>
-          ) : null}
-        </nav>
+      >
+        {!props.embedded || combinations.length + queued.length > 1 ? (
+          <nav
+            aria-label="检测组合"
+            className="flex max-h-32 min-h-0 shrink-0 gap-1 overflow-auto border-b bg-muted/20 p-2 md:block md:max-h-none md:w-60 md:space-y-1 md:border-r md:border-b-0"
+          >
+            <h3 className="sr-only px-2 py-1 text-xs font-medium text-muted-foreground md:not-sr-only">
+              检测组合
+            </h3>
+            {combinations.map((item) => (
+              <CombinationButton
+                key={combinationKey(item)}
+                item={item}
+                selected={item === selected}
+                onSelect={() => setSelectedKey(combinationKey(item))}
+              />
+            ))}
+            {combinations.length === 0 ? (
+              <p className="p-2 text-xs text-muted-foreground">准备检测组合…</p>
+            ) : null}
+            {queued.length > 0 ? (
+              <details className="shrink-0 p-2 md:mt-2 md:border-t">
+                <summary className="cursor-pointer text-xs text-muted-foreground">
+                  等待执行 · {queued.length} 个组合
+                </summary>
+                <ul className="mt-2 space-y-2 text-xs text-muted-foreground">
+                  {queued.map((item) => (
+                    <li
+                      key={JSON.stringify([item.account_id, item.claimed_model])}
+                      className="space-y-1"
+                    >
+                      <span className="block wrap-anywhere">{text(item.account_name)}</span>
+                      <span className="block wrap-anywhere">{text(item.claimed_model)}</span>
+                    </li>
+                  ))}
+                </ul>
+              </details>
+            ) : null}
+          </nav>
+        ) : null}
         <div
           role="region"
           aria-label="逐项检测过程"
           tabIndex={0}
-          className="min-h-0 min-w-0 flex-1 overflow-auto p-3 sm:p-4"
+          className={cn("min-h-0 min-w-0 flex-1", !props.embedded && "overflow-auto p-3 sm:p-4")}
         >
           {selected ? (
             <VerificationCombinationProgress
               key={combinationKey(selected)}
               result={selected.result}
               active={selected.active}
+              compact={props.embedded}
             />
           ) : (
             <TaskStartupState message={preparation} />

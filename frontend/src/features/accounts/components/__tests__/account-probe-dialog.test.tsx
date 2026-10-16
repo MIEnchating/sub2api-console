@@ -153,6 +153,7 @@ describe("账号探活弹窗", () => {
       { value: "stream", label: "流式请求" },
       { value: "animation", label: "动画测试" },
       { value: "candy", label: "糖果题测试" },
+      { value: "verification", label: "模型检测" },
     ]);
   });
 

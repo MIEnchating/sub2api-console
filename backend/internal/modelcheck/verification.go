@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/MIEnchating/sub2api-console/backend/internal/modelfingerprint"
 	"net/http"
 	"net/url"
 	"slices"
@@ -12,8 +13,16 @@ import (
 )
 
 func runVerification(ctx context.Context, directClient, oauthClient *http.Client, credential credentialResolution, input targetRequest) (map[string]any, error) {
+	publicIncompatibility := ""
+	if input.PublicReference {
+		if credential.oauth != nil {
+			publicIncompatibility = "当前 OAuth 请求不能复现公开参考要求的温度、系统提示与输出上限；未发送额外参考请求。请使用支持这些参数的 API 账号。"
+		} else {
+			input.publicPlan = modelfingerprint.Plan(input.Model)
+		}
+	}
 	report := VerificationReport{Version: verificationVersion, Evidence: []VerificationEvidence{}, Probes: []VerificationProbe{}}
-	report.Total = verificationProbeCount(input.Rounds, input.Fingerprint)
+	report.Total = verificationProbeCount(input.Rounds, input.Fingerprint, input.BehaviorFingerprint) + len(input.publicPlan)
 	report.Authenticity = VerificationDimension{Status: "inconclusive", Summary: "检测进行中，等待有效响应与来源证据。"}
 	source := "third_party"
 	if credential.oauth != nil {
@@ -24,6 +33,7 @@ func runVerification(ctx context.Context, directClient, oauthClient *http.Client
 	report.Evidence = append(report.Evidence, VerificationEvidence{ID: "source", Label: "请求来源", Status: "info", Detail: map[string]string{"third_party": "第三方接口；请求路径由账号配置决定。", "official_endpoint": "官方 API 地址；使用 HTTPS 且禁止重定向。", "official_oauth": "固定官方 OAuth 端点；未经过生产中转路径。"}[source]})
 	successful, capabilitySuccessful := 0, 0
 	report.CapabilityTotal = input.Rounds * 7
+	report.PublicReference = publicReferenceReport(input, nil, publicIncompatibility)
 	models := []string{}
 	started := time.Now()
 	for round, challenges := range input.Challenges {
@@ -31,93 +41,22 @@ func runVerification(ctx context.Context, directClient, oauthClient *http.Client
 			report.ProbePlan = append(report.ProbePlan, VerificationProbe{ID: challenge.id, Label: challenge.label, Round: round + 1, Prompt: challenge.prompt, Expected: challenge.expected, Status: "pending", Category: verificationCategory(challenge)})
 		}
 	}
-	for round := 1; round <= input.Rounds; round++ {
-		challenges := verificationPlannedRound(input.Challenges[round-1], round, input)
-		for _, challenge := range challenges {
-			if ctx.Err() != nil {
-				break
-			}
-			requestID, err := randomTaskID()
-			if err != nil {
-				return nil, err
-			}
-			row := VerificationProbe{ID: challenge.id, Label: challenge.label, Round: round, RequestID: requestID, Prompt: challenge.prompt, Expected: challenge.expected, Status: "error", Category: verificationCategory(challenge), Usage: &AnimationUsage{}}
-			trace := &verificationTransport{base: directClient.Transport}
-			direct := *directClient
-			direct.Transport = trace
-			oauth := *oauthClient
-			if credential.oauth != nil {
-				trace.base = oauthClient.Transport
-				oauth.Transport = trace
-			}
-			var sender reasoningSender
-			if credential.oauth != nil {
-				sender = oauthBundleSender{client: &oauth, credential: *credential.oauth, models: []string{input.Model}, slots: make(chan struct{}, 1), requestID: requestID, stream: true, usage: row.Usage}
-			} else {
-				value := credential.value
-				// A failed host must not silently change the path being verified.
-				value.FallbackBaseURL = ""
-				if value.Platform == "claude" {
-					value.Platform = "anthropic"
-				}
-				sender = directBundleSender{client: &direct, credential: value, requestID: requestID, stream: true, usage: row.Usage}
-			}
-			probeStarted := time.Now()
-			row.StartedAt = probeStarted.UTC().Format(time.RFC3339Nano)
-			current := row
-			current.Status, current.Usage = "running", nil
-			report.CurrentProbe = &current
-			if input.Progress != nil {
-				input.Progress(report)
-			}
-			answer, model, sendErr := sender.SendWithReasoning(ctx, input.AccountID, input.Model, challenge.prompt, input.TimeoutSeconds, "medium")
-			row.DurationMS = time.Since(probeStarted).Milliseconds()
-			row.Protocol, row.HTTPStatus, row.Attempts = trace.protocol, trace.status, trace.attempts
-			row.ResponseModel = model
-			if sendErr == nil && strings.TrimSpace(answer) == "" {
-				sendErr = fmt.Errorf("上游未返回有效文本")
-			}
-			if sendErr == nil && credential.value.Secret != "" && strings.Contains(answer, credential.value.Secret) {
-				sendErr = fmt.Errorf("上游回答包含敏感信息，已拒绝展示")
-			}
-			if sendErr != nil {
-				row.Error = safeCredentialError(sendErr)
-				row.ErrorCode = verificationErrorCode(row.Error, ctx, trace.status)
-				row.Error += verificationErrorAdvice(row.ErrorCode)
-			} else {
-				successful++
-				row.Answer, row.AnswerTruncated = precheckAnswer(answer)
-				row.ResponseModel = model
-				if model != "" && !slices.Contains(models, model) {
-					models = append(models, model)
-				}
-				if challenge.measurement {
-					row.Status = "observed"
-				} else {
-					capabilitySuccessful++
-					row.Status = "failed"
-					if verificationAnswerMatches(challenge, answer) {
-						row.Status = "passed"
-						report.Passed++
-					}
-				}
-			}
-			report.Probes = append(report.Probes, row)
-			report.CurrentProbe = nil
-			if input.Progress != nil {
-				input.Progress(report)
-			}
-			// Auth and rate-limit failures are operational. Do not hammer the endpoint
-			// with the remaining probes or count unexecuted probes as wrong answers.
-			if row.ErrorCode == "rate_limited" || row.ErrorCode == "unauthorized" || row.ErrorCode == "unsupported_request" {
-				break
-			}
+	if err := runVerificationProbes(ctx, directClient, oauthClient, credential, input, &report); err != nil {
+		return nil, err
+	}
+	for _, row := range report.Probes {
+		if row.Status == "error" {
+			continue
 		}
-		if ctx.Err() != nil || (len(report.Probes) > 0 && (report.Probes[len(report.Probes)-1].ErrorCode == "rate_limited" || report.Probes[len(report.Probes)-1].ErrorCode == "unauthorized" || report.Probes[len(report.Probes)-1].ErrorCode == "unsupported_request")) {
-			break
+		successful++
+		if row.ResponseModel != "" && !slices.Contains(models, row.ResponseModel) {
+			models = append(models, row.ResponseModel)
+		}
+		if row.Category == "capability" {
+			capabilitySuccessful++
 		}
 	}
-	report.Total = verificationProbeCount(input.Rounds, input.Fingerprint)
+	report.Total = verificationProbeCount(input.Rounds, input.Fingerprint, input.BehaviorFingerprint) + len(input.publicPlan)
 	report.Capability = VerificationDimension{Status: "inconclusive", Summary: "检测未完整完成，请查看请求状态后重试；失败请求不计为答错。"}
 	wrong := capabilitySuccessful - report.Passed
 	if wrong > 0 {
@@ -141,6 +80,20 @@ func runVerification(ctx context.Context, directClient, oauthClient *http.Client
 	report.Evidence = append(report.Evidence, verificationProtocolEvidence(report.Probes), verificationRepeatEvidence(report.Probes))
 	report.Evidence = append(report.Evidence, VerificationEvidence{ID: "identity_limit", Label: "证据边界", Status: "unknown", Detail: "官方来源只确认本次请求路径；能力与指纹检查不能证明具体模型权重。签名字段存在、自报身份和答题通过均不是身份认证。"})
 	report.Authenticity = verificationAuthenticity(source, successful, modelStatus)
+	report.BehaviorFingerprint = verificationBehaviorReport(report.Probes, input.BehaviorFingerprint)
+	if report.BehaviorFingerprint != nil {
+		report.BehaviorFingerprint.Parameters = BehaviorSamplingParameters{Stream: true, Temperature: "provider_default", ReasoningEffort: "medium", MaxOutputTokens: 4096}
+		report.BehaviorFingerprint.Profile += ":" + credential.value.Platform
+		if credential.value.Platform == "gemini" {
+			report.BehaviorFingerprint.Parameters.ReasoningEffort = "provider_default"
+		}
+		if credential.oauth != nil {
+			report.BehaviorFingerprint.Profile = "verification-medium-v1:oauth"
+			report.BehaviorFingerprint.Parameters.MaxOutputTokens = 0
+			report.BehaviorFingerprint.Parameters.Instructions = oauthCheckInstructions
+		}
+	}
+	report.PublicReference = publicReferenceReport(input, report.Probes, publicIncompatibility)
 	report.Fingerprint = verificationFingerprintReport(report.Probes, input.Fingerprint)
 	report.Evidence = append(report.Evidence, fingerprintEvidence(report.Fingerprint))
 	verdict := "INCONCLUSIVE"
@@ -150,6 +103,13 @@ func runVerification(ctx context.Context, directClient, oauthClient *http.Client
 		verdict = "ANOMALY"
 	} else if successful == report.Total {
 		verdict = "NO_ANOMALIES"
+	}
+	if report.PublicReference != nil && successful > 0 {
+		if report.PublicReference.Status == "mismatch" {
+			verdict = "ANOMALY"
+		} else if report.PublicReference.Status != "matched" && verdict == "NO_ANOMALIES" {
+			verdict = "INCONCLUSIVE"
+		}
 	}
 	raw, _ := json.Marshal(report)
 	result := map[string]any{}
@@ -225,7 +185,7 @@ func verificationErrorAdvice(code string) string {
 	case "unauthorized":
 		return "；已停止本组合，请检查授权、余额及模型权限后重新检测。"
 	case "unsupported_request":
-		return "；已停止本组合，请核对接口、模型及 medium 思考等级是否受支持。"
+		return "；已停止本组合，请核对接口、模型及本项检测参数是否受支持。"
 	case "timeout":
 		return "；请检查接口状态或调整请求超时后重新检测。"
 	case "empty_response", "invalid_response", "incomplete":
@@ -242,9 +202,21 @@ func verificationPlannedRound(challenges []verificationChallenge, round int, inp
 	if input.Fingerprint && round == input.Rounds {
 		result = append(result, verificationFingerprintChallenges()...)
 	}
+	if input.BehaviorFingerprint && round == input.Rounds {
+		result = append(result, verificationBehaviorChallenges()...)
+	}
+	if input.PublicReference && round == input.Rounds {
+		result = append(result, publicReferenceChallenges(input.publicPlan)...)
+	}
 	return result
 }
 func verificationCategory(challenge verificationChallenge) string {
+	if challenge.public != nil {
+		return "public_reference"
+	}
+	if challenge.behavior {
+		return "behavior_fingerprint"
+	}
 	if challenge.measurement {
 		return "fingerprint"
 	}

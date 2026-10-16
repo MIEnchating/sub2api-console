@@ -51,8 +51,11 @@ func verificationFingerprintChallenges() []verificationChallenge {
 	return result
 }
 
-func verificationProbeCount(rounds int, fingerprint bool) int {
+func verificationProbeCount(rounds int, fingerprint bool, behavior ...bool) int {
 	count := rounds * 7
+	if len(behavior) > 0 && behavior[0] {
+		count += behaviorRequestCount
+	}
 	if fingerprint {
 		count += 10
 	}

@@ -547,11 +547,13 @@ type autoInspectionRequest struct {
 }
 
 type modelCheckRequest struct {
-	Fingerprint    bool     `json:"fingerprint"`
-	AccountIDs     []string `json:"account_ids" binding:"required,min=1,max=20,dive,required,max=64"`
-	Models         []string `json:"models" binding:"required,min=1,max=20,dive,required,max=256"`
-	Rounds         int      `json:"rounds" binding:"min=0,max=3"`
-	TimeoutSeconds int      `json:"timeout_seconds" binding:"min=0,max=120"`
+	Fingerprint         bool     `json:"fingerprint"`
+	BehaviorFingerprint bool     `json:"behavior_fingerprint"`
+	PublicReference     bool     `json:"public_reference"`
+	AccountIDs          []string `json:"account_ids" binding:"required,min=1,max=20,dive,required,max=64"`
+	Models              []string `json:"models" binding:"required,min=1,max=20,dive,required,max=256"`
+	Rounds              int      `json:"rounds" binding:"min=0,max=3"`
+	TimeoutSeconds      int      `json:"timeout_seconds" binding:"min=0,max=120"`
 }
 
 type logCleanupRequest struct {
@@ -2724,8 +2726,8 @@ func (s *Server) onboardingProbe(c *gin.Context) {
 	if !ok {
 		return
 	}
-	if mode == "animation" || mode == "candy" {
-		writeError(c, http.StatusUnprocessableEntity, "动画与糖果题测试请通过探活后台任务启动")
+	if mode == "animation" || mode == "candy" || (mode == "verification" || mode == "fingerprint" || mode == "reference") {
+		writeError(c, http.StatusUnprocessableEntity, "动画、糖果题与模型检测请通过探活后台任务启动")
 		return
 	}
 	result, err := s.onboarding.Probe(c.Request.Context(), host, groupID, model, mode)
@@ -2801,8 +2803,8 @@ func onboardingProbePayload(c *gin.Context, requireModel bool) (string, string, 
 		if raw, present := payload["mode"]; present {
 			value, ok := raw.(string)
 			mode = strings.ToLower(strings.TrimSpace(value))
-			if !ok || (mode != "stream" && mode != "default" && mode != "animation" && mode != "candy") {
-				writeError(c, http.StatusUnprocessableEntity, "探活模式必须是 stream、default、animation 或 candy")
+			if !ok || (mode != "stream" && mode != "default" && mode != "animation" && mode != "candy" && mode != "verification" && mode != "fingerprint" && mode != "reference") {
+				writeError(c, http.StatusUnprocessableEntity, "探活模式必须是 stream、default、animation、candy、verification、fingerprint 或 reference")
 				return "", "", "", "", "", false
 			}
 		}
@@ -4812,8 +4814,8 @@ func (s *Server) runModelCheck(c *gin.Context) {
 		return
 	}
 	task, err := s.modelChecks.Enqueue(c.Request.Context(), modelcheck.Request{
-		Fingerprint: payload.Fingerprint,
-		AccountIDs:  payload.AccountIDs, Models: payload.Models,
+		Fingerprint: payload.Fingerprint, BehaviorFingerprint: payload.BehaviorFingerprint, PublicReference: payload.PublicReference,
+		AccountIDs: payload.AccountIDs, Models: payload.Models,
 		Rounds: payload.Rounds, TimeoutSeconds: payload.TimeoutSeconds,
 	})
 	if err != nil {

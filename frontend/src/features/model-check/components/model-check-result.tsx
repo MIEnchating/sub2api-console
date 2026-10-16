@@ -197,7 +197,7 @@ function ResultMetrics(props: { result: ResultRecord }) {
   );
 }
 
-export function ModelCheckResult(props: { task: Task }) {
+export function ModelCheckResult(props: { task: Task; embedded?: boolean }) {
   const rows = resultRows(props.task.result.tests);
   const pagination = useClientPagination(rows);
 
@@ -206,10 +206,17 @@ export function ModelCheckResult(props: { task: Task }) {
   }, [pagination.setCurrentPage, props.task.id]);
 
   if (["queued", "running", "waiting_input"].includes(props.task.status)) {
-    return <LiveModelCheckResult key={props.task.id} task={props.task} rows={rows} />;
+    return (
+      <LiveModelCheckResult
+        key={props.task.id}
+        task={props.task}
+        rows={rows}
+        embedded={props.embedded}
+      />
+    );
   }
   if (rows.length > 0 && rows.every((row) => row.checker === "verification")) {
-    return <VerificationReport task={props.task} results={rows} />;
+    return <VerificationReport task={props.task} results={rows} embedded={props.embedded} />;
   }
   if (props.task.status === "cancelled" && rows.length === 0) {
     return (

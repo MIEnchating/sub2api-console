@@ -5,15 +5,18 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"github.com/MIEnchating/sub2api-console/backend/internal/modelfingerprint"
 	"math/big"
 	"strconv"
 	"strings"
 )
 
 type verificationChallenge struct {
+	public                      *modelfingerprint.Probe
 	id, label, prompt, expected string
 	jsonOutput                  bool
 	measurement                 bool
+	behavior                    bool
 }
 
 func verificationChallenges() ([]verificationChallenge, error) {

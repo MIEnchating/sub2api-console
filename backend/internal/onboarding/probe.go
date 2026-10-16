@@ -34,6 +34,7 @@ const (
 )
 
 type ProbeResult struct {
+	Verification map[string]any              `json:"-"`
 	Animation    *modelcheck.AnimationResult `json:"animation,omitempty"`
 	Status       string                      `json:"status"`
 	Message      string                      `json:"message"`
@@ -163,10 +164,12 @@ func (s *Service) Probe(ctx context.Context, host, groupID, model string, modes 
 		result, requestErr = s.runProbeAnimation(guardedCtx, credential, model)
 	} else if len(modes) > 0 && modes[0] == "candy" {
 		result, requestErr = s.runProbeCandy(guardedCtx, credential, model)
+	} else if len(modes) > 0 && (modes[0] == "verification" || modes[0] == "fingerprint" || modes[0] == "reference") {
+		result, requestErr = s.runProbeVerification(guardedCtx, credential, model, modes[0] == "fingerprint", modes[0] == "reference" || modes[0] == "verification")
 	} else {
 		result, requestErr = runGatewayProbe(guardedCtx, credential.auth.BaseURL, credential.key.Secret, model, credential.candidate.Platform, modes...)
 	}
-	if requestErr == nil && result.Status != "passed" {
+	if requestErr == nil && result.Status != "passed" && result.Status != "completed" {
 		finishRequest(errors.New(result.Message))
 	} else {
 		finishRequest(requestErr)

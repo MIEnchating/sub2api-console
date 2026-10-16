@@ -43,3 +43,15 @@ it("历史快照没有检测计划时保留已记录的回答且不生成等待�
     completed,
   ]);
 });
+
+it("并发快照展示所有运行项，空数组不复活旧单项状态", () => {
+  const first = { id: "one", round: 1, status: "running" };
+  const second = { id: "two", round: 1, status: "running" };
+  expect(
+    verificationProgressProbes({ current_probes: [first, second], current_probe: first }, true),
+  ).toEqual([first, second]);
+  expect(verificationProgressProbes({ current_probes: [], current_probe: first }, true)).toEqual(
+    [],
+  );
+  expect(verificationProgressProbes({ current_probes: [first, second] }, false)).toEqual([]);
+});

@@ -1,3 +1,5 @@
+import { VerificationPublicReference } from "./verification-public-reference";
+import { VerificationBehaviorDetails } from "./verification-behavior-details";
 import type { ReactElement } from "react";
 import { VerificationFingerprintDiagnostics } from "./verification-fingerprint-diagnostics";
 import { VerificationStateBadge } from "./verification-state";
@@ -22,6 +24,8 @@ export function VerificationFingerprintDetails(props: {
   const comparisons = rows(props.result.reference_comparisons);
   return (
     <>
+      <VerificationPublicReference result={props.result} />
+      <VerificationBehaviorDetails result={props.result} />
       {fingerprint.status ? (
         <section aria-label="分词指纹采样" className="space-y-2 rounded-md border p-3">
           <h3 className="font-medium">

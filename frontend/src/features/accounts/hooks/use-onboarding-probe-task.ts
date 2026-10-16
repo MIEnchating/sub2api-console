@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { z } from "zod";
 import { api, type OnboardingProbeMode, type Task } from "@/api";
 import { taskIsTerminal, taskPollInterval } from "@/lib/task-state";
@@ -17,7 +17,7 @@ const probeStepsSchema = z.array(
 export type ProbeStep = z.infer<typeof probeStepsSchema>[number];
 export const probeTaskResultSchema = z.object({
   animation: animationResultSchema.optional(),
-  status: z.enum(["passed", "failed", "skipped"]),
+  status: z.enum(["passed", "completed", "failed", "skipped"]),
   message: z.string(),
   request_model: z.string(),
   actual_model: z.string(),
@@ -29,6 +29,7 @@ export const probeTaskResultSchema = z.object({
 });
 
 export function useOnboardingProbeTask(host: string, groupId: string) {
+  const queryClient = useQueryClient();
   const [taskId, setTaskId] = useState<string | null>(null);
   const [history, setHistory] = useState<ProbeStep[]>([]);
   const [isStarting, setIsStarting] = useState(false);
@@ -45,6 +46,7 @@ export function useOnboardingProbeTask(host: string, groupId: string) {
     queryKey: ["onboarding-probe-task", taskId],
     queryFn: ({ signal }) => api.task(taskId!, signal),
     enabled: taskId !== null,
+    refetchIntervalInBackground: true,
     refetchInterval: (value) => taskPollInterval(value, 250),
   });
   useEffect(() => {
@@ -93,6 +95,13 @@ export function useOnboardingProbeTask(host: string, groupId: string) {
       if (!mounted.current) {
         await api.cancelTask(task.id);
         throw new Error("探活弹窗已关闭");
+      }
+      // A fast task may already be terminal in the create response. Publish
+      // that authoritative result and settle without waiting for another GET.
+      queryClient.setQueryData(["onboarding-probe-task", task.id], task);
+      if (taskIsTerminal(task)) {
+        setTaskId(task.id);
+        return task;
       }
       const finished = new Promise<Task>((resolve) => {
         complete.current = resolve;

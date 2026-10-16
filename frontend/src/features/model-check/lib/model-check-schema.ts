@@ -3,6 +3,8 @@ import { z } from "zod";
 export const modelCheckSchema = z
   .object({
     fingerprint: z.boolean().optional(),
+    behavior_fingerprint: z.boolean().optional(),
+    public_reference: z.boolean().optional(),
     account_ids: z
       .array(z.string().regex(/^[1-9]\d*$/))
       .min(1, "请选择至少一个账号")

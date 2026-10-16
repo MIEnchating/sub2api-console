@@ -28,11 +28,12 @@ type directCredential struct {
 }
 
 type directBundleSender struct {
-	stream     bool
-	client     *http.Client
-	credential directCredential
-	requestID  string
-	usage      *AnimationUsage
+	allowTokenLimit bool
+	stream          bool
+	client          *http.Client
+	credential      directCredential
+	requestID       string
+	usage           *AnimationUsage
 }
 
 func (sender directBundleSender) Send(ctx context.Context, _ string, model, prompt string, timeoutSeconds int) (string, string, error) {
@@ -157,12 +158,12 @@ func (sender directBundleSender) sendRequest(ctx context.Context, baseURL string
 	if status := stringField(result, "status"); status != "" && status != "completed" {
 		return nil, response.StatusCode, nil, visibleRequestError{message: "上游检测响应未完整生成，请稍后重试"}
 	}
-	if stringField(result, "stop_reason") == "max_tokens" {
+	if stringField(result, "stop_reason") == "max_tokens" && !sender.allowTokenLimit {
 		return nil, response.StatusCode, nil, visibleRequestError{message: "上游检测响应被截断，请检查模型后重试"}
 	}
 	if choices, ok := result["choices"].([]any); ok && len(choices) > 0 {
 		choice, _ := choices[0].(map[string]any)
-		if reason := stringField(choice, "finish_reason"); reason == "length" || reason == "content_filter" {
+		if reason := stringField(choice, "finish_reason"); (reason == "length" && !sender.allowTokenLimit) || reason == "content_filter" {
 			return nil, response.StatusCode, nil, visibleRequestError{message: "上游检测响应被截断或拦截，请检查模型后重试"}
 		}
 	}

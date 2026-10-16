@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/MIEnchating/sub2api-console/backend/internal/animationquality"
+	"github.com/MIEnchating/sub2api-console/backend/internal/modelfingerprint"
 	"log/slog"
 	"maps"
 	"net/http"
@@ -64,17 +65,20 @@ type UpstreamAuthResolver interface {
 }
 
 type Request struct {
-	Fingerprint    bool
-	AccountIDs     []string
-	Models         []string
-	Rounds         int
-	TimeoutSeconds int
+	PublicReference     bool
+	BehaviorFingerprint bool
+	Fingerprint         bool
+	AccountIDs          []string
+	Models              []string
+	Rounds              int
+	TimeoutSeconds      int
 }
 
 type Capabilities struct {
-	AstraModels     []string `json:"astra_models"`
-	ClaudeStandards []string `json:"claude_standards"`
-	SolModels       []string `json:"sol_models"`
+	PublicReferences []modelfingerprint.CatalogEntry `json:"public_references"`
+	AstraModels      []string                        `json:"astra_models"`
+	ClaudeStandards  []string                        `json:"claude_standards"`
+	SolModels        []string                        `json:"sol_models"`
 }
 
 type AccountCheckStatus struct {
@@ -191,7 +195,7 @@ func (s *Service) Capabilities() Capabilities {
 		standards = append(standards, standard)
 	}
 	sort.Strings(standards)
-	return Capabilities{ClaudeStandards: standards, SolModels: append([]string(nil), s.solProfile.Models...), AstraModels: []string{astraModel}}
+	return Capabilities{PublicReferences: modelfingerprint.Catalog(), ClaudeStandards: standards, SolModels: append([]string(nil), s.solProfile.Models...), AstraModels: []string{astraModel}}
 }
 
 func (s *Service) AccountStatuses(ctx context.Context) ([]AccountCheckStatus, error) {
@@ -324,6 +328,10 @@ func (s *Service) prepare(ctx context.Context, request Request) (preparedRun, er
 		return preparedRun{}, err
 	}
 	profileVersion, profileFingerprint = verificationVersion, verificationVersion
+	if request.PublicReference {
+		profileVersion += "+" + modelfingerprint.Version
+		profileFingerprint = modelfingerprint.Digest()
+	}
 	for _, account := range selected {
 		if account.AccountType == "oauth" {
 			for _, model := range request.Models {
@@ -515,8 +523,8 @@ func (s *Service) execute(parent context.Context, task taskstore.Task, prepared 
 					credential := credentials[current.account.ID]
 					input := targetRequest{
 						Challenges:  challenges,
-						Fingerprint: prepared.request.Fingerprint,
-						AccountID:   current.account.ID, AccountName: current.account.Name,
+						Fingerprint: prepared.request.Fingerprint, BehaviorFingerprint: prepared.request.BehaviorFingerprint, PublicReference: prepared.request.PublicReference,
+						AccountID: current.account.ID, AccountName: current.account.Name,
 						Model: current.model, Rounds: prepared.request.Rounds,
 						TimeoutSeconds: prepared.request.TimeoutSeconds,
 					}
@@ -563,7 +571,9 @@ func (s *Service) execute(parent context.Context, task taskstore.Task, prepared 
 		if event.progress {
 			active[event.index] = event.result
 			task.Message = fmt.Sprintf("账号 %s：已完成 %v/%v 项检测", event.result["account_name"], event.result["completed_probes"], event.result["planned_probes"])
-			if current, ok := event.result["current_probe"].(map[string]any); ok {
+			if current, ok := event.result["current_probes"].([]any); ok && len(current) > 1 {
+				task.Message = fmt.Sprintf("账号 %s · %s：%d 项检测正在并发执行", event.result["account_name"], event.result["claimed_model"], len(current))
+			} else if current, ok := event.result["current_probe"].(map[string]any); ok {
 				task.Message = fmt.Sprintf("账号 %s · %s：第 %v 轮「%v」等待回复", event.result["account_name"], event.result["claimed_model"], current["round"], current["label"])
 			}
 		} else if event.started {
@@ -576,13 +586,23 @@ func (s *Service) execute(parent context.Context, task taskstore.Task, prepared 
 			completed++
 			task.Message = fmt.Sprintf("已完成 %d/%d 个账号模型组合", completed, len(combinations))
 		}
-		finishedUnits := completed * verificationProbeCount(prepared.request.Rounds, prepared.request.Fingerprint)
+		finishedUnits, plannedUnits := 0, 0
+		for index, combination := range combinations {
+			count := verificationProbeCount(prepared.request.Rounds, prepared.request.Fingerprint, prepared.request.BehaviorFingerprint)
+			if credentials[combination.account.ID].oauth == nil {
+				count += publicReferenceCount(combination.model, prepared.request.PublicReference)
+			}
+			plannedUnits += count
+			if results[index] != nil {
+				finishedUnits += count
+			}
+		}
 		for _, item := range active {
 			if count, ok := item["completed_probes"].(int); ok {
 				finishedUnits += count
 			}
 		}
-		task.Progress = 5 + finishedUnits*90/(len(combinations)*verificationProbeCount(prepared.request.Rounds, prepared.request.Fingerprint))
+		task.Progress = 5 + finishedUnits*90/max(1, plannedUnits)
 		queued := make([]map[string]any, 0)
 		for index, combination := range combinations {
 			if results[index] == nil && active[index] == nil {

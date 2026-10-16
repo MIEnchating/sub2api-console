@@ -62,10 +62,13 @@ func (s *Service) EnqueueProbeWithPrompt(ctx context.Context, action, host, grou
 	if action == "probe" && (strings.TrimSpace(model) == "" || len(model) > 255) {
 		return taskstore.Task{}, errors.New("请选择有效的测试模型")
 	}
-	if action == "probe" && mode != "" && mode != "default" && mode != "stream" && mode != "animation" && mode != "candy" {
+	if action == "probe" && mode != "" && mode != "default" && mode != "stream" && mode != "animation" && mode != "candy" && mode != "verification" && mode != "fingerprint" && mode != "reference" {
 		return taskstore.Task{}, errors.New("不支持的探活模式")
 	}
 	animationPrompt := ""
+	if action == "probe" && (mode == "verification" || mode == "fingerprint" || mode == "reference") && s.animations == nil {
+		return taskstore.Task{}, errors.New("模型检测服务尚未就绪，请稍后重试")
+	}
 	if action == "probe" && (mode == "animation" || mode == "candy") {
 		if s.animations == nil {
 			return taskstore.Task{}, errors.New("模型测试服务尚未就绪，请稍后重试")
@@ -100,14 +103,14 @@ func (s *Service) executeProbeTask(parent context.Context, task taskstore.Task, 
 	// Copy each snapshot so task stores and readers never share a mutable map.
 	task.Result = map[string]any{"host": host, "group_id": groupID}
 	var saveErr error
-	report := probeReporter(func(stage, status string) {
+	var verification map[string]any
+	persist := func(stage string) {
 		now := time.Now().UTC().Format(time.RFC3339Nano)
-		if status == "running" || status == "skipped" {
-			steps = append(steps, ProbeStep{Stage: stage, Status: status, StartedAt: now})
-		} else if len(steps) > 0 && steps[len(steps)-1].Stage == stage {
-			steps[len(steps)-1].Status, steps[len(steps)-1].FinishedAt = status, now
-		}
 		task.Result = map[string]any{"host": host, "group_id": groupID, "request_id": task.ID, "stage": stage, "steps": append([]ProbeStep{}, steps...)}
+		if verification != nil {
+			task.Result["active"] = map[string]any{"verification": verification}
+			task.Result["total"], task.Result["completed"], task.Result["phase"] = 1, 0, "testing"
+		}
 		task.Status, task.UpdatedAt = "running", now
 		persistCtx, done := context.WithTimeout(context.Background(), 5*time.Second)
 		defer done()
@@ -115,8 +118,23 @@ func (s *Service) executeProbeTask(parent context.Context, task taskstore.Task, 
 			saveErr = err
 			cancel()
 		}
+	}
+	report := probeReporter(func(stage, status string) {
+		now := time.Now().UTC().Format(time.RFC3339Nano)
+		if status == "running" || status == "skipped" {
+			steps = append(steps, ProbeStep{Stage: stage, Status: status, StartedAt: now})
+		} else if len(steps) > 0 && steps[len(steps)-1].Stage == stage {
+			steps[len(steps)-1].Status, steps[len(steps)-1].FinishedAt = status, now
+		}
+		persist(stage)
 	})
 	ctx = context.WithValue(ctx, probeReporterKey{}, report)
+	ctx = context.WithValue(ctx, probeVerificationReporterKey{}, probeVerificationReporter(func(value map[string]any, completed, total int) {
+		verification = value
+		task.Progress = completed * 95 / max(1, total)
+		// Publish a fresh snapshot without appending duplicate request stages.
+		persist("verification")
+	}))
 	var err error
 	var models []string
 	var result ProbeResult
@@ -140,14 +158,22 @@ func (s *Service) executeProbeTask(parent context.Context, task taskstore.Task, 
 	if result.RequestModel != "" {
 		task.Result["probe_result"] = result
 	}
+	if result.Verification != nil {
+		task.Result["tests"] = []map[string]any{result.Verification}
+		task.Result["total"], task.Result["completed"] = 1, 1
+		task.Progress = 100
+	}
 	task.Status, task.Message = "succeeded", "探活操作已完成"
 	if err != nil {
 		task.Status, task.Message = "failed", redact.Secrets(safeError(err))
-	} else if action == "probe" && result.Status != "passed" {
+	} else if action == "probe" && result.Status != "passed" && result.Status != "completed" {
 		task.Status, task.Message = "failed", result.Message
 	}
 	if ctx.Err() != nil {
 		task.Status, task.Message = "cancelled", "探活已取消"
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			task.Status, task.Message = "failed", "探活任务超时，已保留完成的结果；请缩小检测范围或检查上游响应速度后重试"
+		}
 		for _, step := range steps {
 			if (step.Stage == "cleanup_key" || step.Stage == "reconcile_key") && step.Status == "failed" {
 				task.Status, task.Message = "failed", "探活已取消，但临时 Key 清理失败，请重试清理"

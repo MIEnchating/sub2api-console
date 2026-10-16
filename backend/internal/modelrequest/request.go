@@ -25,6 +25,7 @@ const (
 // Parameters are shared by all generation features. Stream controls both the
 // wire protocol and timeout policy; it is deliberately not a UI setting.
 type Parameters struct {
+	Temperature     *float64
 	Model           string
 	Prompt          string
 	Stream          bool

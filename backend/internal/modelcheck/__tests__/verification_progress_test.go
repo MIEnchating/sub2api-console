@@ -92,7 +92,7 @@ func TestVerificationProgressIncludesCurrentProbeAndCompletedEvidence(t *testing
 	if active.Current == nil || active.Current.ID != "constraints" || active.Current.Status != "running" || active.Current.RequestID == "" || active.Current.Prompt == "" || active.Current.StartedAt == "" {
 		t.Fatalf("current probe incomplete: %+v", active.Current)
 	}
-	if active.Completed != 1 || len(active.Probes) != 1 || active.Probes[0].Answer != "**21**" || len(active.Plan) != 7 {
+	if active.Completed < 1 || len(active.Probes) < 1 || active.Probes[0].Answer != "**21**" || len(active.Plan) != 7 {
 		t.Fatalf("missing completed evidence or plan: %+v", active)
 	}
 	if snapshot.Progress <= 5 || snapshot.Progress >= 50 {

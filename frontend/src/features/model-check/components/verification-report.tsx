@@ -1,10 +1,11 @@
 import { CircleHelp, XCircle } from "lucide-react";
 import { useEffect, type ReactElement } from "react";
 import type { Task } from "@/api";
+import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { DataTablePagination } from "@/components/data-table/pagination";
 import { useClientPagination } from "@/hooks/use-client-pagination";
-import { verificationIdentityExplanation } from "../constants";
+import { verificationIdentityExplanation, verificationBehaviorLabels } from "../constants";
 import {
   verificationNumber as number,
   verificationRecord as record,
@@ -12,6 +13,7 @@ import {
   verificationText as text,
   type VerificationRecord,
 } from "../lib/verification-progress";
+import { VerificationInlineReport } from "./verification-inline-report";
 import { VerificationResult } from "./verification-result";
 import {
   VerificationCapabilityStatus,
@@ -22,11 +24,13 @@ import {
 export function VerificationReport(props: {
   task: Task;
   results: VerificationRecord[];
+  embedded?: boolean;
 }): ReactElement {
   const pagination = useClientPagination(props.results);
   useEffect(() => {
     pagination.setCurrentPage(1);
   }, [pagination.setCurrentPage, props.task.id]);
+  if (props.embedded) return <VerificationInlineReport task={props.task} results={props.results} />;
   const passed = props.results.filter(
     (result) => record(result.capability).status === "passed",
   ).length;
@@ -37,7 +41,10 @@ export function VerificationReport(props: {
   if (props.task.status === "cancelled") heading = "检测已取消";
   else if (props.task.status === "failed") heading = "检测失败";
   return (
-    <div className="flex h-full min-h-0 min-w-0 flex-col gap-3" data-testid="model-check-result">
+    <div
+      className={cn("flex min-h-0 min-w-0 flex-col gap-3", !props.embedded && "h-full")}
+      data-testid="model-check-result"
+    >
       <div className="shrink-0 space-y-3">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <p className="font-medium">
@@ -73,7 +80,7 @@ export function VerificationReport(props: {
       </div>
       <section
         aria-label="账号模型检测结果"
-        className="min-h-0 flex-1 overflow-auto rounded-md border"
+        className={cn("min-h-0 rounded-md border", !props.embedded && "flex-1 overflow-auto")}
       >
         {pagination.visibleItems.map((result, index) => (
           <article
@@ -101,6 +108,15 @@ export function VerificationReport(props: {
                 <VerificationIdentityStatus result={result} />
               </div>
               <VerificationIdentitySummary result={result} />
+              {record(result.behavior_fingerprint).version ? (
+                <p className="text-xs text-muted-foreground">
+                  行为指纹：
+                  {verificationBehaviorLabels[text(record(result.behavior_fingerprint).status)] ??
+                    "无法判定"}{" "}
+                  · 有效 {number(record(result.behavior_fingerprint).valid) ?? 0}/
+                  {number(record(result.behavior_fingerprint).planned) ?? 200}
+                </p>
+              ) : null}
               {rows(result.evidence).some((item) => item.status === "warning") ? (
                 <Badge variant="warning">有待核对证据</Badge>
               ) : null}

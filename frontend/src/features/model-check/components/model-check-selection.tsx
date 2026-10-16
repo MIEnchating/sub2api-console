@@ -44,6 +44,8 @@ import { focusWithoutScroll } from "@/components/ui/dropdown-search-focus";
 
 export type ModelCheckSelectionProps = {
   fingerprint?: boolean;
+  publicReferenceRequests?: number;
+  behaviorFingerprint?: boolean;
   onViewResult?: () => void;
   onViewPreviousResult?: () => void;
   accounts: AccountStatus[];
@@ -579,9 +581,18 @@ function MatrixPanel(props: ModelCheckSelectionProps) {
           </div>
         </div>
         <p className="text-muted-foreground mb-3 text-xs">
-          计划 {props.combinationCount * (props.rounds * 7 + (props.fingerprint ? 10 : 0))}{" "}
+          计划{" "}
+          {props.combinationCount *
+            (props.rounds * 7 +
+              (props.fingerprint ? 10 : 0) +
+              (props.behaviorFingerprint ? 200 : 0)) +
+            (props.publicReferenceRequests ?? 0)}{" "}
           项检测（每组合 {props.rounds * 7} 项能力题{props.fingerprint ? " + 10 项指纹采样" : ""}
-          ）；每项通常 1 次请求，协议回退时最多 2
+          {props.behaviorFingerprint ? " + 200 项行为采样" : ""}）
+          {props.publicReferenceRequests
+            ? `，其中公开参考共 ${props.publicReferenceRequests} 项`
+            : ""}
+          ；每项通常 1 次请求，协议回退时最多 2
           次，按上游用量计费。同一账号依次检测，不自动重试失败请求。
         </p>
         <FieldError message={props.selectionError} className="mb-2" />

@@ -662,7 +662,7 @@ export type OnboardingContext = {
 
 export type ProbeResult = {
   animation?: AnimationResult;
-  status: "passed" | "failed" | "skipped";
+  status: "passed" | "completed" | "failed" | "skipped";
   message: string;
   request_model: string;
   actual_model: string;
@@ -681,7 +681,14 @@ export type AnimationPromptSettings = {
   default_id: string;
 };
 
-export type OnboardingProbeMode = "stream" | "default" | "animation" | "candy";
+export type OnboardingProbeMode =
+  | "stream"
+  | "default"
+  | "animation"
+  | "candy"
+  | "verification"
+  | "fingerprint"
+  | "reference";
 
 export type OnboardingRequest = {
   host: string;
@@ -1789,7 +1796,16 @@ export type AnimationSchedule = {
   last_error?: string;
 };
 
+export type PublicReferenceProfile = {
+  model: string;
+  aliases: string[];
+  requests: number;
+  methods: string[];
+  unavailable?: string;
+};
+
 export type ModelCheckCapabilities = {
+  public_references?: PublicReferenceProfile[];
   claude_standards: string[];
   sol_models: string[];
   astra_models?: string[];
@@ -1818,6 +1834,8 @@ export type AccountQualityStatistics = {
 };
 
 export type ModelCheckRequest = {
+  public_reference?: boolean;
+  behavior_fingerprint?: boolean;
   fingerprint?: boolean;
   account_ids: string[];
   models: string[];

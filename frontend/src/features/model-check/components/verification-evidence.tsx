@@ -1,9 +1,9 @@
 import { useState, type ReactElement } from "react";
 import { CircleHelp } from "lucide-react";
-import { VerificationStateIcon } from "./verification-state";
+import { VerificationProbeNavigation } from "./verification-probe-navigation";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { verificationIdentityExplanation, verificationProbeLabels } from "../constants";
+import { verificationIdentityExplanation } from "../constants";
 import {
   verificationNumber as number,
   verificationRecord as record,
@@ -24,10 +24,11 @@ export function VerificationEvidence(props: { result: VerificationRecord }): Rea
   const [selected, setSelected] = useState(0);
   const probes = rows(props.result.probes);
   const current = probes[selected] ?? probes[0];
+  const failedRequests = probes.filter((probe) => probe.status === "error");
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-col gap-3">
-      <div className="shrink-0 space-y-2">
-        <p className="text-sm font-medium wrap-anywhere">
+      <div className="shrink-0 space-y-3">
+        <p className="text-base font-semibold wrap-anywhere">
           {text(props.result.account_name)}
           {props.result.account_name ? " · " : ""}
           {text(props.result.claimed_model)}
@@ -40,8 +41,22 @@ export function VerificationEvidence(props: { result: VerificationRecord }): Rea
             {number(props.result.passed) ?? "—"} 项
           </span>
         </div>
+        {failedRequests.length > 0 ? (
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge variant="destructive">请求失败 {failedRequests.length} 项</Badge>
+            <Button
+              variant="ghost"
+              onClick={() => {
+                setSelected(probes.findIndex((probe) => probe.status === "error"));
+                setView("probes");
+              }}
+            >
+              查看失败项
+            </Button>
+          </div>
+        ) : null}
         <VerificationIdentitySummary result={props.result} />
-        <div className="flex gap-2" role="group" aria-label="证据视图">
+        <div className="flex gap-1 border-b pb-2" role="group" aria-label="证据视图">
           <Button
             variant={view === "probes" ? "secondary" : "ghost"}
             aria-pressed={view === "probes"}
@@ -60,32 +75,7 @@ export function VerificationEvidence(props: { result: VerificationRecord }): Rea
       </div>
       {view === "probes" ? (
         <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-md border md:flex-row">
-          <nav
-            aria-label="检测项"
-            className="bg-muted/20 flex shrink-0 gap-1 overflow-x-auto border-b p-2 md:w-56 md:flex-col md:overflow-x-hidden md:overflow-y-auto md:border-r md:border-b-0"
-          >
-            {probes.map((probe, index) => (
-              <Button
-                key={text(probe.request_id) || index}
-                variant="ghost"
-                aria-pressed={selected === index}
-                onClick={() => setSelected(index)}
-                className="h-auto shrink-0 justify-start gap-2 whitespace-normal px-2 py-2.5 text-left aria-pressed:bg-primary/10 aria-pressed:text-primary"
-              >
-                <VerificationStateIcon status={text(probe.status)} />
-                <span className="min-w-0">
-                  <span className="block text-xs text-muted-foreground">
-                    第 {number(probe.round) ?? "—"} 轮 ·{" "}
-                    {verificationProbeLabels[text(probe.status)] ?? "待判定"}
-                  </span>
-                  {text(probe.label)}
-                </span>
-              </Button>
-            ))}
-            {probes.length === 0 ? (
-              <p className="p-2 text-sm text-muted-foreground">没有逐项记录</p>
-            ) : null}
-          </nav>
+          <VerificationProbeNavigation probes={probes} selected={selected} onSelect={setSelected} />
           <div
             className="min-h-0 min-w-0 flex-1 overflow-auto"
             role="region"

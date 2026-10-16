@@ -31,6 +31,8 @@ it("移除官方对照入口且清空账号或模型时不显示至少选择提�
   const fetcher = vi.fn<typeof fetch>(async (input, init) => {
     if (String(input) === "/api/model-checks" && init?.method === "POST")
       return Response.json({ id: "created", status: "queued", result: {} });
+    if (String(input) === "/api/model-checks/capabilities")
+      return Response.json({ public_references: [] });
     return Response.json([]);
   });
   vi.stubGlobal("fetch", fetcher);
@@ -57,6 +59,8 @@ it("移除官方对照入口且清空账号或模型时不显示至少选择提�
   await user.click(screen.getByRole("button", { name: "全选账号" }));
   await user.click(await screen.findByRole("checkbox", { name: /选择模型 new-model/ }));
   expect(screen.getByText(/计划 17 项检测/)).toBeVisible();
+  expect(screen.queryByRole("checkbox", { name: "采集行为指纹" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("checkbox", { name: "采集分词指纹" })).not.toBeInTheDocument();
   await user.click(screen.getByRole("button", { name: /开始检测/ }));
   await waitFor(() =>
     expect(fetcher.mock.calls.some((call) => String(call[0]) === "/api/model-checks")).toBe(true),
@@ -66,5 +70,7 @@ it("移除官方对照入口且清空账号或模型时不显示至少选择提�
     account_ids: ["1"],
     models: ["new-model"],
     fingerprint: true,
+    behavior_fingerprint: false,
+    public_reference: true,
   });
 });

@@ -216,3 +216,27 @@ export const detectionTimeoutLabels = {
 } as const;
 
 export const animationQualityPendingLabel = "质量标注中";
+
+export const verificationBehaviorLabels: Record<string, string> = {
+  collected: "采样完整",
+  incomplete: "样本不完整",
+  incomparable: "采样不可比",
+};
+
+export const publicReferenceLabels: Record<string, string> = {
+  matched: "与公开参考一致",
+  mismatch: "与公开参考显著不符（疑似冒充）",
+  inconclusive: "公开参考：无法判定",
+};
+export const publicReferenceMethodLabels: Record<string, string> = {
+  knowledge: "知识边界比较",
+  tokenizer: "公开分词对照",
+  distribution: "回答分布比较",
+};
+export const publicReferenceEvidenceLabels: Record<string, string> = {
+  consistent: "一致",
+  different: "有差异",
+  unstable: "不稳定",
+  evidence_only: "仅提供差异证据",
+  inconclusive: "无法判定",
+};

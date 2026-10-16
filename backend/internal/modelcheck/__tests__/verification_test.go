@@ -130,21 +130,21 @@ func TestVerificationMarkdownAnswerAndAmbiguousAnswerHaveDifferentResults(t *tes
 func TestVerificationSameTaskUsesSameQuestionsAndSerializesModelsPerAccount(t *testing.T) {
 	var mu sync.Mutex
 	prompts := map[string][]string{}
-	active := false
+	active := map[string]int{}
 	f := setup(t, 1, "openai", func(w http.ResponseWriter, r *http.Request) {
-		mu.Lock()
-		if active {
-			t.Error("same account has overlapping requests")
-		}
-		active = true
-		mu.Unlock()
-		defer func() { mu.Lock(); active = false; mu.Unlock() }()
 		var body struct {
 			Model string `json:"model"`
 			Input string `json:"input"`
 		}
 		_ = json.NewDecoder(r.Body).Decode(&body)
 		mu.Lock()
+		for model, count := range active {
+			if model != body.Model && count > 0 {
+				t.Error("different models overlap on the same account")
+			}
+		}
+		active[body.Model]++
+		defer func() { mu.Lock(); active[body.Model]--; mu.Unlock() }()
 		prompts[body.Model] = append(prompts[body.Model], body.Input)
 		mu.Unlock()
 		_ = json.NewEncoder(w).Encode(map[string]any{"output_text": "NO", "model": body.Model})
@@ -156,6 +156,8 @@ func TestVerificationSameTaskUsesSameQuestionsAndSerializesModelsPerAccount(t *t
 	finished(t, f)
 	mu.Lock()
 	defer mu.Unlock()
+	slices.Sort(prompts["model-a"])
+	slices.Sort(prompts["model-b"])
 	if len(prompts["model-a"]) != 7 || !slices.Equal(prompts["model-a"], prompts["model-b"]) {
 		t.Fatalf("task questions differ: %v", prompts)
 	}
@@ -204,6 +206,7 @@ func TestVerificationStructuredJSONRejectsDuplicateKeys(t *testing.T) {
 
 func TestVerificationCancellationPreservesCompletedProbe(t *testing.T) {
 	blocked := make(chan struct{})
+	var blockedOnce sync.Once
 	release := make(chan struct{})
 	var calls atomic.Int32
 	f := setup(t, 1, "openai", func(w http.ResponseWriter, r *http.Request) {
@@ -212,7 +215,7 @@ func TestVerificationCancellationPreservesCompletedProbe(t *testing.T) {
 			_ = json.NewEncoder(w).Encode(map[string]any{"output_text": "21"})
 			return
 		}
-		close(blocked)
+		blockedOnce.Do(func() { close(blocked) })
 		select {
 		case <-r.Context().Done():
 		case <-release:
@@ -237,8 +240,13 @@ func TestVerificationCancellationPreservesCompletedProbe(t *testing.T) {
 		t.Fatalf("cancelled task lost results: %v", final)
 	}
 	probes := rows[0]["probes"].([]any)
-	if len(probes) != 2 || probes[0].(map[string]any)["answer"] != "21" || probes[1].(map[string]any)["error_code"] != "interrupted" {
+	if (len(probes) < 2 || len(probes) > 5) || probes[0].(map[string]any)["answer"] != "21" || probes[1].(map[string]any)["error_code"] != "interrupted" {
 		t.Fatalf("partial evidence lost: %v", probes)
+	}
+	for _, probe := range probes[1:] {
+		if probe.(map[string]any)["error_code"] != "interrupted" {
+			t.Fatal("in-flight cancellation lost")
+		}
 	}
 }
 

@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 import { pageFixtures } from "./fixtures/page-shell";
 
-test("检测历史可翻页并查看证据，长记录在弹窗内部滚动", async ({ page }) => {
+test("检测历史可翻页并查看证据，长记录在弹窗内部滚动", async ({ page }, testInfo) => {
   const summary = {
     id: "history-21",
     skill: "sub2api-model-check",
@@ -50,6 +50,15 @@ test("检测历史可翻页并查看证据，长记录在弹窗内部滚动", as
                     expected: "21",
                     answer: "**21**",
                   },
+                  {
+                    id: "public_kbf_crypto_0",
+                    category: "public_reference",
+                    label: "知识边界 · 加密参数",
+                    round: 1,
+                    status: "error",
+                    error: "请求超时",
+                    prompt: "测试知识题",
+                  },
                 ],
               },
             ],
@@ -92,6 +101,21 @@ test("检测历史可翻页并查看证据，长记录在弹窗内部滚动", as
   await result.getByRole("button", { name: "查看检测证据" }).click();
   const evidence = page.getByRole("dialog", { name: "检测证据", exact: true });
   await expect(evidence.getByText("**21**", { exact: true })).toBeVisible();
+  const navigation = evidence.getByRole("navigation", { name: "检测项" });
+  if ((page.viewportSize()?.width ?? 1440) < 768) {
+    await expect(navigation).toBeHidden();
+    await evidence.getByRole("combobox", { name: "选择检测项" }).click();
+    await page.getByRole("option", { name: /知识边界 · 加密参数/ }).click();
+  } else {
+    await expect(navigation).toBeVisible();
+    await navigation.getByRole("button", { name: /知识边界 · 加密参数/ }).focus();
+    await page.keyboard.press("Enter");
+  }
+  await expect(
+    evidence.getByRole("region", { name: "检测项内容" }).getByText("请求超时"),
+  ).toBeVisible();
+  expect(await evidence.evaluate((node) => node.scrollWidth <= node.clientWidth)).toBe(true);
+  await page.screenshot({ path: testInfo.outputPath("grouped-verification-evidence.png") });
   await page.keyboard.press("Escape");
   await page.keyboard.press("Escape");
   await expect(history.getByText("第 2 页 · 每页 20 条")).toBeVisible();

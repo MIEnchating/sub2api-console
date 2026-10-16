@@ -1,3 +1,5 @@
+import { usePublicReferences } from "@/features/model-check/lib/public-reference";
+import { PublicReferenceNotice } from "@/features/model-check/components/public-reference-notice";
 import { AnimationPromptSelector } from "@/features/model-check/components/animation-prompt-selector";
 import { animationPromptQueryKey } from "@/features/model-check/lib/animation-prompt-query";
 import { QueryErrorToast } from "@/components/query-error-toast";
@@ -32,6 +34,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 
+import { ProbeVerificationResult } from "./probe-verification-result";
 import { ProbeAnimationResult } from "./probe-animation-result";
 import { cn } from "@/lib/utils";
 
@@ -45,6 +48,7 @@ export const onboardingProbeModeOptions: Array<{
   { value: "stream", label: "流式请求" },
   { value: "animation", label: "动画测试" },
   { value: "candy", label: "糖果题测试" },
+  { value: "verification", label: "模型检测" },
 ];
 
 export const accountProbeDialogLayout = {
@@ -267,10 +271,12 @@ function AccountProbeSession(props: {
   }, [accountSettings.data, models, props.open, props.target.platform]);
 
   const options = useMemo(() => onboardingProbeModelOptions(models), [models]);
+  const publicReferences = usePublicReferences(props.open && selectedMode === "verification");
   const selectDisabled =
     Boolean(props.pending) || runProbe.isPending || closing || cancelProbe.isPending;
   const runDisabled =
     selectDisabled ||
+    (selectedMode === "verification" && !publicReferences.data) ||
     (selectedMode === "animation" && !promptReady) ||
     modelsLoading ||
     selectedModel === noModelSelected ||
@@ -299,32 +305,28 @@ function AccountProbeSession(props: {
   return (
     <Dialog open={props.open} onOpenChange={(open) => !open && closeProbe()}>
       <DialogContent
-        width={accountProbeDialogLayout.width}
+        width={
+          selectedMode === "verification" ||
+          selectedMode === "fingerprint" ||
+          selectedMode === "reference"
+            ? "wide"
+            : accountProbeDialogLayout.width
+        }
         height={accountProbeDialogLayout.height}
         className={cn(
           accountProbeDialogLayout.content,
           "gap-0 p-0",
           selectedMode === "animation" && "w-[min(44rem,calc(100vw-2rem))]",
+          selectedMode === "verification" && "w-[min(54rem,calc(100vw-2rem))]",
         )}
       >
         <DialogHeader className="min-w-0 border-b px-4 py-4 pr-12 sm:px-5">
           <DialogTitle className="min-w-0 break-words">测试账号连接</DialogTitle>
         </DialogHeader>
-        <DialogBody className="grid min-w-0 content-start gap-3 px-4 py-3 sm:px-5 [scrollbar-gutter:stable]">
+        <DialogBody className="grid min-w-0 content-start gap-4 px-4 py-4 sm:px-5 [scrollbar-gutter:stable]">
           <ProbeAccountCard target={props.target} />
-          {selectedMode === "animation" ? (
-            <AnimationPromptSelector
-              settings={promptSettings.data}
-              pending={promptSettings.isPending}
-              refreshing={promptSettings.isFetching}
-              onRetry={() => void promptSettings.refetch()}
-              value={selectedPromptId}
-              onChange={setSelectedPromptId}
-              disabled={selectDisabled}
-            />
-          ) : null}
           <div
-            className={`grid min-w-0 grid-cols-1 gap-3 ${selectedMode === "animation" ? "sm:grid-cols-[minmax(0,1fr)_12rem]" : ""}`}
+            className="grid min-w-0 grid-cols-[minmax(0,1fr)_7rem] gap-2 sm:grid-cols-[minmax(0,1fr)_10rem] sm:gap-3"
             role="group"
             aria-label="探活参数"
           >
@@ -395,7 +397,10 @@ function AccountProbeSession(props: {
                     value !== "stream" &&
                     value !== "default" &&
                     value !== "animation" &&
-                    value !== "candy"
+                    value !== "candy" &&
+                    value !== "verification" &&
+                    value !== "fingerprint" &&
+                    value !== "reference"
                   )
                     return;
                   modelSelectionEdited.current = true;
@@ -417,7 +422,45 @@ function AccountProbeSession(props: {
               </Select>
             </div>
           </div>
+          {selectedMode === "animation" ? (
+            <AnimationPromptSelector
+              settings={promptSettings.data}
+              pending={promptSettings.isPending}
+              refreshing={promptSettings.isFetching}
+              onRetry={() => void promptSettings.refetch()}
+              value={selectedPromptId}
+              onChange={setSelectedPromptId}
+              disabled={selectDisabled}
+            />
+          ) : null}
+          {selectedMode === "verification" ? (
+            <details
+              open={result === null || runProbe.isPending ? true : undefined}
+              className="min-w-0 text-xs text-muted-foreground"
+              key={result === null || runProbe.isPending ? "budget-open" : "budget-closed"}
+            >
+              <summary className="cursor-pointer">参考方案与请求预算</summary>
+              <div className="pt-2">
+                <PublicReferenceNotice
+                  compact
+                  models={selectedModel === noModelSelected ? [] : [selectedModel]}
+                  profiles={publicReferences.data}
+                  pending={publicReferences.isPending}
+                  onRetry={() => void publicReferences.refetch()}
+                />
+              </div>
+            </details>
+          ) : null}
           <section aria-label="测试模型响应" className="grid min-w-0 gap-2">
+            {selectedMode === "verification" ||
+            selectedMode === "fingerprint" ||
+            selectedMode === "reference" ? (
+              <ProbeVerificationResult
+                task={runProbe.isPending || result !== null ? progress.task : undefined}
+                steps={progress.history}
+                pendingMessage={pendingMessage}
+              />
+            ) : null}
             {selectedMode === "animation" ? (
               <ProbeAnimationResult
                 result={result}
@@ -425,7 +468,11 @@ function AccountProbeSession(props: {
                 pendingMessage={pendingMessage}
                 steps={progress.history}
               />
-            ) : (
+            ) : null}
+            {selectedMode !== "animation" &&
+            selectedMode !== "verification" &&
+            selectedMode !== "fingerprint" &&
+            selectedMode !== "reference" ? (
               <div role="region" aria-label="探活进度" className="min-w-0">
                 <ProbeProgressSummary steps={progress.history} pendingMessage={pendingMessage}>
                   <ProbeResultSlot
@@ -437,7 +484,7 @@ function AccountProbeSession(props: {
                   />
                 </ProbeProgressSummary>
               </div>
-            )}
+            ) : null}
             {runProbe.isError ? (
               <QueryErrorToast error={runProbe.error} fallback="探活请求失败" />
             ) : null}
@@ -446,16 +493,26 @@ function AccountProbeSession(props: {
                 重新读取探活状态
               </Button>
             ) : null}
-            <p className="text-muted-foreground text-xs">
-              {selectedMode === "animation"
-                ? "动画仅用于展示，不影响健康评分与调度。"
-                : probeModeDescription(selectedMode)}
-            </p>
+            {selectedMode === "verification" ? (
+              <details className="border-t pt-3 text-xs text-muted-foreground">
+                <summary className="cursor-pointer">检测说明</summary>
+                <p className="mt-2 leading-relaxed">{probeModeDescription(selectedMode)}</p>
+              </details>
+            ) : (
+              <p className="text-muted-foreground text-xs">
+                {selectedMode === "animation"
+                  ? "动画仅用于展示，不影响健康评分与调度。"
+                  : probeModeDescription(selectedMode)}
+              </p>
+            )}
           </section>
         </DialogBody>
         <ProbeDialogActions
           runDisabled={runDisabled}
           probePending={runProbe.isPending}
+          finishing={progress.history.some(
+            (step) => step.stage === "request" && step.status !== "running",
+          )}
           modelsPending={modelsLoading}
           hasResult={result !== null}
           closing={closing}
@@ -605,6 +662,7 @@ export function ProbeResultSlot(props: {
 export function ProbeDialogActions(props: {
   runDisabled: boolean;
   probePending: boolean;
+  finishing?: boolean;
   modelsPending?: boolean;
   hasResult: boolean;
   closing?: boolean;
@@ -612,7 +670,7 @@ export function ProbeDialogActions(props: {
   onRun: () => void;
 }) {
   let actionLabel = "开始测试";
-  if (props.probePending) actionLabel = "测试中";
+  if (props.probePending) actionLabel = props.finishing ? "正在收尾" : "测试中";
   else if (props.hasResult) actionLabel = "重试";
   let actionIcon = <Activity />;
   if (props.probePending)
@@ -670,6 +728,12 @@ function ProbeAccountCard(props: { target: ProbeDialogTarget }) {
 }
 
 function probeModeDescription(mode: OnboardingProbeMode): string {
+  if (mode === "reference")
+    return "含 17 项常规模型检测，另按所选型号执行上方参考请求；单次超时 45 秒，任务最长 10 分钟。中断保留证据，无需官方 Key，不影响健康评分与调度。";
+  if (mode === "fingerprint")
+    return "包含模型检测及 200 次行为采样，共 217 次请求；单次超时 45 秒，任务最长 10 分钟。取消或超时保留已采样结果，不认证模型身份，不影响健康评分与调度。";
+  if (mode === "verification")
+    return "最多 4 项并发，同组复测按顺序执行。包含 7 项能力检测、10 次分词采样及上方公开参考请求。单次超时 45 秒、任务最长 10 分钟；结果不影响健康评分与调度。";
   if (mode === "candy")
     return "使用统一糖果题，流式请求，思考等级为 medium；回答 21 为通过，结果不影响调度。";
   return "使用已配置的探活提示词";
